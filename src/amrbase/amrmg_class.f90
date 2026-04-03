@@ -98,7 +98,7 @@ contains
    !> Initialize solver with grid and type
    subroutine initialize(this, amr, type)
       use messager, only: die, log
-      use amrdata_class, only: amrex_interp_none
+      use amrdata_class, only: interp_none
       implicit none
       class(amrmg), intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
@@ -143,13 +143,13 @@ contains
       if (count([amr%nx,amr%ny,amr%nz].eq.1).gt.1) call die('[amrmg] Multiple single-cell directions not supported by AMReX MLMG')
 
       ! Initialize internal solution storage
-      call this%sol%initialize(amr,name='sol',ncomp=1,ng=1,interp=amrex_interp_none); call this%sol%register()
+      call this%sol%initialize(amr,name='sol',ncomp=1,ng=1,interp=interp_none); call this%sol%register()
 
       ! PCG work amrdata - unregistered
-      call this%pcg_r%initialize(amr,name='pcg_r',ncomp=1,ng=1,interp=amrex_interp_none)
-      call this%pcg_z%initialize(amr,name='pcg_z',ncomp=1,ng=1,interp=amrex_interp_none)
-      call this%pcg_p%initialize(amr,name='pcg_p',ncomp=1,ng=1,interp=amrex_interp_none)
-      call this%pcg_q%initialize(amr,name='pcg_q',ncomp=1,ng=1,interp=amrex_interp_none)
+      call this%pcg_r%initialize(amr,name='pcg_r',ncomp=1,ng=1,interp=interp_none)
+      call this%pcg_z%initialize(amr,name='pcg_z',ncomp=1,ng=1,interp=interp_none)
+      call this%pcg_p%initialize(amr,name='pcg_p',ncomp=1,ng=1,interp=interp_none)
+      call this%pcg_q%initialize(amr,name='pcg_q',ncomp=1,ng=1,interp=interp_none)
 
       ! Log setup info
       if (type .eq. amrmg_cstcoef) then

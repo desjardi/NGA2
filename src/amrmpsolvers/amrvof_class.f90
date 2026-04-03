@@ -451,9 +451,9 @@ contains
             call CG_new%parallel_copy(this%CG,this%amr%geom(lvl))
             call PLIC_new%parallel_copy(this%PLIC,this%amr%geom(lvl))
             ! Destroy old, assign new
-            call amrex_multifab_destroy(this%CL  ); call this%CL%move(CL_new)
-            call amrex_multifab_destroy(this%CG  ); call this%CG%move(CG_new)
-            call amrex_multifab_destroy(this%PLIC); call this%PLIC%move(PLIC_new)
+            call this%CL%move(CL_new)
+            call this%CG%move(CG_new)
+            call this%PLIC%move(PLIC_new)
             ! Rebuild old multifabs
             call mfab_rebuild(this%CLold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild(this%CGold,  ba,dm,nc=3,ng=this%nover)

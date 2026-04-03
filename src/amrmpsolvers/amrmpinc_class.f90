@@ -412,25 +412,18 @@ contains
       call this%UVWold%reset_level(lvl,ba,dm)
       ! Face velocity: fill with div-free interpolation
       face_vel_remake: block
-         use amrex_amr_module, only: amrex_multifab_build,amrex_multifab_destroy,amrex_multifab
+         use amrex_amr_module, only: amrex_multifab_build,amrex_multifab
          type(amrex_multifab) :: Utmp,Vtmp,Wtmp
-         ! Build temp MultiFabs with new layout (0 ghost cells for FillPatch)
-         call amrex_multifab_build(Utmp,ba,dm,1,0,this%U%nodal)
-         call amrex_multifab_build(Vtmp,ba,dm,1,0,this%V%nodal)
-         call amrex_multifab_build(Wtmp,ba,dm,1,0,this%W%nodal)
+         ! Build temp MultiFabs with new layout
+         call amrex_multifab_build(Utmp,ba,dm,1,this%U%ng,this%U%nodal)
+         call amrex_multifab_build(Vtmp,ba,dm,1,this%V%ng,this%V%nodal)
+         call amrex_multifab_build(Wtmp,ba,dm,1,this%W%ng,this%W%nodal)
          ! Fill temps from old data via coupled FillPatch
-         call this%fill_velocity_mfab(Utmp,Vtmp,Wtmp,lvl,time)
-         ! Reset levels and copy from temps
-         call this%U%reset_level(lvl,ba,dm)
-         call this%V%reset_level(lvl,ba,dm)
-         call this%W%reset_level(lvl,ba,dm)
-         call this%U%mf(lvl)%copy(Utmp,1,1,1,0)
-         call this%V%mf(lvl)%copy(Vtmp,1,1,1,0)
-         call this%W%mf(lvl)%copy(Wtmp,1,1,1,0)
-         ! Destroy temps
-         call amrex_multifab_destroy(Utmp)
-         call amrex_multifab_destroy(Vtmp)
-         call amrex_multifab_destroy(Wtmp)
+         call this%fill_velocity_mfab(Utmp,Vtmp,Wtmp,lvl,time,ng=0)
+         ! Transfer ownership via pointer swap
+         call this%U%mf(lvl)%move(Utmp)
+         call this%V%mf(lvl)%move(Vtmp)
+         call this%W%mf(lvl)%move(Wtmp)
       end block face_vel_remake
       ! Reset old velocities
       call this%Uold%reset_level(lvl,ba,dm)
@@ -705,7 +698,7 @@ contains
 
    !> Fill destination MultiFabs with velocity using divergence-free interpolation
    !> Used during regridding (on_remake) to fill new layout MultiFabs
-   subroutine fill_velocity_mfab(this,Udest,Vdest,Wdest,lvl,time)
+   subroutine fill_velocity_mfab(this,Udest,Vdest,Wdest,lvl,time,ng)
       use iso_c_binding, only: c_loc,c_funloc,c_funptr,c_ptr
       use amrex_interface, only: amrmfab_fillpatch_single,amrmfab_fillpatch_two_faces
       use amrex_amr_module, only: amrex_multifab
@@ -715,6 +708,7 @@ contains
       type(amrex_multifab), intent(inout) :: Udest,Vdest,Wdest
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
+      integer, intent(in), optional :: ng
       type(c_ptr) :: ctx_u,ctx_v,ctx_w
       type(c_funptr) :: bc_dispatch
       integer :: rr(3),lo_bc(9),hi_bc(9)
@@ -733,9 +727,9 @@ contains
 
       if (lvl .eq. 0) then
          ! Level 0: single-level fill (just physical BCs)
-         call amrmfab_fillpatch_single(Udest,t_old,this%U%mf(0),t_new,this%U%mf(0),this%amr%geom(0),ctx_u,bc_dispatch,time,1,1,1)
-         call amrmfab_fillpatch_single(Vdest,t_old,this%V%mf(0),t_new,this%V%mf(0),this%amr%geom(0),ctx_v,bc_dispatch,time,1,1,1)
-         call amrmfab_fillpatch_single(Wdest,t_old,this%W%mf(0),t_new,this%W%mf(0),this%amr%geom(0),ctx_w,bc_dispatch,time,1,1,1)
+         call amrmfab_fillpatch_single(Udest,t_old,this%U%mf(0),t_new,this%U%mf(0),this%amr%geom(0),ctx_u,bc_dispatch,time,1,1,1,nghost=ng)
+         call amrmfab_fillpatch_single(Vdest,t_old,this%V%mf(0),t_new,this%V%mf(0),this%amr%geom(0),ctx_v,bc_dispatch,time,1,1,1,nghost=ng)
+         call amrmfab_fillpatch_single(Wdest,t_old,this%W%mf(0),t_new,this%W%mf(0),this%amr%geom(0),ctx_w,bc_dispatch,time,1,1,1,nghost=ng)
       else
          ! Build combined BC array
          lo_bc(1:3)=this%U%lo_bc(:,1)
@@ -755,7 +749,7 @@ contains
          &   t_new,this%U%mf(lvl),this%V%mf(lvl),this%W%mf(lvl), &
          &   this%amr%geom(lvl), &
          &   ctx_u,ctx_v,ctx_w,bc_dispatch,bc_dispatch,bc_dispatch, &
-         &   1,1,1,rr,this%interp_vel,lo_bc,hi_bc)
+         &   1,1,1,rr,this%interp_vel,lo_bc,hi_bc,nghost=ng)
       end if
       ! Reconcile shared face values at box boundaries
       call Udest%override_sync(this%amr%geom(lvl))
