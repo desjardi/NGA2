@@ -154,6 +154,8 @@ contains
       real(WP), dimension(3) :: BL,BG  ! Dummy barycenters
       real(WP) :: dx,dy,dz
       integer :: i,j,k
+      real(WP), parameter :: VFlo=1.0e-12_WP
+      integer, parameter :: nref=3
       dx=data%amr%dx(lvl); dy=data%amr%dy(lvl); dz=data%amr%dz(lvl)
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
       do while (mfi%next())
@@ -162,7 +164,7 @@ contains
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             call initialize_volume_moments(lo=[data%amr%xlo+real(i  ,WP)*dx,data%amr%ylo+real(j  ,WP)*dy,data%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[data%amr%xlo+real(i+1,WP)*dx,data%amr%ylo+real(j+1,WP)*dy,data%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=sphere_levelset,time=time,level=3,VFlo=1.0e-12_WP,VF=pVF(i,j,k,1),BL=BL,BG=BG)
+            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
@@ -357,7 +359,7 @@ contains
 
             ! Increment velocity with advection+viscous terms
             call fs%get_dQdt(dQdt=dQdt)
-            call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt/fs%rho,src2=dQdt)
+            call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
             call fs%Q%average_down(); call fs%Q%fill(time%t)
 
             ! Interpolate velocity to the faces

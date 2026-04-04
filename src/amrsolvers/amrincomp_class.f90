@@ -58,7 +58,7 @@ module amrincomp_class
       ! Utilities
       procedure :: correct_velocity          !< Correct face velocity with pressure gradient
       ! Physics procedures
-      procedure :: get_dmomdt                !< Compute momentum advection RHS
+      procedure :: get_dUdt                  !< Compute velocity time derivative
       procedure :: add_vreman                !< Add Vreman SGS eddy viscosity
       procedure :: get_cfl                   !< Compute CFL numbers
       ! Print solver info
@@ -418,163 +418,193 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Compute momentum advection and viscous terms for all levels
-   !> No pressure gradient, user can add it in the main loop
+   !> Compute dU/dt for all levels without pressure gradient (user can add it in the main loop)
    !> Uses flux averaging at C/F interfaces for conservation
-   subroutine get_dmomdt(this,drhoUdt,drhoVdt,drhoWdt)
-      use amrex_amr_module, only: amrex_multifab,amrex_multifab_destroy,amrex_mfiter,amrex_box
-      use amrex_interface,  only: amrmfab_average_down_cell,amrmfab_average_down_edge
+   subroutine get_dUdt(this,dUdt,dVdt,dWdt)
+      use amrex_amr_module, only: amrex_multifab
       implicit none
       class(amrincomp), intent(inout) :: this
-      class(amrdata), intent(inout) :: drhoUdt,drhoVdt,drhoWdt        !< Output: momentum RHS (face-centered)
+      class(amrdata), intent(inout) :: dUdt,dVdt,dWdt        !< Output: velocity RHS (face-centered)
       ! Flux MultiFabs (9 total: 3 CC, 2 xy-edge, 2 xz-edge, 2 yz-edge)
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: FUx,FUy,FUz
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: FVx,FVy,FVz
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: FWx,FWy,FWz
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      integer :: lvl,i,j,k
-      real(WP) :: dxi,dyi,dzi
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFUx,pFUy,pFUz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFVx,pFVy,pFVz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFWx,pFWy,pFWz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pdUdt,pdVdt,pdWdt
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc
+
+      ! Initialize all fluxes
+      define_fluxes: block
+         integer :: lvl
+         do lvl=0,this%amr%clvl()
+            ! FUx, FVy, FWz: cell-centered (diagonal fluxes)
+            call this%amr%mfab_build(lvl,FUx(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
+            call this%amr%mfab_build(lvl,FVy(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
+            call this%amr%mfab_build(lvl,FWz(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
+            ! FUy, FVx: xy-edge (cross-fluxes)
+            call this%amr%mfab_build(lvl,FUy(lvl),ncomp=1,nover=0,atface=[.true.,.true.,.false.])
+            call this%amr%mfab_build(lvl,FVx(lvl),ncomp=1,nover=0,atface=[.true.,.true.,.false.])
+            ! FUz, FWx: xz-edge (cross-fluxes)
+            call this%amr%mfab_build(lvl,FUz(lvl),ncomp=1,nover=0,atface=[.true.,.false.,.true.])
+            call this%amr%mfab_build(lvl,FWx(lvl),ncomp=1,nover=0,atface=[.true.,.false.,.true.])
+            ! FVz, FWy: yz-edge (cross-fluxes)
+            call this%amr%mfab_build(lvl,FVz(lvl),ncomp=1,nover=0,atface=[.false.,.true.,.true.])
+            call this%amr%mfab_build(lvl,FWy(lvl),ncomp=1,nover=0,atface=[.false.,.true.,.true.])
+         end do
+      end block define_fluxes
 
       ! Compute fluxes on all levels
-      do lvl=0,this%amr%clvl()
-         ! Get mesh size
-         dxi=1.0_WP/this%amr%dx(lvl)
-         dyi=1.0_WP/this%amr%dy(lvl)
-         dzi=1.0_WP/this%amr%dz(lvl)
-         ! Build momentum flux MultiFabs
-         ! FUx, FVy, FWz: cell-centered (diagonal fluxes)
-         call this%amr%mfab_build(lvl,FUx(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
-         call this%amr%mfab_build(lvl,FVy(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
-         call this%amr%mfab_build(lvl,FWz(lvl),ncomp=1,nover=1,atface=[.false.,.false.,.false.])
-         ! FUy, FVx: xy-edge (cross-fluxes)
-         call this%amr%mfab_build(lvl,FUy(lvl),ncomp=1,nover=0,atface=[.true.,.true.,.false.])
-         call this%amr%mfab_build(lvl,FVx(lvl),ncomp=1,nover=0,atface=[.true.,.true.,.false.])
-         ! FUz, FWx: xz-edge (cross-fluxes)
-         call this%amr%mfab_build(lvl,FUz(lvl),ncomp=1,nover=0,atface=[.true.,.false.,.true.])
-         call this%amr%mfab_build(lvl,FWx(lvl),ncomp=1,nover=0,atface=[.true.,.false.,.true.])
-         ! FVz, FWy: yz-edge (cross-fluxes)
-         call this%amr%mfab_build(lvl,FVz(lvl),ncomp=1,nover=0,atface=[.false.,.true.,.true.])
-         call this%amr%mfab_build(lvl,FWy(lvl),ncomp=1,nover=0,atface=[.false.,.true.,.true.])
-         ! MFIter loop: compute all 9 fluxes
-         call this%amr%mfiter_build(lvl, mfi)
-         do while (mfi%next())
-            ! Cell-centered tile
-            bx=mfi%tilebox()
-            ! Get pointers to data
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pFUx=>FUx(lvl)%dataptr(mfi)
-            pFUy=>FUy(lvl)%dataptr(mfi)
-            pFUz=>FUz(lvl)%dataptr(mfi)
-            pFVx=>FVx(lvl)%dataptr(mfi)
-            pFVy=>FVy(lvl)%dataptr(mfi)
-            pFVz=>FVz(lvl)%dataptr(mfi)
-            pFWx=>FWx(lvl)%dataptr(mfi)
-            pFWy=>FWy(lvl)%dataptr(mfi)
-            pFWz=>FWz(lvl)%dataptr(mfi)
-            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-            ! Diagonal fluxes
-            do k=bx%lo(3)-1,bx%hi(3)+1; do j=bx%lo(2)-1,bx%hi(2)+1; do i=bx%lo(1)-1,bx%hi(1)+1
-               pFUx(i,j,k,1)=-0.25_WP*this%rho*sum(pU(i:i+1,j,k,1))**2+2.0_WP*pVisc(i,j,k,1)*(pU(i+1,j,k,1)-pU(i,j,k,1))*dxi
-               pFVy(i,j,k,1)=-0.25_WP*this%rho*sum(pV(i,j:j+1,k,1))**2+2.0_WP*pVisc(i,j,k,1)*(pV(i,j+1,k,1)-pV(i,j,k,1))*dyi
-               pFWz(i,j,k,1)=-0.25_WP*this%rho*sum(pW(i,j,k:k+1,1))**2+2.0_WP*pVisc(i,j,k,1)*(pW(i,j,k+1,1)-pW(i,j,k,1))*dzi
-            end do; end do; end do
-            ! xy-edge (FUy, FVx): nodal in x,y; cell in z -> [lo,hi] in z; [lo,hi+1] in x,y
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)+1; do i=bx%lo(1),bx%hi(1)+1
-               pFUy(i,j,k,1)=-0.25_WP*this%rho*sum(pV(i-1:i,j,k,1))*sum(pU(i,j-1:j,k,1))+0.25_WP*sum(pVisc(i-1:i,j-1:j,k,1))*((pU(i,j,k,1)-pU(i,j-1,k,1))*dyi+(pV(i,j,k,1)-pV(i-1,j,k,1))*dxi)
-               pFVx(i,j,k,1)=pFUy(i,j,k,1)
-            end do; end do; end do
-            ! yz-edge (FVz, FWy): nodal in y,z; cell in x -> [lo,hi] in x; [lo,hi+1] in y,z
-            do k=bx%lo(3),bx%hi(3)+1; do j=bx%lo(2),bx%hi(2)+1; do i=bx%lo(1),bx%hi(1)
-               pFVz(i,j,k,1)=-0.25_WP*this%rho*sum(pW(i,j-1:j,k,1))*sum(pV(i,j,k-1:k,1))+0.25_WP*sum(pVisc(i,j-1:j,k-1:k,1))*((pV(i,j,k,1)-pV(i,j,k-1,1))*dzi+(pW(i,j,k,1)-pW(i,j-1,k,1))*dyi)
-               pFWy(i,j,k,1)=pFVz(i,j,k,1)
-            end do; end do; end do
-            ! zx-edge (FWx, FUz): nodal in z,x; cell in y -> [lo,hi] in y; [lo,hi+1] in z,x
-            do k=bx%lo(3),bx%hi(3)+1; do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)+1
-               pFWx(i,j,k,1)=-0.25_WP*this%rho*sum(pU(i,j,k-1:k,1))*sum(pW(i-1:i,j,k,1))+0.25_WP*sum(pVisc(i-1:i,j,k-1:k,1))*((pW(i,j,k,1)-pW(i-1,j,k,1))*dxi+(pU(i,j,k,1)-pU(i,j,k-1,1))*dzi)
-               pFUz(i,j,k,1)=pFWx(i,j,k,1)
-            end do; end do; end do
+      compute_fluxes: block
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         integer :: lvl,i,j,k
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP) :: dxi,dyi,dzi
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFUx,pFUy,pFUz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFVx,pFVy,pFVz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFWx,pFWy,pFWz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc
+         do lvl=0,this%amr%clvl()
+            ! Get mesh size
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            ! MFIter loop: compute all 9 fluxes
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pU=>this%U%mf(lvl)%dataptr(mfi)
+               pV=>this%V%mf(lvl)%dataptr(mfi)
+               pW=>this%W%mf(lvl)%dataptr(mfi)
+               pFUx=>FUx(lvl)%dataptr(mfi)
+               pFUy=>FUy(lvl)%dataptr(mfi)
+               pFUz=>FUz(lvl)%dataptr(mfi)
+               pFVx=>FVx(lvl)%dataptr(mfi)
+               pFVy=>FVy(lvl)%dataptr(mfi)
+               pFVz=>FVz(lvl)%dataptr(mfi)
+               pFWx=>FWx(lvl)%dataptr(mfi)
+               pFWy=>FWy(lvl)%dataptr(mfi)
+               pFWz=>FWz(lvl)%dataptr(mfi)
+               pVisc=>this%visc%mf(lvl)%dataptr(mfi)
+               ! Cell-centered tile
+               bx=mfi%tilebox()
+               ! Diagonal fluxes
+               do k=bx%lo(3)-1,bx%hi(3)+1; do j=bx%lo(2)-1,bx%hi(2)+1; do i=bx%lo(1)-1,bx%hi(1)+1
+                  pFUx(i,j,k,1)=-0.25_WP*this%rho*sum(pU(i:i+1,j,k,1))**2+2.0_WP*pVisc(i,j,k,1)*(pU(i+1,j,k,1)-pU(i,j,k,1))*dxi
+                  pFVy(i,j,k,1)=-0.25_WP*this%rho*sum(pV(i,j:j+1,k,1))**2+2.0_WP*pVisc(i,j,k,1)*(pV(i,j+1,k,1)-pV(i,j,k,1))*dyi
+                  pFWz(i,j,k,1)=-0.25_WP*this%rho*sum(pW(i,j,k:k+1,1))**2+2.0_WP*pVisc(i,j,k,1)*(pW(i,j,k+1,1)-pW(i,j,k,1))*dzi
+               end do; end do; end do
+               ! xy-edge (FUy, FVx): nodal in x,y; cell in z -> [lo,hi] in z; [lo,hi+1] in x,y
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)+1; do i=bx%lo(1),bx%hi(1)+1
+                  pFUy(i,j,k,1)=-0.25_WP*this%rho*sum(pV(i-1:i,j,k,1))*sum(pU(i,j-1:j,k,1))+0.25_WP*sum(pVisc(i-1:i,j-1:j,k,1))*((pU(i,j,k,1)-pU(i,j-1,k,1))*dyi+(pV(i,j,k,1)-pV(i-1,j,k,1))*dxi)
+                  pFVx(i,j,k,1)=pFUy(i,j,k,1)
+               end do; end do; end do
+               ! yz-edge (FVz, FWy): nodal in y,z; cell in x -> [lo,hi] in x; [lo,hi+1] in y,z
+               do k=bx%lo(3),bx%hi(3)+1; do j=bx%lo(2),bx%hi(2)+1; do i=bx%lo(1),bx%hi(1)
+                  pFVz(i,j,k,1)=-0.25_WP*this%rho*sum(pW(i,j-1:j,k,1))*sum(pV(i,j,k-1:k,1))+0.25_WP*sum(pVisc(i,j-1:j,k-1:k,1))*((pV(i,j,k,1)-pV(i,j,k-1,1))*dzi+(pW(i,j,k,1)-pW(i,j-1,k,1))*dyi)
+                  pFWy(i,j,k,1)=pFVz(i,j,k,1)
+               end do; end do; end do
+               ! zx-edge (FWx, FUz): nodal in z,x; cell in y -> [lo,hi] in y; [lo,hi+1] in z,x
+               do k=bx%lo(3),bx%hi(3)+1; do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)+1
+                  pFWx(i,j,k,1)=-0.25_WP*this%rho*sum(pU(i,j,k-1:k,1))*sum(pW(i-1:i,j,k,1))+0.25_WP*sum(pVisc(i-1:i,j,k-1:k,1))*((pW(i,j,k,1)-pW(i-1,j,k,1))*dxi+(pU(i,j,k,1)-pU(i,j,k-1,1))*dzi)
+                  pFUz(i,j,k,1)=pFWx(i,j,k,1)
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
          end do
-         call this%amr%mfiter_destroy(mfi)
-      end do
+      end block compute_fluxes
 
-      ! Average down fluxes (fine -> coarse) for conservation
-      do lvl=this%amr%clvl(),1,-1
-         ! Cell-centered fluxes
-         call amrmfab_average_down_cell(fmf=FUx(lvl),cmf=FUx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_cell(fmf=FVy(lvl),cmf=FVy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_cell(fmf=FWz(lvl),cmf=FWz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         ! Edge-centered fluxes
-         call amrmfab_average_down_edge(fmf=FUy(lvl),cmf=FUy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_edge(fmf=FVx(lvl),cmf=FVx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_edge(fmf=FUz(lvl),cmf=FUz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_edge(fmf=FWx(lvl),cmf=FWx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_edge(fmf=FVz(lvl),cmf=FVz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-         call amrmfab_average_down_edge(fmf=FWy(lvl),cmf=FWy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
-      end do
+      ! Average down all fluxes for C/F conservation
+      c_f_consistency: block
+         use amrex_interface, only: amrmfab_average_down_cell,amrmfab_average_down_edge
+         integer :: lvl
+         do lvl=this%amr%clvl(),1,-1
+            ! Cell-centered fluxes
+            call amrmfab_average_down_cell(fmf=FUx(lvl),cmf=FUx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_cell(fmf=FVy(lvl),cmf=FVy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_cell(fmf=FWz(lvl),cmf=FWz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            ! Edge-centered fluxes
+            call amrmfab_average_down_edge(fmf=FUy(lvl),cmf=FUy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_edge(fmf=FVx(lvl),cmf=FVx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_edge(fmf=FUz(lvl),cmf=FUz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_edge(fmf=FWx(lvl),cmf=FWx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_edge(fmf=FVz(lvl),cmf=FVz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+            call amrmfab_average_down_edge(fmf=FWy(lvl),cmf=FWy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1),ngcrse=0)
+         end do
+      end block c_f_consistency
 
       ! Compute divergence to get momentum RHS
-      do lvl=0,this%amr%clvl()
-         ! Get mesh size
-         dxi=1.0_WP/this%amr%dx(lvl)
-         dyi=1.0_WP/this%amr%dy(lvl)
-         dzi=1.0_WP/this%amr%dz(lvl)
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            ! Get pointers to data
-            pFUx=>FUx(lvl)%dataptr(mfi)
-            pFUy=>FUy(lvl)%dataptr(mfi)
-            pFUz=>FUz(lvl)%dataptr(mfi)
-            pFVx=>FVx(lvl)%dataptr(mfi)
-            pFVy=>FVy(lvl)%dataptr(mfi)
-            pFVz=>FVz(lvl)%dataptr(mfi)
-            pFWx=>FWx(lvl)%dataptr(mfi)
-            pFWy=>FWy(lvl)%dataptr(mfi)
-            pFWz=>FWz(lvl)%dataptr(mfi)
-            pdUdt=>drhoUdt%mf(lvl)%dataptr(mfi)
-            pdVdt=>drhoVdt%mf(lvl)%dataptr(mfi)
-            pdWdt=>drhoWdt%mf(lvl)%dataptr(mfi)
-            ! U-momentum RHS at x-faces: -d(FUx)/dx - d(FUy)/dy - d(FUz)/dz
-            bx=mfi%nodaltilebox(1)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pdUdt(i,j,k,1)=dxi*(pFUx(i,j,k,1)-pFUx(i-1,j,k,1))+dyi*(pFUy(i,j+1,k,1)-pFUy(i,j,k,1))+dzi*(pFUz(i,j,k+1,1)-pFUz(i,j,k,1))
-            end do; end do; end do
-            ! V-momentum RHS at y-faces: -d(FVx)/dx - d(FVy)/dy - d(FVz)/dz
-            bx=mfi%nodaltilebox(2)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pdVdt(i,j,k,1)=dxi*(pFVx(i+1,j,k,1)-pFVx(i,j,k,1))+dyi*(pFVy(i,j,k,1)-pFVy(i,j-1,k,1))+dzi*(pFVz(i,j,k+1,1)-pFVz(i,j,k,1))
-            end do; end do; end do
-            ! W-momentum RHS at z-faces: -d(FWx)/dx - d(FWy)/dy - d(FWz)/dz
-            bx=mfi%nodaltilebox(3)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pdWdt(i,j,k,1)=dxi*(pFWx(i+1,j,k,1)-pFWx(i,j,k,1))+dyi*(pFWy(i,j+1,k,1)-pFWy(i,j,k,1))+dzi*(pFWz(i,j,k,1)-pFWz(i,j,k-1,1))
-            end do; end do; end do
+      divergence_and_sources: block
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         integer :: lvl,i,j,k
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP) :: dxi,dyi,dzi,irho
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFUx,pFUy,pFUz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFVx,pFVy,pFVz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFWx,pFWy,pFWz
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pdUdt,pdVdt,pdWdt
+         ! Compute inverse density
+         irho=1.0_WP/this%rho
+         ! Traverse levels
+         do lvl=0,this%amr%clvl()
+            ! Get mesh size
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pFUx=>FUx(lvl)%dataptr(mfi)
+               pFUy=>FUy(lvl)%dataptr(mfi)
+               pFUz=>FUz(lvl)%dataptr(mfi)
+               pFVx=>FVx(lvl)%dataptr(mfi)
+               pFVy=>FVy(lvl)%dataptr(mfi)
+               pFVz=>FVz(lvl)%dataptr(mfi)
+               pFWx=>FWx(lvl)%dataptr(mfi)
+               pFWy=>FWy(lvl)%dataptr(mfi)
+               pFWz=>FWz(lvl)%dataptr(mfi)
+               pdUdt=>dUdt%mf(lvl)%dataptr(mfi)
+               pdVdt=>dVdt%mf(lvl)%dataptr(mfi)
+               pdWdt=>dWdt%mf(lvl)%dataptr(mfi)
+               ! U RHS at x-faces: (-d(FUx)/dx - d(FUy)/dy - d(FUz)/dz)/rho
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pdUdt(i,j,k,1)=dxi*(pFUx(i,j,k,1)-pFUx(i-1,j,k,1))+dyi*(pFUy(i,j+1,k,1)-pFUy(i,j,k,1))+dzi*(pFUz(i,j,k+1,1)-pFUz(i,j,k,1))
+                  pdUdt(i,j,k,1)=irho*pdUdt(i,j,k,1)
+               end do; end do; end do
+               ! V RHS at y-faces: (-d(FVx)/dx - d(FVy)/dy - d(FVz)/dz)/rho
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pdVdt(i,j,k,1)=dxi*(pFVx(i+1,j,k,1)-pFVx(i,j,k,1))+dyi*(pFVy(i,j,k,1)-pFVy(i,j-1,k,1))+dzi*(pFVz(i,j,k+1,1)-pFVz(i,j,k,1))
+                  pdVdt(i,j,k,1)=irho*pdVdt(i,j,k,1)
+               end do; end do; end do
+               ! W RHS at z-faces: (-d(FWx)/dx - d(FWy)/dy - d(FWz)/dz)/rho
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pdWdt(i,j,k,1)=dxi*(pFWx(i+1,j,k,1)-pFWx(i,j,k,1))+dyi*(pFWy(i,j+1,k,1)-pFWy(i,j,k,1))+dzi*(pFWz(i,j,k,1)-pFWz(i,j,k-1,1))
+                  pdWdt(i,j,k,1)=irho*pdWdt(i,j,k,1)
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
          end do
-         call this%amr%mfiter_destroy(mfi)
-      end do
+      end block divergence_and_sources
 
       ! Cleanup flux MultiFabs
-      do lvl=0,this%amr%clvl()
-         call amrex_multifab_destroy(FUx(lvl))
-         call amrex_multifab_destroy(FUy(lvl))
-         call amrex_multifab_destroy(FUz(lvl))
-         call amrex_multifab_destroy(FVx(lvl))
-         call amrex_multifab_destroy(FVy(lvl))
-         call amrex_multifab_destroy(FVz(lvl))
-         call amrex_multifab_destroy(FWx(lvl))
-         call amrex_multifab_destroy(FWy(lvl))
-         call amrex_multifab_destroy(FWz(lvl))
-      end do
+      cleanup: block
+         integer :: lvl
+         do lvl=0,this%amr%clvl()
+            call this%amr%mfab_destroy(FUx(lvl))
+            call this%amr%mfab_destroy(FUy(lvl))
+            call this%amr%mfab_destroy(FUz(lvl))
+            call this%amr%mfab_destroy(FVx(lvl))
+            call this%amr%mfab_destroy(FVy(lvl))
+            call this%amr%mfab_destroy(FVz(lvl))
+            call this%amr%mfab_destroy(FWx(lvl))
+            call this%amr%mfab_destroy(FWy(lvl))
+            call this%amr%mfab_destroy(FWz(lvl))
+         end do
+      end block cleanup
 
-   end subroutine get_dmomdt
+   end subroutine get_dUdt
 
    !> Add Vreman SGS eddy viscosity to this%visc: assumes velocity ghosts are filled
    !> User must reset visc to molecular value before calling this routine

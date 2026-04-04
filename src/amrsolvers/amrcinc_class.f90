@@ -516,8 +516,7 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Compute momentum advection and viscous terms for all levels
-   !> No pressure gradient, user can add it in the main loop
+   !> Compute dQ/dt for all levels without pressure gradient (user can add it in the main loop)
    !> Uses flux averaging at C/F interfaces for conservation
    subroutine get_dQdt(this,dQdt)
       use amrex_amr_module, only: amrex_multifab
@@ -662,9 +661,11 @@ contains
          integer :: lvl,i,j,k,n
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
-         real(WP) :: dxi,dyi,dzi
+         real(WP) :: dxi,dyi,dzi,irho
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pdQdt
+         ! Compute inverse density
+         irho=1.0_WP/this%rho
          ! Traverse levels
          do lvl=0,this%amr%clvl()
             ! Get mesh size
@@ -679,10 +680,11 @@ contains
                pFx=>Fx(lvl)%dataptr(mfi)
                pFy=>Fy(lvl)%dataptr(mfi)
                pFz=>Fz(lvl)%dataptr(mfi)
-               ! Compute divergence
+               ! Compute divergence and divide by rho
                bx=mfi%tilebox()
                do n=1,3; do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pdQdt(i,j,k,n)=dxi*(pFx(i+1,j,k,n)-pFx(i,j,k,n))+dyi*(pFy(i,j+1,k,n)-pFy(i,j,k,n))+dzi*(pFz(i,j,k+1,n)-pFz(i,j,k,n))
+                  pdQdt(i,j,k,n)=irho*pdQdt(i,j,k,n)
                end do; end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)

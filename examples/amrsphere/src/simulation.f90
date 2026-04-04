@@ -166,7 +166,6 @@ contains
             call initialize_volume_moments(lo=[data%amr%xlo+real(i  ,WP)*dx,data%amr%ylo+real(j  ,WP)*dy,data%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[data%amr%xlo+real(i+1,WP)*dx,data%amr%ylo+real(j+1,WP)*dy,data%amr%zlo+real(k+1,WP)*dz], &
             &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
-            pVF(i,j,k,1)=max(pVF(i,j,k,1),VFlo)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
@@ -224,11 +223,11 @@ contains
       ! Create flow solver
       create_flow_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
-         use amrdata_class, only: amrex_interp_face_linear
+         use amrdata_class, only: interp_face_lin
          ! Create flow solver
          call fs%initialize(amr)
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
-         if (amr%nz.eq.1) fs%interp_vel=amrex_interp_face_linear
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set molecular viscosity
          call param_read('Reynolds number',visc_mol)
          visc_mol=1.0_WP/visc_mol
@@ -247,16 +246,16 @@ contains
 
       ! Create workspace arrays
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call resU%initialize(amr,name='resU',ncomp=1,ng=0,nodal=[.true. ,.false.,.false.],interp=amrex_interp_none); call resU%register()
-         call resV%initialize(amr,name='resV',ncomp=1,ng=0,nodal=[.false.,.true. ,.false.],interp=amrex_interp_none); call resV%register()
-         call resW%initialize(amr,name='resW',ncomp=1,ng=0,nodal=[.false.,.false.,.true. ],interp=amrex_interp_none); call resW%register()
+         use amrdata_class, only: interp_none
+         call resU%initialize(amr,name='resU',ncomp=1,ng=0,nodal=[.true. ,.false.,.false.],interp=interp_none); call resU%register()
+         call resV%initialize(amr,name='resV',ncomp=1,ng=0,nodal=[.false.,.true. ,.false.],interp=interp_none); call resV%register()
+         call resW%initialize(amr,name='resW',ncomp=1,ng=0,nodal=[.false.,.false.,.true. ],interp=interp_none); call resW%register()
       end block create_workspace
 
       ! Create VF for IB forcing
       create_VF: block
-         use amrdata_class, only: amrex_interp_reinit
-         call VF%initialize(amr,name='VF',ncomp=1,ng=1,interp=amrex_interp_reinit)
+         use amrdata_class, only: interp_reinit
+         call VF%initialize(amr,name='VF',ncomp=1,ng=1,interp=interp_reinit)
          VF%user_init=>init_VF
          call VF%register()
       end block create_VF
@@ -370,10 +369,10 @@ contains
                call fs%W%lincomb(a=0.5_WP,src1=fs%W,b=0.5_WP,src2=fs%Wold)
 
                ! Increment velocity with advection+viscous terms
-               call fs%get_dmomdt(U=fs%U,V=fs%V,W=fs%W,drhoUdt=resU,drhoVdt=resV,drhoWdt=resW)
-               call fs%U%lincomb(a=1.0_WP,src1=fs%Uold,b=time%dt/fs%rho,src2=resU)
-               call fs%V%lincomb(a=1.0_WP,src1=fs%Vold,b=time%dt/fs%rho,src2=resV)
-               call fs%W%lincomb(a=1.0_WP,src1=fs%Wold,b=time%dt/fs%rho,src2=resW)
+               call fs%get_dUdt(dUdt=resU,dVdt=resV,dWdt=resW)
+               call fs%U%lincomb(a=1.0_WP,src1=fs%Uold,b=time%dt,src2=resU)
+               call fs%V%lincomb(a=1.0_WP,src1=fs%Vold,b=time%dt,src2=resV)
+               call fs%W%lincomb(a=1.0_WP,src1=fs%Wold,b=time%dt,src2=resW)
 
                ! Increment velocity with pressure term
                call fs%correct_velocity(scale=-time%dt/fs%rho,phi=fs%P)
@@ -408,15 +407,15 @@ contains
              case (2)  ! ---- TVD-RK3 Shu-Osher (3rd order, non-incremental) ----
 
                ! Evaluate RHS at current state
-               call fs%get_dmomdt(U=fs%U,V=fs%V,W=fs%W,drhoUdt=resU,drhoVdt=resV,drhoWdt=resW)
+               call fs%get_dUdt(dUdt=resU,dVdt=resV,dWdt=resW)
 
                ! Shu-Osher combination
                call fs%U%lincomb(a=rk3a(time%it),src1=fs%Uold,b=1.0_WP-rk3a(time%it),src2=fs%U)
                call fs%V%lincomb(a=rk3a(time%it),src1=fs%Vold,b=1.0_WP-rk3a(time%it),src2=fs%V)
                call fs%W%lincomb(a=rk3a(time%it),src1=fs%Wold,b=1.0_WP-rk3a(time%it),src2=fs%W)
-               call fs%U%saxpy(a=rk3b(time%it)*time%dt/fs%rho,src=resU)
-               call fs%V%saxpy(a=rk3b(time%it)*time%dt/fs%rho,src=resV)
-               call fs%W%saxpy(a=rk3b(time%it)*time%dt/fs%rho,src=resW)
+               call fs%U%saxpy(a=rk3b(time%it)*time%dt,src=resU)
+               call fs%V%saxpy(a=rk3b(time%it)*time%dt,src=resV)
+               call fs%W%saxpy(a=rk3b(time%it)*time%dt,src=resW)
 
                ! Apply IB direct forcing
                call apply_ib_forcing()
