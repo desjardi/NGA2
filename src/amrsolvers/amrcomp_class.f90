@@ -1,35 +1,31 @@
-!> AMR Compressible solver class
-!> Port of fastcomp_class to AMReX infrastructure
+!> AMR Collocated compressible solver class
 module amrcomp_class
-   use iso_c_binding,    only: c_ptr
+   use iso_c_binding,    only: c_ptr,c_f_pointer,c_loc,c_f_pointer
    use precision,        only: WP
-   use amrgrid_class,    only: amrgrid
    use amrdata_class,    only: amrdata
-   use amrsolver_class,  only: amrsolver
-   use amrex_amr_module, only: amrex_boxarray,amrex_distromap
+   use amrflow_class,    only: amrflow
+   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap
    implicit none
    private
 
    ! Expose type
    public :: amrcomp
 
-   !> AMR Compressible solver type
-   type, extends(amrsolver) :: amrcomp
+   !> AMR collocated compressible solver type
+   type, extends(amrflow) :: amrcomp
+
       ! User-configurable callbacks
-      procedure(comp_init_iface), pointer, pass :: user_init=>null()
-      procedure(comp_tagging_iface), pointer, pass :: user_tagging=>null()
-      procedure(comp_bc_iface), pointer, pass :: user_bc=>null()
+      procedure(comp_init_iface),    pointer, pass :: user_init   =>null()  !< User-defined initialization
+      procedure(comp_tagging_iface), pointer, pass :: user_tagging=>null()  !< User-defined tagging
+      procedure(comp_bc_iface),      pointer, pass :: user_bc     =>null()  !< User-defined boundary conditions
 
       ! Equation of state function pointers: P=P(rho,I), C=C(rho,P), T=T(rho,P)
       procedure(eos_P_iface), pointer, nopass :: getP=>null()
       procedure(eos_C_iface), pointer, nopass :: getC=>null()
       procedure(eos_T_iface), pointer, nopass :: getT=>null()
 
-      ! Conserved variables (1: rho, 2: rhoU, 3: rhoV, 4: rhoW, 5: rhoI)
-      type(amrdata) :: Q,Qold
-
-      ! Primitive variables (velocities, internal energy, and pressure)
-      type(amrdata) :: U,V,W,I,P
+      ! Cell-centered primitive variables (velocities, internal energy, and pressure)
+      type(amrdata) :: UVW,I,P
 
       ! Temperature
       type(amrdata) :: T
@@ -43,26 +39,21 @@ module amrcomp_class
       type(amrdata) :: diff              !< Heat diffusivity
 
       ! CFL numbers
-      real(WP) :: CFLc_x=0.0_WP,CFLc_y=0.0_WP,CFLc_z=0.0_WP  !< Convective
       real(WP) :: CFLa_x=0.0_WP,CFLa_y=0.0_WP,CFLa_z=0.0_WP  !< Acoustic
       real(WP) :: CFLv_x=0.0_WP,CFLv_y=0.0_WP,CFLv_z=0.0_WP  !< Viscous
 
       ! Monitoring quantities
-      real(WP) :: Umax=0.0_WP,Vmax=0.0_WP,Wmax=0.0_WP
       real(WP) :: Imin=0.0_WP,Imax=0.0_WP
       real(WP) :: Pmin=0.0_WP,Pmax=0.0_WP
       real(WP) :: Tmin=0.0_WP,Tmax=0.0_WP
       real(WP) :: Cmin=0.0_WP,Cmax=0.0_WP
-      real(WP), dimension(5) :: Qint=0.0_WP,Qmin=0.0_WP,Qmax=0.0_WP
       real(WP) :: rhoKint=0.0_WP
 
       ! Minimum density for stability
       real(WP) :: rho_floor=1.0e-10_WP
 
-      ! Number of overlap cells (2 for WENO3 stencil)
-      integer :: nover=2
-
    contains
+      ! Type-bound constructor/destructor
       procedure :: initialize
       procedure :: finalize
       ! Lifecycle callbacks
@@ -71,22 +62,28 @@ module amrcomp_class
       procedure :: on_remake
       procedure :: on_clear
       procedure :: post_regrid
+      ! BC overrides
+      procedure :: apply_velbc=>comp_apply_velbc
+      procedure :: apply_Qbc=>comp_apply_Qbc
+      ! Utilities
+      procedure :: get_face_velocity         !< Update face velocities from cell-centered data
+      procedure :: add_pressure              !< Add pressure term to face velocities, cell-centered momentum, and internal energy
       ! Physics
-      procedure :: get_primitive
-      procedure :: get_conserved
-      procedure :: get_dQdt
-      procedure :: add_viscartif
-      procedure :: add_vreman
-      procedure :: get_cfl
+      procedure :: get_primitive             !< Get primitive variables from conserved variables
+      procedure :: get_conserved             !< Get conserved variables from primitive variables
+      procedure :: get_dQdt                  !< Compute conserved variable time derivative
+      procedure :: add_viscartif             !< Add localized artificial diffusivity
+      procedure :: add_vreman                !< Add Vreman SGS eddy viscosity
+      procedure :: get_cfl                   !< Compute CFL numbers
       ! Print
       procedure :: get_info
       procedure :: print=>amrcomp_print
-      ! Checkpoint I/O (deferred from amrsolver)
+      ! Checkpoint I/O
       procedure :: register_checkpoint
       procedure :: restore_checkpoint
    end type amrcomp
 
-   !> Abstract interface for user init callback
+   !> Abstract interface for user-provided init callback
    abstract interface
       subroutine comp_init_iface(solver,lvl,time,ba,dm)
          import :: amrcomp,WP,amrex_boxarray,amrex_distromap
@@ -98,7 +95,7 @@ module amrcomp_class
       end subroutine comp_init_iface
    end interface
 
-   !> Abstract interface for tagging callback
+   !> Abstract interface for user-provided tagging callback
    abstract interface
       subroutine comp_tagging_iface(solver,lvl,time,tags)
          import :: amrcomp,c_ptr,WP
@@ -107,6 +104,21 @@ module amrcomp_class
          real(WP), intent(in) :: time
          type(c_ptr), intent(in) :: tags
       end subroutine comp_tagging_iface
+   end interface
+
+   !> Abstract interface for user-provided velocity BC callback
+   abstract interface
+      subroutine comp_bc_iface(solver,lvl,time,face,bx,comp,p)
+         use amrex_amr_module, only: amrex_box
+         import :: amrcomp,WP
+         class(amrcomp), intent(inout) :: solver
+         integer, intent(in) :: lvl
+         real(WP), intent(in) :: time
+         integer, intent(in) :: face                       !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
+         type(amrex_box), intent(in) :: bx                 !< Boundary box to fill
+         character(len=1), intent(in) :: comp              !< Can be 'U','V','W','Q'
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
+      end subroutine comp_bc_iface
    end interface
 
    !> Abstract interface for EoS: P=P(rho,I)
@@ -136,20 +148,6 @@ module amrcomp_class
       end function eos_T_iface
    end interface
 
-   !> Abstract interface for user BC callback
-   abstract interface
-      subroutine comp_bc_iface(solver,lvl,time,face,bx,pQ)
-         use amrex_amr_module, only: amrex_box
-         import :: amrcomp,WP
-         class(amrcomp), intent(inout) :: solver
-         integer, intent(in) :: lvl
-         real(WP), intent(in) :: time
-         integer, intent(in) :: face
-         type(amrex_box), intent(in) :: bx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
-      end subroutine comp_bc_iface
-   end interface
-
 contains
 
    ! ============================================================================
@@ -158,7 +156,6 @@ contains
 
    !> Dispatch on_init: calls type-bound method then user callback
    subroutine amrcomp_on_init(ctx,lvl,time,ba,dm)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lvl
@@ -173,7 +170,6 @@ contains
 
    !> Dispatch on_coarse: calls type-bound method
    subroutine amrcomp_on_coarse(ctx,lvl,time,ba,dm)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lvl
@@ -187,7 +183,6 @@ contains
 
    !> Dispatch on_remake: calls type-bound method
    subroutine amrcomp_on_remake(ctx,lvl,time,ba,dm)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lvl
@@ -201,7 +196,6 @@ contains
 
    !> Dispatch on_clear: calls type-bound method
    subroutine amrcomp_on_clear(ctx,lvl)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lvl
@@ -212,7 +206,6 @@ contains
 
    !> Dispatch tagging: calls user callback if set
    subroutine amrcomp_tagging(ctx,lvl,time,tags)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lvl
@@ -225,7 +218,6 @@ contains
 
    !> Dispatch post_regrid: calls type-bound method
    subroutine amrcomp_postregrid(ctx,lbase,time)
-      use iso_c_binding, only: c_f_pointer
       implicit none
       type(c_ptr), intent(in) :: ctx
       integer, intent(in) :: lbase
@@ -241,29 +233,19 @@ contains
 
    !> Initialize the compressible solver
    subroutine initialize(this,amr,name)
-      use iso_c_binding, only: c_loc
       use amrex_amr_module, only: amrex_bc_foextrap
+      use amrgrid_class,    only: amrgrid
       implicit none
       class(amrcomp), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
 
-      ! Set name
-      if (present(name)) then
-         this%name = trim(name)
-      else
-         this%name = 'UNNAMED_COMP'
-      end if
-      this%amr => amr
-
-      ! Initialize conserved variables Q
-      call this%Q%initialize   (amr,name='Q'   ,ncomp=5,ng=this%nover); this%Q%parent   =>this
-      call this%Qold%initialize(amr,name='Qold',ncomp=5,ng=this%nover); this%Qold%parent=>this
+      ! Initialize amrflow parent with 5 conserved components and at least 2 ghost cells
+      this%nQ=5; this%nover=max(this%nover,2)
+      call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
 
       ! Initialize primitive/derived variables
-      call this%U%initialize(amr,name='U',ncomp=1,ng=this%nover); this%U%parent=>this
-      call this%V%initialize(amr,name='V',ncomp=1,ng=this%nover); this%V%parent=>this
-      call this%W%initialize(amr,name='W',ncomp=1,ng=this%nover); this%W%parent=>this
+      call this%UVW%initialize(amr,name='UVW',ncomp=3,ng=this%nover); this%UVW%parent=>this
       call this%I%initialize(amr,name='I',ncomp=1,ng=this%nover); this%I%parent=>this
       call this%P%initialize(amr,name='P',ncomp=1,ng=this%nover); this%P%parent=>this
       call this%T%initialize(amr,name='T',ncomp=1,ng=this%nover); this%T%parent=>this
@@ -289,9 +271,6 @@ contains
          this%diff%lo_bc(3,1)=amrex_bc_foextrap; this%diff%hi_bc(3,1)=amrex_bc_foextrap
       end if
 
-      ! Set Q fillbc callback to internal handler
-      this%Q%fillbc=>Q_fillbc
-
       ! Register callbacks with amrgrid
       select type (this)
        type is (amrcomp)
@@ -312,12 +291,21 @@ contains
    subroutine finalize(this)
       implicit none
       class(amrcomp), intent(inout) :: this
-      call this%Q%finalize(); call this%Qold%finalize()
-      call this%U%finalize(); call this%V%finalize(); call this%W%finalize()
-      call this%I%finalize(); call this%P%finalize(); call this%T%finalize(); call this%C%finalize()
-      call this%visc%finalize(); call this%beta%finalize(); call this%diff%finalize()
-      nullify(this%amr); nullify(this%user_init); nullify(this%user_tagging)
-      nullify(this%getP); nullify(this%getC); nullify(this%getT)
+      call this%UVW%finalize()
+      call this%I%finalize()
+      call this%P%finalize()
+      call this%T%finalize()
+      call this%C%finalize()
+      call this%visc%finalize()
+      call this%beta%finalize()
+      call this%diff%finalize()
+      nullify(this%user_init)
+      nullify(this%user_tagging)
+      nullify(this%user_bc)
+      nullify(this%getP)
+      nullify(this%getC)
+      nullify(this%getT)
+      call this%amrflow%finalize()
    end subroutine finalize
 
    ! ============================================================================
@@ -332,11 +320,10 @@ contains
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
+      ! Parent handles face velocities, divergence, and conserved quantities
+      call this%amrflow%on_init(lvl,time,ba,dm)
       ! Reset level layouts
-      call this%Q%reset_level(lvl,ba,dm); call this%Qold%reset_level(lvl,ba,dm)
-      call this%U%reset_level(lvl,ba,dm)
-      call this%V%reset_level(lvl,ba,dm)
-      call this%W%reset_level(lvl,ba,dm)
+      call this%UVW%reset_level(lvl,ba,dm)
       call this%I%reset_level(lvl,ba,dm)
       call this%P%reset_level(lvl,ba,dm)
       call this%T%reset_level(lvl,ba,dm)
@@ -345,10 +332,7 @@ contains
       call this%beta%reset_level(lvl,ba,dm)
       call this%diff%reset_level(lvl,ba,dm)
       ! Zero out
-      call this%Q%setval(val=0.0_WP,lvl=lvl); call this%Qold%setval(val=0.0_WP,lvl=lvl)
-      call this%U%setval(val=0.0_WP,lvl=lvl)
-      call this%V%setval(val=0.0_WP,lvl=lvl)
-      call this%W%setval(val=0.0_WP,lvl=lvl)
+      call this%UVW%setval(val=0.0_WP,lvl=lvl)
       call this%I%setval(val=0.0_WP,lvl=lvl)
       call this%P%setval(val=0.0_WP,lvl=lvl)
       call this%T%setval(val=0.0_WP,lvl=lvl)
@@ -366,14 +350,10 @@ contains
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
-      ! Use conservative interpolation from coarse for Q
-      call this%Q%on_coarse(lvl,time,ba,dm)
-      ! Qold just needs to be reset
-      call this%Qold%reset_level(lvl,ba,dm)
+      ! Parent handles face velocities, divergence, and conserved quantities
+      call this%amrflow%on_coarse(lvl,time,ba,dm)
       ! Derived variables are just reset
-      call this%U%reset_level(lvl,ba,dm)
-      call this%V%reset_level(lvl,ba,dm)
-      call this%W%reset_level(lvl,ba,dm)
+      call this%UVW%reset_level(lvl,ba,dm)
       call this%I%reset_level(lvl,ba,dm)
       call this%P%reset_level(lvl,ba,dm)
       call this%T%reset_level(lvl,ba,dm)
@@ -391,14 +371,10 @@ contains
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
-      ! Use on_remake from amrdata for Q
-      call this%Q%on_remake(lvl,time,ba,dm)
-      ! Qold just needs to be reset
-      call this%Qold%reset_level(lvl,ba,dm)
+      ! Parent handles face velocities, divergence, and conserved quantities
+      call this%amrflow%on_remake(lvl,time,ba,dm)
       ! Derived variables are just reset
-      call this%U%reset_level(lvl,ba,dm)
-      call this%V%reset_level(lvl,ba,dm)
-      call this%W%reset_level(lvl,ba,dm)
+      call this%UVW%reset_level(lvl,ba,dm)
       call this%I%reset_level(lvl,ba,dm)
       call this%P%reset_level(lvl,ba,dm)
       call this%T%reset_level(lvl,ba,dm)
@@ -412,11 +388,10 @@ contains
    subroutine on_clear(this,lvl)
       class(amrcomp), intent(inout) :: this
       integer, intent(in) :: lvl
-      call this%Q%clear_level(lvl)
-      call this%Qold%clear_level(lvl)
-      call this%U%clear_level(lvl)
-      call this%V%clear_level(lvl)
-      call this%W%clear_level(lvl)
+      ! Parent handles face velocities, divergence, and conserved quantities
+      call this%amrflow%on_clear(lvl)
+      ! Clear derived variables
+      call this%UVW%clear_level(lvl)
       call this%I%clear_level(lvl)
       call this%P%clear_level(lvl)
       call this%T%clear_level(lvl)
@@ -431,101 +406,192 @@ contains
       class(amrcomp), intent(inout) :: this
       integer, intent(in) :: lbase
       real(WP), intent(in) :: time
-      integer :: lvl
-      ! Average down conserved variables for C/F consistency
-      do lvl=this%amr%clvl()-1,lbase,-1
-         call this%Q%average_downto(lvl)
-      end do
-      ! Fill ghosts
-      call this%Q%fill(time)
+      ! Parent handles face velocities and conserved quantities
+      call this%amrflow%post_regrid(lbase,time)
       ! Rebuild primitive variables
       call this%get_primitive(this%Q)
    end subroutine post_regrid
 
-   !> Internal fillbc for Q - calls default_fillbc first, then user_bc for ext_dir faces
-   subroutine Q_fillbc(this,mf,scomp,ncomp,time,geom)
-      use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy,&
-      &                           amrex_box,amrex_geometry,amrex_multifab,amrex_bc_ext_dir
-      use amrdata_class, only: default_fillbc
+   ! ============================================================================
+   ! BOUNDARY CONDITIONS
+   ! ============================================================================
+
+   !> Velocity BC override: forward to user_bc with U/V/W component name
+   subroutine comp_apply_velbc(this,lvl,time,face,bx,comp,p)
+      use amrex_amr_module, only: amrex_box
       implicit none
-      class(amrdata), intent(inout) :: this
-      type(amrex_multifab), intent(inout) :: mf
-      integer, intent(in) :: scomp, ncomp
+      class(amrcomp), intent(inout) :: this
+      integer, intent(in) :: lvl,face
       real(WP), intent(in) :: time
-      type(amrex_geometry), intent(in) :: geom
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bc_bx
-      class(amrcomp), pointer :: solver
+      type(amrex_box), intent(in) :: bx
+      character(len=1), intent(in) :: comp
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
-      integer :: ilo,ihi,jlo,jhi,klo,khi
-      integer :: dlo(3),dhi(3)
-      integer :: lvl
-      
-      ! First apply default BC handling (foextrap,hoextrap,reflect,etc.)
-      call default_fillbc(this,mf,scomp,ncomp,time,geom)
-      
-      ! Access parent solver
-      select type (s=>this%parent)
-       class is (amrcomp)
-         solver=>s
-      end select
-      
-      ! Check if user callback exists
-      if (.not.associated(solver%user_bc)) return
+      if (associated(this%user_bc)) call this%user_bc(lvl=lvl,time=time,face=face,bx=bx,comp=comp,p=p)
+   end subroutine comp_apply_velbc
 
-      ! Get domain bounds and level
-      dlo=geom%domain%lo
-      dhi=geom%domain%hi
-      lvl=this%fill_lvl_cache
+   !> Q BC override: forward to user_bc with comp='Q'
+   subroutine comp_apply_Qbc(this,lvl,time,face,bx,p)
+      use amrex_amr_module, only: amrex_box
+      implicit none
+      class(amrcomp), intent(inout) :: this
+      integer, intent(in) :: lvl,face
+      real(WP), intent(in) :: time
+      type(amrex_box), intent(in) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
+      if (associated(this%user_bc)) call this%user_bc(lvl=lvl,time=time,face=face,bx=bx,comp='Q',p=p)
+   end subroutine comp_apply_Qbc
 
-      ! Loop over FABs and apply user_bc for ext_dir faces
-      call amrex_mfiter_build(mfi,mf,tiling=.false.)
-      do while (mfi%next())
-         p=>mf%dataptr(mfi)
-         ilo=lbound(p,1); ihi=ubound(p,1)
-         jlo=lbound(p,2); jhi=ubound(p,2)
-         klo=lbound(p,3); khi=ubound(p,3)
+   ! ============================================================================
+   ! UTILITIES
+   ! ============================================================================
 
-         ! X-LOW (face=1)
-         if (this%lo_bc(1,1).eq.amrex_bc_ext_dir .and. ilo.lt.dlo(1)) then
-            bc_bx=amrex_box([ilo,jlo,klo],[dlo(1)-1,jhi,khi])
-            call solver%user_bc(lvl=lvl,time=time,face=1,bx=bc_bx,pQ=p)
-         end if
-
-         ! X-HIGH (face=2)
-         if (this%hi_bc(1,1).eq.amrex_bc_ext_dir .and. ihi.gt.dhi(1)) then
-            bc_bx=amrex_box([dhi(1)+1,jlo,klo],[ihi,jhi,khi])
-            call solver%user_bc(lvl=lvl,time=time,face=2,bx=bc_bx,pQ=p)
-         end if
-
-         ! Y-LOW (face=3)
-         if (this%lo_bc(2,1).eq.amrex_bc_ext_dir .and. jlo.lt.dlo(2)) then
-            bc_bx=amrex_box([ilo,jlo,klo],[ihi,dlo(2)-1,khi])
-            call solver%user_bc(lvl=lvl,time=time,face=3,bx=bc_bx,pQ=p)
-         end if
-
-         ! Y-HIGH (face=4)
-         if (this%hi_bc(2,1).eq.amrex_bc_ext_dir .and. jhi.gt.dhi(2)) then
-            bc_bx=amrex_box([ilo,dhi(2)+1,klo],[ihi,jhi,khi])
-            call solver%user_bc(lvl=lvl,time=time,face=4,bx=bc_bx,pQ=p)
-         end if
-
-         ! Z-LOW (face=5)
-         if (this%lo_bc(3,1).eq.amrex_bc_ext_dir .and. klo.lt.dlo(3)) then
-            bc_bx=amrex_box([ilo,jlo,klo],[ihi,jhi,dlo(3)-1])
-            call solver%user_bc(lvl=lvl,time=time,face=5,bx=bc_bx,pQ=p)
-         end if
-
-         ! Z-HIGH (face=6)
-         if (this%hi_bc(3,1).eq.amrex_bc_ext_dir .and. khi.gt.dhi(3)) then
-            bc_bx=amrex_box([ilo,jlo,dhi(3)+1],[ihi,jhi,khi])
-            call solver%user_bc(lvl=lvl,time=time,face=6,bx=bc_bx,pQ=p)
-         end if
-
+   !> Update face velocity from Q
+   subroutine get_face_velocity(this)
+      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      implicit none
+      class(amrcomp), intent(inout) :: this
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: fbx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW
+      ! Traverse levels
+      do lvl=0,this%amr%clvl()
+         ! Loop over tiles
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pQ=>this%Q%mf(lvl)%dataptr(mfi)
+            pU=>this%U%mf(lvl)%dataptr(mfi)
+            pV=>this%V%mf(lvl)%dataptr(mfi)
+            pW=>this%W%mf(lvl)%dataptr(mfi)
+            ! Get X-face velocity
+            fbx=mfi%nodaltilebox(1)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               pU(i,j,k,1)=0.5_WP*sum(pQ(i-1:i,j,k,2)/max(pQ(i-1:i,j,k,1),this%rho_floor))
+            end do; end do; end do
+            ! Get Y-face velocity
+            fbx=mfi%nodaltilebox(2)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               pV(i,j,k,1)=0.5_WP*sum(pQ(i,j-1:j,k,3)/max(pQ(i,j-1:j,k,1),this%rho_floor))
+            end do; end do; end do
+            ! Get Z-face velocity
+            fbx=mfi%nodaltilebox(3)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               pW(i,j,k,1)=0.5_WP*sum(pQ(i,j,k-1:k,4)/max(pQ(i,j,k-1:k,1),this%rho_floor))
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
       end do
-      call amrex_mfiter_destroy(mfi)
+   end subroutine get_face_velocity
 
-   end subroutine Q_fillbc
+   !> Add pressure term to face velocities and cell-centered momentum and internal energy. Two flavors:
+   !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
+   !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
+   !> Cell-center correction averages the face gradients back to cell center
+   subroutine add_pressure(this,scale,phi)
+      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
+      class(amrcomp), intent(inout) :: this
+      real(WP), intent(in) :: scale
+      type(amrdata), intent(in), optional :: phi
+      type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pP,pFx,pFy,pFz,pQ
+      real(WP) :: dxi,dyi,dzi
+      integer :: lvl,i,j,k
+      ! Build temp face mfabs to store pressure fluxes
+      allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,Fx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.])
+         call this%amr%mfab_build(lvl,Fy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
+         call this%amr%mfab_build(lvl,Fz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+      end do
+      ! Compute -pressure gradient at faces
+      if (present(phi)) then
+         ! Use provided phi and its ghosts cells
+         do lvl=0,this%amr%clvl()
+            dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pP =>phi%mf(lvl)%dataptr(mfi)
+               pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFx(i,j,k,1)=-(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi
+               end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFy(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi
+               end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pFz(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
+         end do
+      else
+         ! Use psolver's solution and its internal ghosts
+         call this%psolver%get_fluxes(Fx,Fy,Fz)
+      end if
+      ! Apply to face velocities and cell-centered in one pass
+      do lvl=0,this%amr%clvl()
+         ! Face: use flux directly
+         call this%U%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
+         call this%V%mf(lvl)%saxpy(scale,Fy(lvl),1,1,1,0)
+         call this%W%mf(lvl)%saxpy(scale,Fz(lvl),1,1,1,0)
+         ! Cell-center: average flux to cell center
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+            pQ=>this%Q%mf(lvl)%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*sum(pFx(i:i+1,j,k,1))
+               pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*sum(pFy(i,j:j+1,k,1))
+               pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*sum(pFz(i,j,k:k+1,1))
+            end do; end do; end do
+            ! Fix non-periodic boundary conditions
+            if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
+               i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
+                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i+1,j,k,1)
+               end do; end do
+            end if
+            if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
+               i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
+                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i,  j,k,1)
+               end do; end do
+            end if
+            if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
+               j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
+                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j+1,k,1)
+               end do; end do
+            end if
+            if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
+               j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
+                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j,  k,1)
+               end do; end do
+            end if
+            if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
+               k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k+1,1)
+               end do; end do
+            end if
+            if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
+               k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k,  1)
+               end do; end do
+            end if
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Destroy temps
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(Fx(lvl))
+         call this%amr%mfab_destroy(Fy(lvl))
+         call this%amr%mfab_destroy(Fz(lvl))
+      end do
+   end subroutine add_pressure
 
    ! ============================================================================
    ! PHYSICS METHODS
@@ -533,7 +599,7 @@ contains
 
    !> Calculate primitive variables from conserved variables
    subroutine get_primitive(this,Q)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_mfiter
       use messager, only: die
       implicit none
       class(amrcomp), intent(inout) :: this
@@ -541,8 +607,8 @@ contains
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pI,pP,pT,pC
-      real(WP) :: rho_inv
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pI,pP,pT,pC
+      real(WP) :: irho
       ! Check passed Q is as expected
       if (Q%ncomp.ne.5) call die('[amrcomp get_primitive] Q must have 5 components')
       if (Q%ng.lt.this%nover) call die('[amrcomp get_primitive] Q must have at least nover ghost cells')
@@ -556,9 +622,7 @@ contains
          do while (mfi%next())
             ! Get pointers to data
             pQ=>Q%mf(lvl)%dataptr(mfi)
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
+            pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
             pI=>this%I%mf(lvl)%dataptr(mfi)
             pP=>this%P%mf(lvl)%dataptr(mfi)
             pT=>this%T%mf(lvl)%dataptr(mfi)
@@ -567,12 +631,12 @@ contains
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Compute velocity from momentum
-               rho_inv=1.0_WP/max(pQ(i,j,k,1),this%rho_floor)
-               pU(i,j,k,1)=pQ(i,j,k,2)*rho_inv
-               pV(i,j,k,1)=pQ(i,j,k,3)*rho_inv
-               pW(i,j,k,1)=pQ(i,j,k,4)*rho_inv
+               irho=1.0_WP/max(pQ(i,j,k,1),this%rho_floor)
+               pUVW(i,j,k,1)=pQ(i,j,k,2)*irho
+               pUVW(i,j,k,2)=pQ(i,j,k,3)*irho
+               pUVW(i,j,k,3)=pQ(i,j,k,4)*irho
                ! Compute internal energy per unit mass
-               pI(i,j,k,1)=pQ(i,j,k,5)*rho_inv
+               pI(i,j,k,1)=pQ(i,j,k,5)*irho
                ! Compute pressure via EoS: P = P(rho, I)
                pP(i,j,k,1)=this%getP(rho=pQ(i,j,k,1),I=pI(i,j,k,1))
                ! Compute speed of sound via EoS: C = C(rho, P)
@@ -587,26 +651,24 @@ contains
 
    !> Calculate conserved variables from primitive variables
    subroutine get_conserved(this)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_mfiter
       implicit none
       class(amrcomp), intent(inout) :: this
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pI
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pI
       do lvl=0,this%amr%clvl()
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             bx=mfi%growntilebox(this%nover)
             pQ=>this%Q%mf(lvl)%dataptr(mfi)
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
+            pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
             pI=>this%I%mf(lvl)%dataptr(mfi)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pQ(i,j,k,2)=pQ(i,j,k,1)*pU(i,j,k,1)
-               pQ(i,j,k,3)=pQ(i,j,k,1)*pV(i,j,k,1)
-               pQ(i,j,k,4)=pQ(i,j,k,1)*pW(i,j,k,1)
+               pQ(i,j,k,2)=pQ(i,j,k,1)*pUVW(i,j,k,1)
+               pQ(i,j,k,3)=pQ(i,j,k,1)*pUVW(i,j,k,2)
+               pQ(i,j,k,4)=pQ(i,j,k,1)*pUVW(i,j,k,3)
                pQ(i,j,k,5)=pQ(i,j,k,1)*pI(i,j,k,1)
             end do; end do; end do
          end do
@@ -869,220 +931,46 @@ contains
       end function weno_weight
    end subroutine get_dQdt
 
-   !> Add artificial bulk viscosity to this%beta and this%visc
+   !> Add artificial bulk viscosity to this%beta (and optionally this%visc)
    subroutine add_viscartif(this,dt,Cartif,Cvisc)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab,amrex_multifab_destroy
+      use amrsgs, only: get_viscartif
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), intent(in), optional :: Cartif
       real(WP), intent(in), optional :: Cvisc
-      ! Local variables
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      type(amrex_multifab) :: beta_t,scratch
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pBeta_t,pScratch,pU,pV,pW,pC,pBeta,pVisc,pQ
-      real(WP) :: dxi,dyi,dzi,dx,dy,dz,max_beta,myCartif,myCvisc
-      real(WP) :: dudy,dudz,dvdx,dvdz,dwdx,dwdy,vort,grad_div
-      integer :: lvl,i,j,k
-      ! Parameters
-      real(WP), parameter :: max_cfl=0.5_WP
-      integer, parameter :: nfilter=2
-
-      ! Set model constant
-      if (present(Cartif)) then; myCartif=Cartif; else; myCartif=5.0_WP; end if
-
+      real(WP) :: myCvisc
+      type(amrdata) :: beta_t
       ! Set shear viscosity constant
       if (present(Cvisc)) then; myCvisc=Cvisc; else; myCvisc=0.0_WP; end if
-
-      ! Loop over levels
-      do lvl=0,this%amr%clvl()
-         
-         ! Grid spacings
-         dx=this%amr%dx(lvl); dxi=1.0_WP/dx
-         dy=this%amr%dy(lvl); dyi=1.0_WP/dy
-         dz=this%amr%dz(lvl); dzi=1.0_WP/dz
-         
-         ! Max beta from CFL
-         max_beta=max_cfl*this%amr%min_meshsize(lvl)**2/(4.0_WP*dt)
-         
-         ! Build temp multifabs
-         call this%amr%mfab_build(lvl=lvl,mfab=scratch,ncomp=1,nover=1); call scratch%setval(0.0_WP)
-         call this%amr%mfab_build(lvl=lvl,mfab=beta_t,ncomp=1,nover=this%nover); call beta_t%setval(0.0_WP)
-         
-         ! Phase 1: Compute divergence into scratch
-         call this%amr%mfiter_build(lvl,mfi)
-         do while(mfi%next())
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pScratch=>scratch%dataptr(mfi)
-            bx=mfi%growntilebox(1)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pScratch(i,j,k,1)=0.5_WP*(dxi*(pU(i+1,j,k,1)-pU(i-1,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j-1,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k-1,1)))
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-         
-         ! Phase 2: Compute kinematic beta
-         call this%amr%mfiter_build(lvl,mfi)
-         do while(mfi%next())
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pC=>this%C%mf(lvl)%dataptr(mfi)
-            pScratch=>scratch%dataptr(mfi)
-            pBeta_t=>beta_t%dataptr(mfi)
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! Only work in compression regions
-               if (pScratch(i,j,k,1).ge.0.0_WP) cycle
-               ! Compute local vorticity
-               dudy=0.5_WP*dyi*(pU(i,j+1,k,1)-pU(i,j-1,k,1))
-               dudz=0.5_WP*dzi*(pU(i,j,k+1,1)-pU(i,j,k-1,1))
-               dvdx=0.5_WP*dxi*(pV(i+1,j,k,1)-pV(i-1,j,k,1))
-               dvdz=0.5_WP*dzi*(pV(i,j,k+1,1)-pV(i,j,k-1,1))
-               dwdx=0.5_WP*dxi*(pW(i+1,j,k,1)-pW(i-1,j,k,1))
-               dwdy=0.5_WP*dyi*(pW(i,j+1,k,1)-pW(i,j-1,k,1))
-               vort=(dwdy-dvdz)**2+(dudz-dwdx)**2+(dvdx-dudy)**2
-               ! Compute |grad(div)|
-               grad_div=max(abs(pScratch(i+1,j,k,1)-pScratch(i,j,k,1)),abs(pScratch(i,j,k,1)-pScratch(i-1,j,k,1)))*dx**2 &
-               &       +max(abs(pScratch(i,j+1,k,1)-pScratch(i,j,k,1)),abs(pScratch(i,j,k,1)-pScratch(i,j-1,k,1)))*dy**2 &
-               &       +max(abs(pScratch(i,j,k+1,1)-pScratch(i,j,k,1)),abs(pScratch(i,j,k,1)-pScratch(i,j,k-1,1)))*dz**2
-               ! Floor vorticity with sound speed
-               vort=max(vort,(0.05_WP*pC(i,j,k,1)/this%amr%min_meshsize(lvl))**2)
-               ! Compute beta
-               pBeta_t(i,j,k,1)=myCartif*grad_div*min(4.0_WP/3.0_WP*pScratch(i,j,k,1)**2/(pScratch(i,j,k,1)**2+vort+1.0e-15_WP),1.0_WP)
-               ! Clip to max
-               pBeta_t(i,j,k,1)=min(pBeta_t(i,j,k,1),max_beta)
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-
-         ! Destroy scratch
-         call amrex_multifab_destroy(scratch)
-
-         ! Phase 3: Filter beta_t
-         call this%amr%mfab_filter(lvl=lvl,mfab=beta_t,npass=nfilter)
-
-         ! Phase 4: Convert to dynamic viscosity and add to this%beta
-         call this%amr%mfiter_build(lvl,mfi)
-         do while(mfi%next())
-            pBeta_t=>beta_t%dataptr(mfi)
-            pBeta=>this%beta%mf(lvl)%dataptr(mfi)
-            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-            pQ=>this%Q%mf(lvl)%dataptr(mfi)
-            bx=mfi%growntilebox(this%nover)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pBeta(i,j,k,1)=pBeta(i,j,k,1)+pBeta_t(i,j,k,1)*pQ(i,j,k,1)
-               pVisc(i,j,k,1)=pVisc(i,j,k,1)+pBeta_t(i,j,k,1)*pQ(i,j,k,1)*myCvisc
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-
-         ! Destroy temp multifab
-         call amrex_multifab_destroy(beta_t)
-         
-      end do
-
+      ! Create temp amrdata
+      call beta_t%initialize(this%amr,name='beta_t',ncomp=1,ng=this%nover); call beta_t%reset()
+      ! Compute kinematic artificial bulk viscosity into temp
+      call get_viscartif(dt=dt,visc=beta_t,U=this%UVW,V=this%UVW,W=this%UVW,Ucomp=1,Vcomp=2,Wcomp=3,C=this%C,Cartif=Cartif)
+      ! Add rho*visc_t to dynamic bulk viscosity
+      call beta_t%multiply(this%Q,srccomp=1,ncomp=1); call this%beta%add(beta_t)
+      ! Add Cvisc*rho*visc_t to dynamic shear viscosity
+      if (myCvisc.ne.0.0_WP) call this%visc%saxpy(a=myCvisc,src=beta_t)
+      ! Destroy temp amrdata
+      call beta_t%finalize()
    end subroutine add_viscartif
 
    !> Add Vreman SGS eddy viscosity to this%visc
    subroutine add_vreman(this,dt,Cs)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab,amrex_multifab_destroy
+      use amrsgs, only: get_vreman
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), intent(in), optional :: Cs
-      ! Local variables
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      type(amrex_multifab) :: visc_t
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc_t,pU,pV,pW,pVisc,pQ
-      real(WP) :: dxi,dyi,dzi,dx,dy,dz,max_visc,Cmodel,Aij,Bij
-      real(WP), dimension(1:3,1:3) :: gradU,betaij
-      integer :: lvl,i,j,k,si,sj
-      ! Parameters
-      real(WP), parameter :: max_cfl=0.5_WP
-      integer, parameter :: nfilter=2
-
-      ! Model constant: c=2.5*Cs**2 (Vreman uses c=0.07 which corresponds to Cs=0.17)
-      if (present(Cs)) then; Cmodel=2.5_WP*Cs**2; else; Cmodel=2.5_WP*0.17_WP**2; end if
-      
-      ! Loop over levels
-      do lvl=0,this%amr%clvl()
-         
-         ! Grid spacings
-         dx=this%amr%dx(lvl); dxi=1.0_WP/dx
-         dy=this%amr%dy(lvl); dyi=1.0_WP/dy
-         dz=this%amr%dz(lvl); dzi=1.0_WP/dz
-         
-         ! Max visc from CFL
-         max_visc=max_cfl*this%amr%min_meshsize(lvl)**2/(4.0_WP*dt)
-         
-         ! Build temp multifab for eddy viscosity at this level (nover ghost cells)
-         call this%amr%mfab_build(lvl=lvl,mfab=visc_t,ncomp=1,nover=this%nover); call visc_t%setval(0.0_WP)
-         
-         ! Phase 1: Compute kinematic eddy viscosity
-         call this%amr%mfiter_build(lvl,mfi)
-         do while(mfi%next())
-            ! Get data pointers
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pVisc_t=>visc_t%dataptr(mfi)
-            ! Loop over interior tiles
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! Compute cell-centered velocity gradient tensor
-               gradU(1,1)=0.5_WP*dxi*(pU(i+1,j,k,1)-pU(i-1,j,k,1))
-               gradU(2,1)=0.5_WP*dyi*(pU(i,j+1,k,1)-pU(i,j-1,k,1))
-               gradU(3,1)=0.5_WP*dzi*(pU(i,j,k+1,1)-pU(i,j,k-1,1))
-               gradU(1,2)=0.5_WP*dxi*(pV(i+1,j,k,1)-pV(i-1,j,k,1))
-               gradU(2,2)=0.5_WP*dyi*(pV(i,j+1,k,1)-pV(i,j-1,k,1))
-               gradU(3,2)=0.5_WP*dzi*(pV(i,j,k+1,1)-pV(i,j,k-1,1))
-               gradU(1,3)=0.5_WP*dxi*(pW(i+1,j,k,1)-pW(i-1,j,k,1))
-               gradU(2,3)=0.5_WP*dyi*(pW(i,j+1,k,1)-pW(i,j-1,k,1))
-               gradU(3,3)=0.5_WP*dzi*(pW(i,j,k+1,1)-pW(i,j,k-1,1))
-               ! Compute A=gradU_ij*gradU_ij invariant
-               Aij=sum(gradU**2)
-               ! Compute beta_ij=dx_m^2*gradU_mi*gradU_mj
-               do sj=1,3; do si=1,3
-                  betaij(si,sj)=dx**2*gradU(1,si)*gradU(1,sj)+dy**2*gradU(2,si)*gradU(2,sj)+dz**2*gradU(3,si)*gradU(3,sj)
-               end do; end do
-               ! Compute B invariant
-               Bij=betaij(1,1)*betaij(2,2)-betaij(1,2)**2+betaij(1,1)*betaij(3,3)-betaij(1,3)**2+betaij(2,2)*betaij(3,3)-betaij(2,3)**2
-               ! Assemble eddy viscosity
-               if (Bij.gt.0.0_WP) then
-                  pVisc_t(i,j,k,1)=Cmodel*sqrt(Bij/Aij)
-               end if
-               ! Clip to CFL limit
-               pVisc_t(i,j,k,1)=min(pVisc_t(i,j,k,1),max_visc)
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-         
-         ! Phase 2: Filter visc_t
-         call this%amr%mfab_filter(lvl=lvl,mfab=visc_t,npass=nfilter)
-
-         ! Phase 3: Convert to dynamic viscosity and add to this%visc
-         call this%amr%mfiter_build(lvl,mfi)
-         do while(mfi%next())
-            pVisc_t=>visc_t%dataptr(mfi)
-            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-            pQ=>this%Q%mf(lvl)%dataptr(mfi)
-            bx=mfi%growntilebox(this%nover)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pVisc(i,j,k,1)=pVisc(i,j,k,1)+pVisc_t(i,j,k,1)*pQ(i,j,k,1)
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-
-         ! Destroy temp multifab
-         call amrex_multifab_destroy(visc_t)
-         
-      end do
-
+      type(amrdata) :: visc_t
+      ! Create temp amrdata
+      call visc_t%initialize(this%amr,name='visc_t',ncomp=1,ng=this%nover); call visc_t%reset()
+      ! Compute kinematic eddy viscosity into temp
+      call get_vreman(dt=dt,visc=visc_t,U=this%UVW,V=this%UVW,W=this%UVW,Ucomp=1,Vcomp=2,Wcomp=3,Cs=Cs)
+      ! Add rho*visc_t to dynamic viscosity
+      call visc_t%multiply(src=this%Q,srccomp=1,ncomp=1); call this%visc%add(src=visc_t)
+      ! Destroy temp amrdata
+      call visc_t%finalize()
    end subroutine add_vreman
 
    !> Calculate CFL numbers
@@ -1099,9 +987,9 @@ contains
       ! Compute CFL at each level (finest level determines dt)
       do lvl=0,this%amr%clvl()
          ! Max velocity
-         Umax=this%U%norm0(lvl=lvl)
-         Vmax=this%V%norm0(lvl=lvl)
-         Wmax=this%W%norm0(lvl=lvl)
+         Umax=max(this%U%norm0(lvl=lvl),this%UVW%norm0(lvl=lvl,comp=1))
+         Vmax=max(this%V%norm0(lvl=lvl),this%UVW%norm0(lvl=lvl,comp=2))
+         Wmax=max(this%W%norm0(lvl=lvl),this%UVW%norm0(lvl=lvl,comp=3))
          ! Max speed of sound
          Cmax=this%C%norm0(lvl=lvl)
          ! Max viscosities
@@ -1149,42 +1037,36 @@ contains
       cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLa_x,this%CFLa_y,this%CFLa_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
    end subroutine get_cfl
 
+
+   ! ============================================================================
+   ! SOLVER INFO
+   ! ============================================================================
+
    !> Calculate monitoring info
    subroutine get_info(this)
       implicit none
       class(amrcomp), intent(inout) :: this
-      integer :: lvl,n
-      real(WP) :: dV
+      integer :: lvl
+
+      ! Use parent's method first
+      call this%amrflow%get_info()
 
       ! Compute extrema across all levels
-      this%Umax=0.0_WP; this%Vmax=0.0_WP; this%Wmax=0.0_WP
       this%Imin=huge(1.0_WP); this%Imax=-huge(1.0_WP)
       this%Pmin=huge(1.0_WP); this%Pmax=-huge(1.0_WP)
       this%Tmin=huge(1.0_WP); this%Tmax=-huge(1.0_WP)
       this%Cmin=huge(1.0_WP); this%Cmax=-huge(1.0_WP)
-      this%Qmin=huge(1.0_WP); this%Qmax=-huge(1.0_WP)
       do lvl=0,this%amr%clvl()
          ! Velocity norm 0
-         this%Umax=max(this%Umax,this%U%norm0(lvl=lvl))
-         this%Vmax=max(this%Vmax,this%V%norm0(lvl=lvl))
-         this%Wmax=max(this%Wmax,this%W%norm0(lvl=lvl))
+         this%Umax=max(this%Umax,this%UVW%norm0(lvl=lvl,comp=1))
+         this%Vmax=max(this%Vmax,this%UVW%norm0(lvl=lvl,comp=2))
+         this%Wmax=max(this%Wmax,this%UVW%norm0(lvl=lvl,comp=3))
          ! Extrema of internal energy, pressure, and temperature
          this%Imin=min(this%Imin,this%I%get_min(lvl=lvl)); this%Imax=max(this%Imax,this%I%get_max(lvl=lvl))
          this%Pmin=min(this%Pmin,this%P%get_min(lvl=lvl)); this%Pmax=max(this%Pmax,this%P%get_max(lvl=lvl))
          this%Tmin=min(this%Tmin,this%T%get_min(lvl=lvl)); this%Tmax=max(this%Tmax,this%T%get_max(lvl=lvl))
          ! Extrema of speed of sound
          this%Cmin=min(this%Cmin,this%C%get_min(lvl=lvl)); this%Cmax=max(this%Cmax,this%C%get_max(lvl=lvl))
-         ! Extrema of conserved variables
-         do n=1,this%Q%ncomp
-            this%Qmin(n)=min(this%Qmin(n),this%Q%get_min(lvl=lvl,comp=n))
-            this%Qmax(n)=max(this%Qmax(n),this%Q%get_max(lvl=lvl,comp=n))
-         end do
-      end do
-
-      ! Conserved integrals at base level
-      dV=this%amr%cell_vol(0)
-      do n=1,this%Q%ncomp
-         this%Qint(n)=this%Q%get_sum(lvl=0,comp=n)*dV
       end do
 
       ! Kinetic energy integral: 0.5 * rho * (U^2 + V^2 + W^2) * dV
@@ -1194,16 +1076,15 @@ contains
          use amrex_interface, only: amrmask_make_fine
          use parallel, only: MPI_REAL_WP
          use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM
+         integer :: i,j,k,ierr
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
          type(amrex_imultifab) :: mask
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW
          integer, dimension(:,:,:,:), contiguous, pointer :: pMask
-         integer :: i,j,k,ierr
+         ! Uses composite integration with fine masking to avoid double-counting
          this%rhoKint=0.0_WP
          do lvl=0,this%amr%clvl()
-            ! Get cell volume
-            dV=this%amr%cell_vol(lvl)
             ! Build fine mask for this level (if not finest)
             if (lvl.lt.this%amr%clvl()) then
                call amrex_imultifab_build(mask,this%amr%ba(lvl),this%amr%dm(lvl),1,0)
@@ -1215,9 +1096,7 @@ contains
                bx=mfi%tilebox()
                ! Get pointers to data
                pQ=>this%Q%mf(lvl)%dataptr(mfi)
-               pU=>this%U%mf(lvl)%dataptr(mfi)
-               pV=>this%V%mf(lvl)%dataptr(mfi)
-               pW=>this%W%mf(lvl)%dataptr(mfi)
+               pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
                ! Get pointer to fine mask
                if (lvl.lt.this%amr%clvl()) pMask=>mask%dataptr(mfi)
                ! Loop over cells
@@ -1225,7 +1104,7 @@ contains
                   ! Skip cells covered by finer level
                   if (lvl.lt.this%amr%clvl()) then; if (pMask(i,j,k,1).eq.0) cycle; end if
                   ! Accumulate kinetic energy
-                  this%rhoKint=this%rhoKint+0.5_WP*pQ(i,j,k,1)*(pU(i,j,k,1)**2+pV(i,j,k,1)**2+pW(i,j,k,1)**2)*dV
+                  this%rhoKint=this%rhoKint+0.5_WP*pQ(i,j,k,1)*(pUVW(i,j,k,1)**2+pUVW(i,j,k,2)**2+pUVW(i,j,k,3)**2)*this%amr%cell_vol(lvl)
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
@@ -1246,13 +1125,18 @@ contains
       call log("  Grid: "//trim(this%amr%name))
    end subroutine amrcomp_print
 
+   ! ============================================================================
+   ! CHECKPOINT IO
+   ! ============================================================================
+
    !> Register solver data for checkpoint
    subroutine register_checkpoint(this,io)
       use amrio_class, only: amrio
       implicit none
       class(amrcomp), intent(inout) :: this
       class(amrio), intent(inout) :: io
-      call io%add_data(this%Q,'Q')
+      ! Face velocities and conserved variables are registered with parent
+      call this%amrflow%register_checkpoint(io)
    end subroutine register_checkpoint
 
    !> Restore solver data from checkpoint
@@ -1263,8 +1147,8 @@ contains
       class(amrio), intent(inout) :: io
       character(len=*), intent(in) :: dirname
       real(WP), intent(in) :: time
-      call io%read_data(dirname,this%Q,'Q')
-      ! Fill ghost cells (IO reads valid data only)
-      call this%Q%fill(time=time)
+      ! Restore face velocities and conserved variables via parent
+      call this%amrflow%restore_checkpoint(io,dirname,time)
    end subroutine restore_checkpoint
+
 end module amrcomp_class

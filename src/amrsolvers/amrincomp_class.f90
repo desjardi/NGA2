@@ -56,7 +56,7 @@ module amrincomp_class
       ! BC overrides
       procedure :: apply_velbc=>incomp_apply_velbc
       ! Utilities
-      procedure :: correct_velocity          !< Correct face velocity with pressure gradient
+      procedure :: add_pressure              !< Add pressure term to face velocity
       ! Physics procedures
       procedure :: get_dUdt                  !< Compute velocity time derivative
       procedure :: add_vreman                !< Add Vreman SGS eddy viscosity
@@ -93,7 +93,6 @@ module amrincomp_class
    end interface
 
    !> Abstract interface for user-provided velocity BC callback
-   !> Called for ext_dir faces; user fills the boundary box with their own values
    abstract interface
       subroutine incomp_bc_iface(solver,lvl,time,face,bx,comp,p)
          import :: amrincomp,amrex_box,WP
@@ -103,7 +102,7 @@ module amrincomp_class
          integer, intent(in) :: face                       !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
          type(amrex_box), intent(in) :: bx                 !< Boundary box to fill
          character(len=1), intent(in) :: comp              !< Can be 'U','V','W'
-         real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       end subroutine incomp_bc_iface
    end interface
 
@@ -200,7 +199,8 @@ contains
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
 
-      ! Initialize amrflow parent without conserved components
+      ! Initialize amrflow parent without conserved components and at least 1 ghost cell
+      this%nover=max(this%nover,1)
       call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
 
       ! Initialize pressure with Neumann BCs
@@ -353,7 +353,7 @@ contains
    !> Add (-scale*pressure gradient) to U/V/W face velocities. Two paths:
    !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (use for projection with dP)
-   subroutine correct_velocity(this,scale,phi)
+   subroutine add_pressure(this,scale,phi)
       use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
       implicit none
       class(amrincomp), intent(inout) :: this
@@ -412,7 +412,7 @@ contains
          call this%amr%mfab_destroy(Fy(lvl))
          call this%amr%mfab_destroy(Fz(lvl))
       end do
-   end subroutine correct_velocity
+   end subroutine add_pressure
 
    ! ============================================================================
    ! PHYSICS METHODS
@@ -616,8 +616,8 @@ contains
       real(WP), intent(in), optional :: Cs
       type(amrdata) :: visc_t
       ! Create temp amrdata
-      call visc_t%initialize(amr=this%amr,ncomp=1,ng=this%nover,name='visc_t'); call visc_t%reset()
-      ! Compute kinematic eddy viscosity into scratch
+      call visc_t%initialize(amr=this%amr,name='visc_t',ncomp=1,ng=this%nover); call visc_t%reset()
+      ! Compute kinematic eddy viscosity into temp
       call get_vreman(dt=dt,visc=visc_t,U=this%U,V=this%V,W=this%W,Cs=Cs)
       ! Add rho*visc_t to dynamic viscosity
       call this%visc%saxpy(a=this%rho,src=visc_t)

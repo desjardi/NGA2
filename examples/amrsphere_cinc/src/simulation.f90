@@ -116,7 +116,7 @@ contains
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
       character(len=1), intent(in) :: comp
-      real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! Inflow in X-
@@ -257,7 +257,7 @@ contains
          ! Create initial grid
          call amr%init_from_scratch(time=time%t)
          ! Initialize face velocities
-         call fs%interp_vel_to_face()
+         call fs%get_face_velocity()
          ! Set viscosity: molecular + SGS
          call fs%visc%setval(val=visc_mol)
          call fs%add_vreman(dt=time%dt)
@@ -363,10 +363,10 @@ contains
             call fs%Q%average_down(); call fs%Q%fill(time%t)
 
             ! Interpolate velocity to the faces
-            call fs%interp_vel_to_face()
+            call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%correct_both_velocities(scale=time%dt/fs%rho,phi=fs%P)
+            call fs%add_pressure(scale=time%dt/fs%rho,phi=fs%P)
 
             ! Apply IB direct forcing
             call apply_ib_forcing()
@@ -383,7 +383,7 @@ contains
             call fs%psolver%solve(rhs=fs%div)
 
             ! Correct both velocities with new pressure increment
-            call fs%correct_both_velocities(scale=time%dt/fs%rho)
+            call fs%add_pressure(scale=time%dt/fs%rho)
 
             ! Add pressure increment
             call fs%P%add(src=fs%psolver%sol)

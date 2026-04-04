@@ -24,7 +24,7 @@ module simulation
 
    ! Solver data
    type(amrcinc), target :: fs
-   type(amrdata) :: resUVW,Umag
+   type(amrdata) :: dQdt,Umag
 
    ! IB levelset and volume fraction
    type(amrdata) :: IB
@@ -79,7 +79,7 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pIB,pUVW
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pIB,pQ
       real(WP) :: dx,dy,dz,dxi,dyi,dzi
       real(WP), dimension(3) :: vort
       integer :: i,j,k
@@ -95,16 +95,16 @@ contains
          ! Get pointers to data
          tagarr=>tags%dataPtr(mfi)
          pIB=>IB%mf(lvl)%dataptr(mfi)
-         pUVW=>solver%UVW%mf(lvl)%dataptr(mfi)
+         pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          ! Loop over tile
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             ! Tag based on closeness to sphere surface
             if (pIB(i,j,k,1).lt.2.0_WP*dx.and.pIB(i,j,k,1).gt.-dx) tagarr(i,j,k,1)=SETtag
             ! Tag based on vorticity magnitude
-            vort(1)=(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))*0.5_WP*dyi-(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))*0.5_WP*dzi
-            vort(2)=(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))*0.5_WP*dzi-(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))*0.5_WP*dxi
-            vort(3)=(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))*0.5_WP*dxi-(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))*0.5_WP*dyi
+            vort(1)=(pQ(i,j+1,k,3)-pQ(i,j-1,k,3))*0.5_WP*dyi-(pQ(i,j,k+1,2)-pQ(i,j,k-1,2))*0.5_WP*dzi
+            vort(2)=(pQ(i,j,k+1,1)-pQ(i,j,k-1,1))*0.5_WP*dzi-(pQ(i+1,j,k,3)-pQ(i-1,j,k,3))*0.5_WP*dxi
+            vort(3)=(pQ(i+1,j,k,2)-pQ(i-1,j,k,2))*0.5_WP*dxi-(pQ(i,j+1,k,1)-pQ(i,j-1,k,1))*0.5_WP*dyi
             if (norm2(vort).gt.vorticity_tag) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
@@ -322,11 +322,11 @@ contains
       ! Create flow solver
       create_flow_solver: block
          use amrex_amr_module, only: amrex_bc_reflect_odd,amrex_bc_int_dir
-         use amrdata_class, only: amrex_interp_face_linear
+         use amrdata_class, only: interp_face_lin
          ! Create flow solver with same overlap as LPT
          fs%nover=lpt%nover; call fs%initialize(amr)
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
-         if (amr%nz.eq.1) fs%interp_vel=amrex_interp_face_linear
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set molecular viscosity
          call param_read('Reynolds number',visc_mol)
          visc_mol=1.0_WP/visc_mol
@@ -334,33 +334,33 @@ contains
          fs%psolver%max_iter=20
          fs%psolver%tol_rel=1.0e-5_WP
          ! Set boundary conditions
-         fs%UVW%lo_bc(:,:)=amrex_bc_reflect_odd
-         fs%UVW%hi_bc(:,:)=amrex_bc_reflect_odd
-         fs%U%lo_bc(:,1)  =amrex_bc_reflect_odd
-         fs%V%lo_bc(:,1)  =amrex_bc_reflect_odd
-         fs%W%lo_bc(:,1)  =amrex_bc_reflect_odd
-         fs%U%hi_bc(:,1)  =amrex_bc_reflect_odd
-         fs%V%hi_bc(:,1)  =amrex_bc_reflect_odd
-         fs%W%hi_bc(:,1)  =amrex_bc_reflect_odd
+         fs%Q%lo_bc(:,:)=amrex_bc_reflect_odd
+         fs%Q%hi_bc(:,:)=amrex_bc_reflect_odd
+         fs%U%lo_bc(:,1)=amrex_bc_reflect_odd
+         fs%V%lo_bc(:,1)=amrex_bc_reflect_odd
+         fs%W%lo_bc(:,1)=amrex_bc_reflect_odd
+         fs%U%hi_bc(:,1)=amrex_bc_reflect_odd
+         fs%V%hi_bc(:,1)=amrex_bc_reflect_odd
+         fs%W%hi_bc(:,1)=amrex_bc_reflect_odd
          if (amr%zper) then
-            fs%UVW%lo_bc(3,:)=amrex_bc_int_dir; fs%UVW%hi_bc(3,:)=amrex_bc_int_dir
-            fs%U%lo_bc(3,1)  =amrex_bc_int_dir; fs%U%hi_bc(3,1)  =amrex_bc_int_dir
-            fs%V%lo_bc(3,1)  =amrex_bc_int_dir; fs%V%hi_bc(3,1)  =amrex_bc_int_dir
-            fs%W%lo_bc(3,1)  =amrex_bc_int_dir; fs%W%hi_bc(3,1)  =amrex_bc_int_dir
+            fs%Q%lo_bc(3,:)=amrex_bc_int_dir; fs%Q%hi_bc(3,:)=amrex_bc_int_dir
+            fs%U%lo_bc(3,1)=amrex_bc_int_dir; fs%U%hi_bc(3,1)=amrex_bc_int_dir
+            fs%V%lo_bc(3,1)=amrex_bc_int_dir; fs%V%hi_bc(3,1)=amrex_bc_int_dir
+            fs%W%lo_bc(3,1)=amrex_bc_int_dir; fs%W%hi_bc(3,1)=amrex_bc_int_dir
          end if
       end block create_flow_solver
 
       ! Create workspace array
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call resUVW%initialize(amr,name='resUVW',ncomp=3,ng=0,interp=amrex_interp_none); call resUVW%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=amrex_interp_none); call Umag%register()
+         use amrdata_class, only: interp_none
+         call dQdt%initialize(amr,name='dQdt',ncomp=3,ng=0,interp=interp_none); call dQdt%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
       end block create_workspace
 
       ! Create IB: IB(1)=levelset, IB(2)=volume fraction
       create_IB: block
-         use amrdata_class, only: amrex_interp_reinit
-         call IB%initialize(amr,name='IB',ncomp=2,ng=fs%nover,interp=amrex_interp_reinit); call IB%register()
+         use amrdata_class, only: interp_reinit
+         call IB%initialize(amr,name='IB',ncomp=2,ng=fs%nover,interp=interp_reinit); call IB%register()
          IB%user_init=>init_IB
       end block create_IB
 
@@ -379,12 +379,12 @@ contains
          ! Create initial grid
          call amr%init_from_scratch(time=time%t)
          ! Initialize face velocities
-         call fs%interp_vel_to_face()
+         call fs%get_face_velocity()
          ! Set viscosity: molecular + SGS
          call fs%visc%setval(val=visc_mol)
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag
-         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
       end block init_regridding
 
       ! Initialize visualization
@@ -392,9 +392,9 @@ contains
          ! Create visualization object
          call viz%initialize(amr,'amrlpt',use_hdf5=.false.)
          call viz%add_scalar(Umag,1,'Umag')
-         call viz%add_scalar(fs%UVW,1,'U')
-         call viz%add_scalar(fs%UVW,2,'V')
-         call viz%add_scalar(fs%UVW,3,'W')
+         call viz%add_scalar(fs%Q,1,'U')
+         call viz%add_scalar(fs%Q,2,'V')
+         call viz%add_scalar(fs%Q,3,'W')
          call viz%add_scalar(fs%visc,1,'visc')
          call viz%add_scalar(fs%P,1,'pressure')
          call viz%add_scalar(IB,2,'IB')
@@ -517,7 +517,7 @@ contains
          call lpt%advance_to(time=time%t,do_collide=.true.,U=fs%U,V=fs%V,W=fs%W,cst_rho=fs%rho,cst_visc=visc_mol,Gib=IB,Gibcomp=1)
 
          ! Store old velocities
-         call fs%UVWold%copy(src=fs%UVW)
+         call fs%Qold%copy(src=fs%Q)
          call fs%Uold%copy(src=fs%U)
          call fs%Vold%copy(src=fs%V)
          call fs%Wold%copy(src=fs%W)
@@ -526,27 +526,27 @@ contains
          do while (time%it.le.time%itmax)
 
             ! Build mid-time velocity: U^{mid} = 0.5*(U + Uold)
-            call fs%UVW%lincomb(a=0.5_WP,src1=fs%UVWold,b=0.5_WP,src2=fs%UVW)
+            call fs%Q%lincomb(a=0.5_WP,src1=fs%Qold,b=0.5_WP,src2=fs%Q)
             call fs%U%lincomb(a=0.5_WP,src1=fs%Uold,b=0.5_WP,src2=fs%U)
             call fs%V%lincomb(a=0.5_WP,src1=fs%Vold,b=0.5_WP,src2=fs%V)
             call fs%W%lincomb(a=0.5_WP,src1=fs%Wold,b=0.5_WP,src2=fs%W)
 
             ! Increment velocity with advection+viscous terms
-            call fs%get_dmomdt(UVW=fs%UVW,U=fs%U,V=fs%V,W=fs%W,dmomdt=resUVW)
-            call fs%UVW%lincomb(a=1.0_WP,src1=fs%UVWold,b=time%dt/fs%rho,src2=resUVW)
-            call fs%UVW%average_down(); call fs%UVW%fill(time%t)
+            call fs%get_dQdt(dQdt=dQdt)
+            call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
+            call fs%Q%average_down(); call fs%Q%fill(time%t)
 
             ! Interpolate velocity to the faces
-            call fs%interp_vel_to_face()
+            call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%correct_both_velocities(scale=time%dt/fs%rho,phi=fs%P)
+            call fs%add_pressure(scale=time%dt/fs%rho,phi=fs%P)
 
             ! Apply IB direct forcing
             call apply_ib_forcing()
 
             ! Average down and fill ghosts
-            call fs%UVW%average_down(); call fs%UVW%fill(time=time%t)
+            call fs%Q%average_down(); call fs%Q%fill(time=time%t)
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
 
             ! Correct outflow for mass conservation
@@ -557,13 +557,13 @@ contains
             call fs%psolver%solve(rhs=fs%div)
 
             ! Correct both velocities with new pressure increment
-            call fs%correct_both_velocities(scale=time%dt/fs%rho)
+            call fs%add_pressure(scale=time%dt/fs%rho)
 
             ! Add pressure increment
             call fs%P%add(src=fs%psolver%sol)
 
             ! Average down and fill ghosts
-            call fs%UVW%average_down(); call fs%UVW%fill(time=time%t)
+            call fs%Q%average_down(); call fs%Q%fill(time=time%t)
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
 
             ! Increment sub-iteration counter
@@ -582,7 +582,7 @@ contains
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag
-         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
 
          ! Monitor output
          call lpt%get_info()
@@ -608,7 +608,7 @@ contains
          implicit none
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pUVW,pIB
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pQ,pIB
          integer :: i,j,k,lvl
          do lvl=0,amr%clvl()
             call amr%mfiter_build(lvl,mfi)
@@ -616,10 +616,10 @@ contains
                ! Get pointer to volume fraction
                pIB=>IB%mf(lvl)%dataptr(mfi)
                ! Force cell-centered velocity
-               pUVW=>fs%UVW%mf(lvl)%dataptr(mfi)
+               pQ=>fs%Q%mf(lvl)%dataptr(mfi)
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pUVW(i,j,k,:)=pIB(i,j,k,2)*pUVW(i,j,k,:)
+                  pQ(i,j,k,:)=pIB(i,j,k,2)*pQ(i,j,k,:)
                end do; end do; end do
                ! Force face-centered velocity
                pU=>fs%U%mf(lvl)%dataptr(mfi)
@@ -654,7 +654,7 @@ contains
       call regrid_evt%finalize()
       ! Finalize solver
       call fs%finalize()
-      call resUVW%finalize()
+      call dQdt%finalize()
       call IB%finalize()
       call Umag%finalize()
       call lpt%finalize()

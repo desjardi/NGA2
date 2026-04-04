@@ -57,8 +57,8 @@ module amrcinc_class
       procedure :: apply_velbc=>cinc_apply_velbc
       procedure :: apply_Qbc=>cinc_apply_Qbc
       ! Utilities
-      procedure :: interp_vel_to_face        !< Interpolate cell-centered velocity to face
-      procedure :: correct_both_velocities   !< Correct both face and cell-centered velocities
+      procedure :: get_face_velocity         !< Update face velocities from cell-centered data
+      procedure :: add_pressure              !< Add pressure term consistently to face and cell-centered velocities
       ! Physics procedures
       procedure :: get_dQdt                  !< Compute rate of change of conserved variables
       procedure :: add_vreman                !< Add Vreman SGS eddy viscosity
@@ -95,7 +95,6 @@ module amrcinc_class
    end interface
 
    !> Abstract interface for user-provided BC callback
-   !> Called for ext_dir faces; user fills the boundary box with their own values
    abstract interface
       subroutine cinc_bc_iface(solver,lvl,time,face,bx,comp,p)
          import :: amrcinc,WP,amrex_box
@@ -105,7 +104,7 @@ module amrcinc_class
          integer, intent(in) :: face                       !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
          type(amrex_box), intent(in) :: bx                 !< Boundary box to fill
          character(len=1), intent(in) :: comp              !< Can be 'U','V','W','Q'
-         real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       end subroutine cinc_bc_iface
    end interface
 
@@ -202,8 +201,9 @@ contains
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
 
-      ! Initialize amrflow parent with 3 conserved components
-      this%nQ=3; call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
+      ! Initialize amrflow parent with 3 conserved components and at least 1 ghost cell
+      this%nQ=3; this%nover=max(this%nover,1)
+      call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
 
       ! Initialize pressure with Neumann BCs
       call this%P%initialize(amr=amr,name='P',ncomp=1,ng=this%nover); this%P%parent=>this
@@ -364,8 +364,8 @@ contains
    ! UTILITIES
    ! ============================================================================
 
-   !> Interpolate cell-centered UVW to face U,V,W
-   subroutine interp_vel_to_face(this)
+   !> Update face velocity from Q
+   subroutine get_face_velocity(this)
       use amrex_amr_module, only: amrex_mfiter,amrex_box
       implicit none
       class(amrcinc), intent(inout) :: this
@@ -401,13 +401,13 @@ contains
          end do
          call this%amr%mfiter_destroy(mfi)
       end do
-   end subroutine interp_vel_to_face
+   end subroutine get_face_velocity
 
    !> Add (-scale*pressure gradient) to both U/V/W and Q=UVW velocities. Two flavors:
    !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
-   subroutine correct_both_velocities(this,scale,phi)
+   subroutine add_pressure(this,scale,phi)
       use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
       class(amrcinc), intent(inout) :: this
       real(WP), intent(in) :: scale
@@ -510,7 +510,7 @@ contains
          call this%amr%mfab_destroy(Fy(lvl))
          call this%amr%mfab_destroy(Fz(lvl))
       end do
-   end subroutine correct_both_velocities
+   end subroutine add_pressure
 
    ! ============================================================================
    ! PHYSICS METHODS
@@ -713,8 +713,8 @@ contains
       real(WP), intent(in), optional :: Cs
       type(amrdata) :: visc_t
       ! Create temp amrdata
-      call visc_t%initialize(amr=this%amr,ncomp=1,ng=this%nover,name='visc_t'); call visc_t%reset()
-      ! Compute kinematic eddy viscosity into scratch
+      call visc_t%initialize(amr=this%amr,name='visc_t',ncomp=1,ng=this%nover); call visc_t%reset()
+      ! Compute kinematic eddy viscosity into temp
       call get_vreman(dt=dt,visc=visc_t,U=this%Q,V=this%Q,W=this%Q,Ucomp=1,Vcomp=2,Wcomp=3,Cs=Cs)
       ! Add rho*visc_t to dynamic viscosity
       call this%visc%saxpy(a=this%rho,src=visc_t)

@@ -121,7 +121,7 @@ contains
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
       character(len=1), intent(in) :: comp
-      real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! Inflow in X-
@@ -375,7 +375,7 @@ contains
                call fs%W%lincomb(a=1.0_WP,src1=fs%Wold,b=time%dt,src2=resW)
 
                ! Increment velocity with pressure term
-               call fs%correct_velocity(scale=-time%dt/fs%rho,phi=fs%P)
+               call fs%add_pressure(scale=-time%dt/fs%rho,phi=fs%P)
 
                ! Apply IB direct forcing
                call apply_ib_forcing()
@@ -395,7 +395,7 @@ contains
                call fs%psolver%solve(rhs=fs%div)
 
                ! Correct velocity
-               call fs%correct_velocity(scale=time%dt/fs%rho)
+               call fs%add_pressure(scale=time%dt/fs%rho)
 
                ! Increment pressure
                call fs%P%add(src=fs%psolver%sol)
@@ -429,7 +429,7 @@ contains
                call fs%get_div()
                call fs%div%mult(val=fs%rho/(rk3b(time%it)*time%dt))
                call fs%psolver%solve(rhs=fs%div)
-               call fs%correct_velocity(scale=rk3b(time%it)*time%dt/fs%rho)
+               call fs%add_pressure(scale=rk3b(time%it)*time%dt/fs%rho)
 
                ! Store pressure from last stage for monitoring
                if (time%it.eq.time%itmax) call fs%P%copy(src=fs%psolver%sol)

@@ -430,7 +430,7 @@ contains
             call fs%psolver%solve(rhs=fs%div)
 
             ! Correct velocity
-            call fs%correct_velocity(scale=time%dt/fs%rho)
+            call fs%add_pressure(scale=time%dt/fs%rho)
 
             ! Average down and fill ghosts
             call fs%average_down_velocity()
