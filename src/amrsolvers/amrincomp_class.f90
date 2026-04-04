@@ -7,7 +7,7 @@ module amrincomp_class
    use amrdata_class,    only: amrdata
    use amrflow_class,    only: amrflow
    use amrmg_class,      only: amrmg
-   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap
+   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
    implicit none
    private
 
@@ -354,7 +354,7 @@ contains
    !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (use for projection with dP)
    subroutine add_pressure(this,scale,phi)
-      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_multifab
       implicit none
       class(amrincomp), intent(inout) :: this
       real(WP), intent(in) :: scale
@@ -418,7 +418,7 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Compute dU/dt for all levels without pressure gradient (user can add it in the main loop)
+   !> Compute dU/dt for all levels without pressure term (user can add it via add_pressure)
    !> Uses flux averaging at C/F interfaces for conservation
    subroutine get_dUdt(this,dUdt,dVdt,dWdt)
       use amrex_amr_module, only: amrex_multifab
@@ -452,7 +452,6 @@ contains
 
       ! Compute fluxes on all levels
       compute_fluxes: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
          integer :: lvl,i,j,k
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
@@ -533,7 +532,6 @@ contains
 
       ! Compute divergence to get momentum RHS
       divergence_and_sources: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
          integer :: lvl,i,j,k
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
@@ -679,7 +677,7 @@ contains
 
       ! Kinetic energy integral: 0.5 * rho * (Uc^2 + Vc^2 + Wc^2) * dV
       get_kinetic_energy: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
+         use amrex_amr_module, only: amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
          use amrex_interface, only: amrmask_make_fine
          use parallel, only: MPI_REAL_WP
          use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM

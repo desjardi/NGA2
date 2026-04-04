@@ -7,7 +7,7 @@ module amrcinc_class
    use amrdata_class,    only: amrdata
    use amrflow_class,    only: amrflow
    use amrmg_class,      only: amrmg
-   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap
+   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
    implicit none
    private
 
@@ -366,7 +366,6 @@ contains
 
    !> Update face velocity from Q
    subroutine get_face_velocity(this)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
       implicit none
       class(amrcinc), intent(inout) :: this
       integer :: lvl,i,j,k
@@ -408,7 +407,7 @@ contains
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
    subroutine add_pressure(this,scale,phi)
-      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_multifab
       class(amrcinc), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
@@ -516,7 +515,7 @@ contains
    ! PHYSICS METHODS
    ! ============================================================================
 
-   !> Compute dQ/dt for all levels without pressure gradient (user can add it in the main loop)
+   !> Compute dQ/dt for all levels without pressure term (user can add it via add_pressure)
    !> Uses flux averaging at C/F interfaces for conservation
    subroutine get_dQdt(this,dQdt)
       use amrex_amr_module, only: amrex_multifab
@@ -529,15 +528,14 @@ contains
       define_fluxes: block
          integer :: lvl
          do lvl=0,this%amr%clvl()
-            call this%amr%mfab_build(lvl,Fx(lvl),ncomp=3,nover=1,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
-            call this%amr%mfab_build(lvl,Fy(lvl),ncomp=3,nover=1,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
-            call this%amr%mfab_build(lvl,Fz(lvl),ncomp=3,nover=1,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl,Fx(lvl),ncomp=this%nQ,nover=1,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl,Fy(lvl),ncomp=this%nQ,nover=1,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl,Fz(lvl),ncomp=this%nQ,nover=1,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
          end do
       end block define_fluxes
 
       ! Compute fluxes on all levels
       compute_fluxes: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
          integer :: lvl,i,j,k
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx
@@ -657,7 +655,6 @@ contains
 
       ! Compute divergence to get momentum RHS
       divergence_and_sources: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
          integer :: lvl,i,j,k,n
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
@@ -779,7 +776,7 @@ contains
 
       ! Kinetic energy integral: 0.5 * rho * (Uc^2 + Vc^2 + Wc^2) * dV
       get_kinetic_energy: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
+         use amrex_amr_module, only: amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
          use amrex_interface, only: amrmask_make_fine
          use parallel, only: MPI_REAL_WP
          use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM

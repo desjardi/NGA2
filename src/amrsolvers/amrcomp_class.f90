@@ -4,7 +4,7 @@ module amrcomp_class
    use precision,        only: WP
    use amrdata_class,    only: amrdata
    use amrflow_class,    only: amrflow
-   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap
+   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
    implicit none
    private
 
@@ -447,7 +447,6 @@ contains
 
    !> Update face velocity from Q
    subroutine get_face_velocity(this)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
       implicit none
       class(amrcomp), intent(inout) :: this
       integer :: lvl,i,j,k
@@ -489,7 +488,7 @@ contains
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
    subroutine add_pressure(this,scale,phi)
-      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
+      use amrex_amr_module, only: amrex_multifab
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
@@ -599,7 +598,6 @@ contains
 
    !> Calculate primitive variables from conserved variables
    subroutine get_primitive(this,Q)
-      use amrex_amr_module, only: amrex_mfiter
       use messager, only: die
       implicit none
       class(amrcomp), intent(inout) :: this
@@ -651,7 +649,6 @@ contains
 
    !> Calculate conserved variables from primitive variables
    subroutine get_conserved(this)
-      use amrex_amr_module, only: amrex_mfiter
       implicit none
       class(amrcomp), intent(inout) :: this
       integer :: lvl,i,j,k
@@ -676,249 +673,248 @@ contains
       end do
    end subroutine get_conserved
 
-   !> Calculate dQdt from passed Q
-   subroutine get_dQdt(this,Q,dQdt,time)
-      use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
-      use amrex_interface,  only: amrmfab_average_down_face
+   !> Calculate dQdt from passed Q without pressure term (user can add it via add_pressure)
+   !> Uses flux averaging at C/F interfaces for conservation
+   subroutine get_dQdt(this,dQdt)
+      use amrex_amr_module, only: amrex_multifab
       implicit none
       class(amrcomp), intent(inout) :: this
-      type(amrdata), intent(inout) :: Q
       type(amrdata), intent(inout) :: dQdt
-      real(WP), intent(in) :: time
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: Fx,Fy,Fz
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx,fbx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pP,pI,rhs,pFx,pFy,pFz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc,pBeta,pDiff,pT
-      real(WP), dimension(-2: 0) :: wenop
-      real(WP), dimension(-1:+1) :: wenom
-      real(WP), dimension(1:3,1:3) :: gradU
-      real(WP) :: w,dxi,dyi,dzi,div,vel
-      real(WP), parameter :: eps=1.0e-15_WP
-      integer :: lvl,i,j,k
 
       ! First build primitive variables from Q
-      call this%get_primitive(Q)
+      !call this%get_primitive(Q)
+
+      ! Initialize all fluxes
+      define_fluxes: block
+         integer :: lvl
+         do lvl=0,this%amr%clvl()
+            call this%amr%mfab_build(lvl,Fx(lvl),ncomp=this%nQ,nover=1,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl,Fy(lvl),ncomp=this%nQ,nover=1,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl,Fz(lvl),ncomp=this%nQ,nover=1,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
+         end do
+      end block define_fluxes
       
-      ! Phase 1: Compute fluxes for all levels
-      do lvl=0,this%amr%clvl()
-         
-         ! Grid spacings for this level
-         dxi=1.0_WP/this%amr%dx(lvl)
-         dyi=1.0_WP/this%amr%dy(lvl)
-         dzi=1.0_WP/this%amr%dz(lvl)
-         
-         ! Build face-centered flux MultiFabs for this level
-         call this%amr%mfab_build(lvl=lvl,mfab=Fx(lvl),ncomp=5,nover=0,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
-         call this%amr%mfab_build(lvl=lvl,mfab=Fy(lvl),ncomp=5,nover=0,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
-         call this%amr%mfab_build(lvl=lvl,mfab=Fz(lvl),ncomp=5,nover=0,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
-         
-         ! Loop over tiles
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-
-            ! Get data pointers
-            pQ=>Q%mf(lvl)%dataptr(mfi)
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pP=>this%P%mf(lvl)%dataptr(mfi)
-            pI=>this%I%mf(lvl)%dataptr(mfi)
-            pT=>this%T%mf(lvl)%dataptr(mfi)
-            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-            pBeta=>this%beta%mf(lvl)%dataptr(mfi)
-            pDiff=>this%diff%mf(lvl)%dataptr(mfi)
-            pFx=>Fx(lvl)%dataptr(mfi)
-            pFy=>Fy(lvl)%dataptr(mfi)
-            pFz=>Fz(lvl)%dataptr(mfi)
-            
-            ! X-fluxes
-            fbx=mfi%nodaltilebox(1)
-            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               ! Face velocity
-               vel=0.5_WP*sum(pU(i-1:i,j,k,1))
-               ! WENO mass flux
-               w=weno_weight((abs(pQ(i-1,j,k,1)-pQ(i-2,j,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i-1,j,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pQ(i+1,j,k,1)-pQ(i  ,j,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFx(i,j,k,1)=-0.5_WP*(vel+abs(vel))*sum(wenop*pQ(i-2:i  ,j,k,1)) &
-               &            -0.5_WP*(vel-abs(vel))*sum(wenom*pQ(i-1:i+1,j,k,1))
-               ! Momentum fluxes with pressure stress
-               pFx(i,j,k,2)=pFx(i,j,k,1)*0.5_WP*sum(pU(i-1:i,j,k,1))-0.5_WP*sum(pP(i-1:i,j,k,1))
-               pFx(i,j,k,3)=pFx(i,j,k,1)*0.5_WP*sum(pV(i-1:i,j,k,1))
-               pFx(i,j,k,4)=pFx(i,j,k,1)*0.5_WP*sum(pW(i-1:i,j,k,1))
-               ! WENO internal energy flux
-               w=weno_weight((abs(pI(i-1,j,k,1)-pI(i-2,j,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i-1,j,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pI(i+1,j,k,1)-pI(i  ,j,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFx(i,j,k,5)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pI(i-2:i  ,j,k,1)) &
-               &           +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pI(i-1:i+1,j,k,1))
-               ! Velocity gradients at x-face
-               gradU(1,1)=dxi*(pU(i,j,k,1)-pU(i-1,j,k,1))
-               gradU(2,1)=0.25_WP*dyi*(pU(i-1,j+1,k,1)-pU(i-1,j-1,k,1)+pU(i,j+1,k,1)-pU(i,j-1,k,1))
-               gradU(3,1)=0.25_WP*dzi*(pU(i-1,j,k+1,1)-pU(i-1,j,k-1,1)+pU(i,j,k+1,1)-pU(i,j,k-1,1))
-               gradU(1,2)=dxi*(pV(i,j,k,1)-pV(i-1,j,k,1))
-               gradU(2,2)=0.25_WP*dyi*(pV(i-1,j+1,k,1)-pV(i-1,j-1,k,1)+pV(i,j+1,k,1)-pV(i,j-1,k,1))
-               gradU(3,2)=0.25_WP*dzi*(pV(i-1,j,k+1,1)-pV(i-1,j,k-1,1)+pV(i,j,k+1,1)-pV(i,j,k-1,1))
-               gradU(1,3)=dxi*(pW(i,j,k,1)-pW(i-1,j,k,1))
-               gradU(2,3)=0.25_WP*dyi*(pW(i-1,j+1,k,1)-pW(i-1,j-1,k,1)+pW(i,j+1,k,1)-pW(i,j-1,k,1))
-               gradU(3,3)=0.25_WP*dzi*(pW(i-1,j,k+1,1)-pW(i-1,j,k-1,1)+pW(i,j,k+1,1)-pW(i,j,k-1,1))
-               div=gradU(1,1)+gradU(2,2)+gradU(3,3)
-               ! Viscous stress at x-face (added to momentum fluxes)
-               pFx(i,j,k,2)=pFx(i,j,k,2)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(1,1)+gradU(1,1))+0.5_WP*(sum(pBeta(i-1:i,j,k,1))-2.0_WP/3.0_WP*sum(pVisc(i-1:i,j,k,1)))*div
-               pFx(i,j,k,3)=pFx(i,j,k,3)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(2,1)+gradU(1,2))
-               pFx(i,j,k,4)=pFx(i,j,k,4)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(3,1)+gradU(1,3))
-               ! Heat diffusion flux
-               pFx(i,j,k,5)=pFx(i,j,k,5)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pT(i,j,k,1)-pT(i-1,j,k,1))
-            end do; end do; end do
-            
-            ! Y-fluxes
-            fbx=mfi%nodaltilebox(2)
-            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               ! Face velocity
-               vel=0.5_WP*sum(pV(i,j-1:j,k,1))
-               ! WENO mass flux
-               w=weno_weight((abs(pQ(i,j-1,k,1)-pQ(i,j-2,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j-1,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pQ(i,j+1,k,1)-pQ(i,j  ,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFy(i,j,k,1)=-0.5_WP*(vel+abs(vel))*sum(wenop*pQ(i,j-2:j  ,k,1)) &
-               &            -0.5_WP*(vel-abs(vel))*sum(wenom*pQ(i,j-1:j+1,k,1))
-               ! Momentum fluxes with pressure stress
-               pFy(i,j,k,2)=pFy(i,j,k,1)*0.5_WP*sum(pU(i,j-1:j,k,1))
-               pFy(i,j,k,3)=pFy(i,j,k,1)*0.5_WP*sum(pV(i,j-1:j,k,1))-0.5_WP*sum(pP(i,j-1:j,k,1))
-               pFy(i,j,k,4)=pFy(i,j,k,1)*0.5_WP*sum(pW(i,j-1:j,k,1))
-               ! WENO internal energy flux
-               w=weno_weight((abs(pI(i,j-1,k,1)-pI(i,j-2,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j-1,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pI(i,j+1,k,1)-pI(i,j  ,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFy(i,j,k,5)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pI(i,j-2:j  ,k,1)) &
-               &           +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pI(i,j-1:j+1,k,1))
-               ! Velocity gradients at y-face
-               gradU(1,1)=0.25_WP*dxi*(pU(i+1,j-1,k,1)-pU(i-1,j-1,k,1)+pU(i+1,j,k,1)-pU(i-1,j,k,1))
-               gradU(2,1)=dyi*(pU(i,j,k,1)-pU(i,j-1,k,1))
-               gradU(3,1)=0.25_WP*dzi*(pU(i,j-1,k+1,1)-pU(i,j-1,k-1,1)+pU(i,j,k+1,1)-pU(i,j,k-1,1))
-               gradU(1,2)=0.25_WP*dxi*(pV(i+1,j-1,k,1)-pV(i-1,j-1,k,1)+pV(i+1,j,k,1)-pV(i-1,j,k,1))
-               gradU(2,2)=dyi*(pV(i,j,k,1)-pV(i,j-1,k,1))
-               gradU(3,2)=0.25_WP*dzi*(pV(i,j-1,k+1,1)-pV(i,j-1,k-1,1)+pV(i,j,k+1,1)-pV(i,j,k-1,1))
-               gradU(1,3)=0.25_WP*dxi*(pW(i+1,j-1,k,1)-pW(i-1,j-1,k,1)+pW(i+1,j,k,1)-pW(i-1,j,k,1))
-               gradU(2,3)=dyi*(pW(i,j,k,1)-pW(i,j-1,k,1))
-               gradU(3,3)=0.25_WP*dzi*(pW(i,j-1,k+1,1)-pW(i,j-1,k-1,1)+pW(i,j,k+1,1)-pW(i,j,k-1,1))
-               div=gradU(1,1)+gradU(2,2)+gradU(3,3)
-               ! Viscous stress at y-face (added to momentum fluxes)
-               pFy(i,j,k,2)=pFy(i,j,k,2)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(1,2)+gradU(2,1))
-               pFy(i,j,k,3)=pFy(i,j,k,3)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(2,2)+gradU(2,2))+0.5_WP*(sum(pBeta(i,j-1:j,k,1))-2.0_WP/3.0_WP*sum(pVisc(i,j-1:j,k,1)))*div
-               pFy(i,j,k,4)=pFy(i,j,k,4)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(3,2)+gradU(2,3))
-               ! Heat diffusion flux
-               pFy(i,j,k,5)=pFy(i,j,k,5)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pT(i,j,k,1)-pT(i,j-1,k,1))
-            end do; end do; end do
-            
-            ! Z-fluxes
-            fbx=mfi%nodaltilebox(3)
-            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               ! Face velocity
-               vel=0.5_WP*sum(pW(i,j,k-1:k,1))
-               ! WENO mass flux
-               w=weno_weight((abs(pQ(i,j,k-1,1)-pQ(i,j,k-2,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j,k-1,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pQ(i,j,k+1,1)-pQ(i,j,k  ,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFz(i,j,k,1)=-0.5_WP*(vel+abs(vel))*sum(wenop*pQ(i,j,k-2:k,1)) &
-               &            -0.5_WP*(vel-abs(vel))*sum(wenom*pQ(i,j,k-1:k+1,1))
-               ! Momentum fluxes with pressure stress
-               pFz(i,j,k,2)=pFz(i,j,k,1)*0.5_WP*sum(pU(i,j,k-1:k,1))
-               pFz(i,j,k,3)=pFz(i,j,k,1)*0.5_WP*sum(pV(i,j,k-1:k,1))
-               pFz(i,j,k,4)=pFz(i,j,k,1)*0.5_WP*sum(pW(i,j,k-1:k,1))-0.5_WP*sum(pP(i,j,k-1:k,1))
-               ! WENO internal energy flux
-               w=weno_weight((abs(pI(i,j,k-1,1)-pI(i,j,k-2,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j,k-1,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
-               w=weno_weight((abs(pI(i,j,k+1,1)-pI(i,j,k  ,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
-               pFz(i,j,k,5)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pI(i,j,k-2:k  ,1)) &
-               &           +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pI(i,j,k-1:k+1,1))
-               ! Velocity gradients at z-face
-               gradU(1,1)=0.25_WP*dxi*(pU(i+1,j,k-1,1)-pU(i-1,j,k-1,1)+pU(i+1,j,k,1)-pU(i-1,j,k,1))
-               gradU(2,1)=0.25_WP*dyi*(pU(i,j+1,k-1,1)-pU(i,j-1,k-1,1)+pU(i,j+1,k,1)-pU(i,j-1,k,1))
-               gradU(3,1)=dzi*(pU(i,j,k,1)-pU(i,j,k-1,1))
-               gradU(1,2)=0.25_WP*dxi*(pV(i+1,j,k-1,1)-pV(i-1,j,k-1,1)+pV(i+1,j,k,1)-pV(i-1,j,k,1))
-               gradU(2,2)=0.25_WP*dyi*(pV(i,j+1,k-1,1)-pV(i,j-1,k-1,1)+pV(i,j+1,k,1)-pV(i,j-1,k,1))
-               gradU(3,2)=dzi*(pV(i,j,k,1)-pV(i,j,k-1,1))
-               gradU(1,3)=0.25_WP*dxi*(pW(i+1,j,k-1,1)-pW(i-1,j,k-1,1)+pW(i+1,j,k,1)-pW(i-1,j,k,1))
-               gradU(2,3)=0.25_WP*dyi*(pW(i,j+1,k-1,1)-pW(i,j-1,k-1,1)+pW(i,j+1,k,1)-pW(i,j-1,k,1))
-               gradU(3,3)=dzi*(pW(i,j,k,1)-pW(i,j,k-1,1))
-               div=gradU(1,1)+gradU(2,2)+gradU(3,3)
-               ! Viscous stress at z-face (added to momentum fluxes)
-               pFz(i,j,k,2)=pFz(i,j,k,2)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(1,3)+gradU(3,1))
-               pFz(i,j,k,3)=pFz(i,j,k,3)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(2,3)+gradU(3,2))
-               pFz(i,j,k,4)=pFz(i,j,k,4)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(3,3)+gradU(3,3))+0.5_WP*(sum(pBeta(i,j,k-1:k,1))-2.0_WP/3.0_WP*sum(pVisc(i,j,k-1:k,1)))*div
-               ! Heat diffusion flux
-               pFz(i,j,k,5)=pFz(i,j,k,5)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pT(i,j,k,1)-pT(i,j,k-1,1))
-            end do; end do; end do
+      ! Compute fluxes for all levels
+      compute_fluxes: block
+         integer :: lvl,i,j,k
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: fbx
+         real(WP) :: dxi,dyi,dzi,div,w
+         real(WP), dimension(-2: 0) :: wenop
+         real(WP), dimension(-1:+1) :: wenom
+         real(WP), dimension(1:3,1:3) :: gradU
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pQ,pUVW,pI,pT,pVisc,pBeta,pDiff
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz
+         real(WP), parameter :: eps=1.0e-15_WP
+         ! Traverse levels
+         do lvl=0,this%amr%clvl()
+            ! Get mesh size
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            ! Loop over all tiles
+            call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
+            do while (mfi%next())
+               ! Get data pointers
+               pU=>this%U%mf(lvl)%dataptr(mfi)
+               pV=>this%V%mf(lvl)%dataptr(mfi)
+               pW=>this%W%mf(lvl)%dataptr(mfi)
+               pQ=>this%Q%mf(lvl)%dataptr(mfi)
+               pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+               pI=>this%I%mf(lvl)%dataptr(mfi)
+               pT=>this%T%mf(lvl)%dataptr(mfi)
+               pVisc=>this%visc%mf(lvl)%dataptr(mfi)
+               pBeta=>this%beta%mf(lvl)%dataptr(mfi)
+               pDiff=>this%diff%mf(lvl)%dataptr(mfi)
+               pFx=>Fx(lvl)%dataptr(mfi)
+               pFy=>Fy(lvl)%dataptr(mfi)
+               pFz=>Fz(lvl)%dataptr(mfi)
+               ! X-fluxes
+               fbx=mfi%nodaltilebox(1)
+               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+                  ! WENO mass flux
+                  w=weno_weight((abs(pQ(i-1,j,k,1)-pQ(i-2,j,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i-1,j,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pQ(i+1,j,k,1)-pQ(i  ,j,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFx(i,j,k,1)=-0.5_WP*(pU(i,j,k,1)+abs(pU(i,j,k,1)))*sum(wenop*pQ(i-2:i  ,j,k,1)) &
+                  &            -0.5_WP*(pU(i,j,k,1)-abs(pU(i,j,k,1)))*sum(wenom*pQ(i-1:i+1,j,k,1))
+                  ! Momentum fluxes
+                  pFx(i,j,k,2)=pFx(i,j,k,1)*0.5_WP*sum(pUVW(i-1:i,j,k,1))
+                  pFx(i,j,k,3)=pFx(i,j,k,1)*0.5_WP*sum(pUVW(i-1:i,j,k,2))
+                  pFx(i,j,k,4)=pFx(i,j,k,1)*0.5_WP*sum(pUVW(i-1:i,j,k,3))
+                  ! WENO internal energy flux
+                  w=weno_weight((abs(pI(i-1,j,k,1)-pI(i-2,j,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i-1,j,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pI(i+1,j,k,1)-pI(i  ,j,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFx(i,j,k,5)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pI(i-2:i  ,j,k,1)) &
+                  &           +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pI(i-1:i+1,j,k,1))
+                  ! Velocity gradients at x-face
+                  gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
+                  gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  gradU(3,1)=0.25_WP*dzi*(pUVW(i-1,j,k+1,1)-pUVW(i-1,j,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  gradU(1,2)=dxi*(pUVW(i,j,k,2)-pUVW(i-1,j,k,2))
+                  gradU(2,2)=0.25_WP*dyi*(pUVW(i-1,j+1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  gradU(3,2)=0.25_WP*dzi*(pUVW(i-1,j,k+1,2)-pUVW(i-1,j,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  gradU(1,3)=dxi*(pUVW(i,j,k,3)-pUVW(i-1,j,k,3))
+                  gradU(2,3)=0.25_WP*dyi*(pUVW(i-1,j+1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  gradU(3,3)=0.25_WP*dzi*(pUVW(i-1,j,k+1,3)-pUVW(i-1,j,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  ! Viscous stress at x-face
+                  pFx(i,j,k,2)=pFx(i,j,k,2)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(1,1)+gradU(1,1))+0.5_WP*(sum(pBeta(i-1:i,j,k,1))-2.0_WP/3.0_WP*sum(pVisc(i-1:i,j,k,1)))*div
+                  pFx(i,j,k,3)=pFx(i,j,k,3)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(2,1)+gradU(1,2))
+                  pFx(i,j,k,4)=pFx(i,j,k,4)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(3,1)+gradU(1,3))
+                  ! Heat diffusion flux
+                  pFx(i,j,k,5)=pFx(i,j,k,5)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pT(i,j,k,1)-pT(i-1,j,k,1))
+               end do; end do; end do
+               ! Y-fluxes
+               fbx=mfi%nodaltilebox(2)
+               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+                  ! WENO mass flux
+                  w=weno_weight((abs(pQ(i,j-1,k,1)-pQ(i,j-2,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j-1,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pQ(i,j+1,k,1)-pQ(i,j  ,k,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFy(i,j,k,1)=-0.5_WP*(pV(i,j,k,1)+abs(pV(i,j,k,1)))*sum(wenop*pQ(i,j-2:j  ,k,1)) &
+                  &            -0.5_WP*(pV(i,j,k,1)-abs(pV(i,j,k,1)))*sum(wenom*pQ(i,j-1:j+1,k,1))
+                  ! Momentum fluxes
+                  pFy(i,j,k,2)=pFy(i,j,k,1)*0.5_WP*sum(pUVW(i,j-1:j,k,1))
+                  pFy(i,j,k,3)=pFy(i,j,k,1)*0.5_WP*sum(pUVW(i,j-1:j,k,2))
+                  pFy(i,j,k,4)=pFy(i,j,k,1)*0.5_WP*sum(pUVW(i,j-1:j,k,3))
+                  ! WENO internal energy flux
+                  w=weno_weight((abs(pI(i,j-1,k,1)-pI(i,j-2,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j-1,k,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pI(i,j+1,k,1)-pI(i,j  ,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFy(i,j,k,5)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pI(i,j-2:j  ,k,1)) &
+                  &           +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pI(i,j-1:j+1,k,1))
+                  ! Velocity gradients at y-face
+                  gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
+                  gradU(3,1)=0.25_WP*dzi*(pUVW(i,j-1,k+1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j-1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  gradU(2,2)=dyi*(pUVW(i,j,k,2)-pUVW(i,j-1,k,2))
+                  gradU(3,2)=0.25_WP*dzi*(pUVW(i,j-1,k+1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j-1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  gradU(2,3)=dyi*(pUVW(i,j,k,3)-pUVW(i,j-1,k,3))
+                  gradU(3,3)=0.25_WP*dzi*(pUVW(i,j-1,k+1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  ! Viscous stress at y-face
+                  pFy(i,j,k,2)=pFy(i,j,k,2)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(1,2)+gradU(2,1))
+                  pFy(i,j,k,3)=pFy(i,j,k,3)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(2,2)+gradU(2,2))+0.5_WP*(sum(pBeta(i,j-1:j,k,1))-2.0_WP/3.0_WP*sum(pVisc(i,j-1:j,k,1)))*div
+                  pFy(i,j,k,4)=pFy(i,j,k,4)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(3,2)+gradU(2,3))
+                  ! Heat diffusion flux
+                  pFy(i,j,k,5)=pFy(i,j,k,5)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pT(i,j,k,1)-pT(i,j-1,k,1))
+               end do; end do; end do
+               ! Z-fluxes
+               fbx=mfi%nodaltilebox(3)
+               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+                  ! WENO mass flux
+                  w=weno_weight((abs(pQ(i,j,k-1,1)-pQ(i,j,k-2,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j,k-1,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pQ(i,j,k+1,1)-pQ(i,j,k  ,1))+eps)/(abs(pQ(i,j,k,1)-pQ(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFz(i,j,k,1)=-0.5_WP*(pW(i,j,k,1)+abs(pW(i,j,k,1)))*sum(wenop*pQ(i,j,k-2:k,1)) &
+                  &            -0.5_WP*(pW(i,j,k,1)-abs(pW(i,j,k,1)))*sum(wenom*pQ(i,j,k-1:k+1,1))
+                  ! Momentum fluxes
+                  pFz(i,j,k,2)=pFz(i,j,k,1)*0.5_WP*sum(pUVW(i,j,k-1:k,1))
+                  pFz(i,j,k,3)=pFz(i,j,k,1)*0.5_WP*sum(pUVW(i,j,k-1:k,2))
+                  pFz(i,j,k,4)=pFz(i,j,k,1)*0.5_WP*sum(pUVW(i,j,k-1:k,3))
+                  ! WENO internal energy flux
+                  w=weno_weight((abs(pI(i,j,k-1,1)-pI(i,j,k-2,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j,k-1,1))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                  w=weno_weight((abs(pI(i,j,k+1,1)-pI(i,j,k  ,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                  pFz(i,j,k,5)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pI(i,j,k-2:k  ,1)) &
+                  &           +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pI(i,j,k-1:k+1,1))
+                  ! Velocity gradients at z-face
+                  gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  gradU(3,1)=dzi*(pUVW(i,j,k,1)-pUVW(i,j,k-1,1))
+                  gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j,k-1,2)-pUVW(i-1,j,k-1,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  gradU(2,2)=0.25_WP*dyi*(pUVW(i,j+1,k-1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  gradU(3,2)=dzi*(pUVW(i,j,k,2)-pUVW(i,j,k-1,2))
+                  gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j,k-1,3)-pUVW(i-1,j,k-1,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  gradU(2,3)=0.25_WP*dyi*(pUVW(i,j+1,k-1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  gradU(3,3)=dzi*(pUVW(i,j,k,3)-pUVW(i,j,k-1,3))
+                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  ! Viscous stress at z-face
+                  pFz(i,j,k,2)=pFz(i,j,k,2)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(1,3)+gradU(3,1))
+                  pFz(i,j,k,3)=pFz(i,j,k,3)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(2,3)+gradU(3,2))
+                  pFz(i,j,k,4)=pFz(i,j,k,4)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(3,3)+gradU(3,3))+0.5_WP*(sum(pBeta(i,j,k-1:k,1))-2.0_WP/3.0_WP*sum(pVisc(i,j,k-1:k,1)))*div
+                  ! Heat diffusion flux
+                  pFz(i,j,k,5)=pFz(i,j,k,5)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pT(i,j,k,1)-pT(i,j,k-1,1))
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
          end do
-         call this%amr%mfiter_destroy(mfi)
+      end block compute_fluxes
 
-      end do
-
-      ! Phase 2: Average down all fluxes for C/F conservation
-      do lvl=this%amr%clvl(),1,-1
-         call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
-         call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
-         call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
-      end do
-         
-      ! Phase 3: Compute divergence for all levels
-      do lvl=0,this%amr%clvl()
-
-         ! Grid spacings
-         dxi=1.0_WP/this%amr%dx(lvl)
-         dyi=1.0_WP/this%amr%dy(lvl)
-         dzi=1.0_WP/this%amr%dz(lvl)
-         
-         ! Loop over tiles
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-
-            ! Get pointers to data
-            rhs=>dQdt%mf(lvl)%dataptr(mfi)
-            pFx=>Fx(lvl)%dataptr(mfi)
-            pFy=>Fy(lvl)%dataptr(mfi)
-            pFz=>Fz(lvl)%dataptr(mfi)
-            pU=>this%U%mf(lvl)%dataptr(mfi)
-            pV=>this%V%mf(lvl)%dataptr(mfi)
-            pW=>this%W%mf(lvl)%dataptr(mfi)
-            pP=>this%P%mf(lvl)%dataptr(mfi)
-            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-            pBeta=>this%beta%mf(lvl)%dataptr(mfi)
-
-            ! Loop over interior
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! Advection
-               rhs(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
-               ! Pressure dilatation
-               rhs(i,j,k,5)=rhs(i,j,k,5)-pP(i,j,k,1)*(0.5_WP*dxi*(pU(i+1,j,k,1)-pU(i-1,j,k,1))+0.5_WP*dyi*(pV(i,j+1,k,1)-pV(i,j-1,k,1))+0.5_WP*dzi*(pW(i,j,k+1,1)-pW(i,j,k-1,1)))
-               ! Viscous heating: compute cell-centered gradU and stress tensor
-               gradU(1,1)=0.5_WP*dxi*(pU(i+1,j,k,1)-pU(i-1,j,k,1))
-               gradU(2,1)=0.5_WP*dyi*(pU(i,j+1,k,1)-pU(i,j-1,k,1))
-               gradU(3,1)=0.5_WP*dzi*(pU(i,j,k+1,1)-pU(i,j,k-1,1))
-               gradU(1,2)=0.5_WP*dxi*(pV(i+1,j,k,1)-pV(i-1,j,k,1))
-               gradU(2,2)=0.5_WP*dyi*(pV(i,j+1,k,1)-pV(i,j-1,k,1))
-               gradU(3,2)=0.5_WP*dzi*(pV(i,j,k+1,1)-pV(i,j,k-1,1))
-               gradU(1,3)=0.5_WP*dxi*(pW(i+1,j,k,1)-pW(i-1,j,k,1))
-               gradU(2,3)=0.5_WP*dyi*(pW(i,j+1,k,1)-pW(i,j-1,k,1))
-               gradU(3,3)=0.5_WP*dzi*(pW(i,j,k+1,1)-pW(i,j,k-1,1))
-               div=gradU(1,1)+gradU(2,2)+gradU(3,3)
-               ! τ:∇U = τ_ij * gradU(i,j)
-               rhs(i,j,k,5)=rhs(i,j,k,5) &
-               & +(2.0_WP*pVisc(i,j,k,1)*gradU(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(1,1) &
-               & +(2.0_WP*pVisc(i,j,k,1)*gradU(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(2,2) &
-               & +(2.0_WP*pVisc(i,j,k,1)*gradU(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(3,3) &
-               & +pVisc(i,j,k,1)*(gradU(2,1)+gradU(1,2))*(gradU(2,1)+gradU(1,2)) &
-               & +pVisc(i,j,k,1)*(gradU(3,1)+gradU(1,3))*(gradU(3,1)+gradU(1,3)) &
-               & +pVisc(i,j,k,1)*(gradU(3,2)+gradU(2,3))*(gradU(3,2)+gradU(2,3))
-            end do; end do; end do
-
+      ! Average down all fluxes for C/F conservation
+      c_f_consistency: block
+         use amrex_interface, only: amrmfab_average_down_face
+         integer :: lvl
+         do lvl=this%amr%clvl(),1,-1
+            call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
          end do
-         call this%amr%mfiter_destroy(mfi)
-      end do
+      end block c_f_consistency
 
-      ! Cleanup flux mfabs
-      do lvl=0,this%amr%clvl()
-         call this%amr%mfab_destroy(Fx(lvl))
-         call this%amr%mfab_destroy(Fy(lvl))
-         call this%amr%mfab_destroy(Fz(lvl))
-      end do
+      ! Compute divergence to get momentum RHS
+      divergence_and_sources: block
+         integer :: lvl,i,j,k
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP) :: dxi,dyi,dzi,div
+         real(WP), dimension(1:3,1:3) :: gradU
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pUVW,pVisc,pBeta
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pdQdt,pFx,pFy,pFz
+         do lvl=0,this%amr%clvl()
+            ! Get mesh size
+            dxi=1.0_WP/this%amr%dx(lvl)
+            dyi=1.0_WP/this%amr%dy(lvl)
+            dzi=1.0_WP/this%amr%dz(lvl)
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pdQdt=>dQdt%mf(lvl)%dataptr(mfi)
+               pFx=>Fx(lvl)%dataptr(mfi)
+               pFy=>Fy(lvl)%dataptr(mfi)
+               pFz=>Fz(lvl)%dataptr(mfi)
+               pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+               pVisc=>this%visc%mf(lvl)%dataptr(mfi)
+               pBeta=>this%beta%mf(lvl)%dataptr(mfi)
+               ! Loop over interior
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Advection
+                  pdQdt(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
+                  ! Viscous heating: compute cell-centered gradU and stress tensor
+                  gradU(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  gradU(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  gradU(3,1)=0.5_WP*dzi*(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  gradU(1,2)=0.5_WP*dxi*(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  gradU(2,2)=0.5_WP*dyi*(pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  gradU(3,2)=0.5_WP*dzi*(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  gradU(1,3)=0.5_WP*dxi*(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  gradU(2,3)=0.5_WP*dyi*(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  gradU(3,3)=0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  ! τ:∇U = τ_ij * gradU(i,j)
+                  pdQdt(i,j,k,5)=pdQdt(i,j,k,5) &
+                  & +(2.0_WP*pVisc(i,j,k,1)*gradU(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(1,1) &
+                  & +(2.0_WP*pVisc(i,j,k,1)*gradU(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(2,2) &
+                  & +(2.0_WP*pVisc(i,j,k,1)*gradU(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(3,3) &
+                  & +pVisc(i,j,k,1)*(gradU(2,1)+gradU(1,2))*(gradU(2,1)+gradU(1,2)) &
+                  & +pVisc(i,j,k,1)*(gradU(3,1)+gradU(1,3))*(gradU(3,1)+gradU(1,3)) &
+                  & +pVisc(i,j,k,1)*(gradU(3,2)+gradU(2,3))*(gradU(3,2)+gradU(2,3))
+               end do; end do; end do
+            end do
+            call this%amr%mfiter_destroy(mfi)
+         end do
+      end block divergence_and_sources
+
+      ! Cleanup flux MultiFabs
+      cleanup: block
+         integer :: lvl
+         do lvl=0,this%amr%clvl()
+            call this%amr%mfab_destroy(Fx(lvl))
+            call this%amr%mfab_destroy(Fy(lvl))
+            call this%amr%mfab_destroy(Fz(lvl))
+         end do
+      end block cleanup
       
    contains
       !> WENO switch function
@@ -994,7 +990,6 @@ contains
          Cmax=this%C%norm0(lvl=lvl)
          ! Max viscosities
          get_viscmax: block
-            use amrex_amr_module, only: amrex_mfiter,amrex_box
             use parallel, only: MPI_REAL_WP
             use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
             type(amrex_mfiter) :: mfi
@@ -1072,7 +1067,7 @@ contains
       ! Kinetic energy integral: 0.5 * rho * (U^2 + V^2 + W^2) * dV
       ! Uses composite integration with fine masking to avoid double-counting
       get_rhoKint: block
-         use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
+         use amrex_amr_module, only: amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
          use amrex_interface, only: amrmask_make_fine
          use parallel, only: MPI_REAL_WP
          use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM
