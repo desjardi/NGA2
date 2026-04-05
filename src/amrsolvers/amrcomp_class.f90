@@ -510,13 +510,17 @@ contains
       if (present(phi)) then
          ! Use provided phi and its ghosts cells
          do lvl=0,this%amr%clvl()
+            ! Get mesh size
             dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
             call this%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
+               ! Get pointers to data
                pP=>phi%mf(lvl)%dataptr(mfi)
                pQ=>this%Q%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+               ! Get tilebox
                bx=mfi%nodaltilebox(1)
+               ! Compute pressure gradient at faces
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   pFx(i,j,k,1)=-2.0_WP*(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi/sum(max(pQ(i-1:i,j,k,1),this%rho_floor))
                end do; end do; end do
@@ -538,12 +542,13 @@ contains
       end if
       ! Apply to face velocities and cell-centered in one pass
       do lvl=0,this%amr%clvl()
+         ! Get mesh size
+         dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
          ! Face velocities: use flux directly
          call this%U%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
          call this%V%mf(lvl)%saxpy(scale,Fy(lvl),1,1,1,0)
          call this%W%mf(lvl)%saxpy(scale,Fz(lvl),1,1,1,0)
-         ! Cell-center momentum: average flux to cell center
-         ! Cell-center energy: use -P*div(U_face_updated)
+         ! Momentum gets flux averaged to cell center, internal energy gets -P*div(U_face_updated)
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointers to data
