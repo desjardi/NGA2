@@ -489,13 +489,14 @@ contains
    !> Cell-center correction averages the face gradients back to cell center
    subroutine add_pressure(this,scale,phi)
       use amrex_amr_module, only: amrex_multifab
+      use messager, only: die
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pP,pFx,pFy,pFz,pQ
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pP,pQ,pU,pV,pW
       real(WP) :: dxi,dyi,dzi
       integer :: lvl,i,j,k
       ! Build temp face mfabs to store pressure fluxes
@@ -505,80 +506,95 @@ contains
          call this%amr%mfab_build(lvl,Fy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
          call this%amr%mfab_build(lvl,Fz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
       end do
-      ! Compute -pressure gradient at faces
+      ! Compute -1/rho*pressure gradient at faces
       if (present(phi)) then
          ! Use provided phi and its ghosts cells
          do lvl=0,this%amr%clvl()
             dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
             call this%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
-               pP =>phi%mf(lvl)%dataptr(mfi)
+               pP=>phi%mf(lvl)%dataptr(mfi)
+               pQ=>this%Q%mf(lvl)%dataptr(mfi)
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
                bx=mfi%nodaltilebox(1)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFx(i,j,k,1)=-(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi
+                  pFx(i,j,k,1)=-2.0_WP*(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi/sum(max(pQ(i-1:i,j,k,1),this%rho_floor))
                end do; end do; end do
                bx=mfi%nodaltilebox(2)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFy(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi
+                  pFy(i,j,k,1)=-2.0_WP*(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi/sum(max(pQ(i,j-1:j,k,1),this%rho_floor))
                end do; end do; end do
                bx=mfi%nodaltilebox(3)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFz(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi
+                  pFz(i,j,k,1)=-2.0_WP*(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi/sum(max(pQ(i,j,k-1:k,1),this%rho_floor))
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
          end do
       else
+         call die('[amrcomp::add_pressure] MLMG path not implemented yet')
          ! Use psolver's solution and its internal ghosts
-         call this%psolver%get_fluxes(Fx,Fy,Fz)
+         !call this%psolver%get_fluxes(Fx,Fy,Fz)
       end if
       ! Apply to face velocities and cell-centered in one pass
       do lvl=0,this%amr%clvl()
-         ! Face: use flux directly
+         ! Face velocities: use flux directly
          call this%U%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
          call this%V%mf(lvl)%saxpy(scale,Fy(lvl),1,1,1,0)
          call this%W%mf(lvl)%saxpy(scale,Fz(lvl),1,1,1,0)
-         ! Cell-center: average flux to cell center
+         ! Cell-center momentum: average flux to cell center
+         ! Cell-center energy: use -P*div(U_face_updated)
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
+            ! Get pointers to data
             pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
             pQ=>this%Q%mf(lvl)%dataptr(mfi)
+            if (present(phi)) then
+               pP=>phi%mf(lvl)%dataptr(mfi)
+            else
+               call die('[amrcomp::add_pressure] MLMG path not implemented yet')
+               !pP=>this%psolver%sol%mf(lvl)%dataptr(mfi)
+            end if
+            pU=>this%U%mf(lvl)%dataptr(mfi)
+            pV=>this%V%mf(lvl)%dataptr(mfi)
+            pW=>this%W%mf(lvl)%dataptr(mfi)
+            ! Get tilebox
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*sum(pFx(i:i+1,j,k,1))
-               pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*sum(pFy(i,j:j+1,k,1))
-               pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*sum(pFz(i,j,k:k+1,1))
+               pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*(sum(pQ(i-1:i,j,k,1))*pFx(i,j,k,1)+sum(pQ(i:i+1,j,k,1))*pFx(i+1,j,k,1))
+               pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*(sum(pQ(i,j-1:j,k,1))*pFy(i,j,k,1)+sum(pQ(i,j:j+1,k,1))*pFy(i,j+1,k,1))
+               pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*(sum(pQ(i,j,k-1:k,1))*pFz(i,j,k,1)+sum(pQ(i,j,k:k+1,1))*pFz(i,j,k+1,1))
+               pQ(i,j,k,5)=pQ(i,j,k,5)-scale*pP(i,j,k,1)*(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1)))
             end do; end do; end do
             ! Fix non-periodic boundary conditions
             if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
                i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i+1,j,k,1)
+                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i:i+1,j,k,1))*pFx(i+1,j,k,1)
                end do; end do
             end if
             if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
                i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i,  j,k,1)
+                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i-1:i,j,k,1))*pFx(i  ,j,k,1)
                end do; end do
             end if
             if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
                j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j+1,k,1)
+                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j:j+1,k,1))*pFy(i,j+1,k,1)
                end do; end do
             end if
             if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
                j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j,  k,1)
+                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j-1:j,k,1))*pFy(i,j,  k,1)
                end do; end do
             end if
             if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
                k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k+1,1)
+                  pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k:k+1,1))*pFz(i,j,k+1,1)
                end do; end do
             end if
             if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
                k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k,  1)
+                  pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k-1:k,1))*pFz(i,j,k,  1)
                end do; end do
             end if
          end do
