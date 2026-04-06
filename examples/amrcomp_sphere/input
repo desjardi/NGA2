@@ -1,23 +1,23 @@
 # AMR grid
 Base nx:   32
 Base ny:   32
-Base nz:   32
+Base nz:   1
 Max level: 5
 
 # Regridding parameters
 Regrid nsteps:     10
-Tagging Rec:       50
-Tagging Res:       10
+Tagging Re:        10
+Tagging Rho:       0.1
 
 # EoS parameters
 Gamma: 1.4
 
 # Shock parameters
-Mach number:     1.2
+Mach number:     0.3
 Shock location: -0.6
 
 # Viscous parameters
-Reynolds number:   5000
+Reynolds number:   1e4
 Prandtl number:    0.71
 
 # Time integration

@@ -466,17 +466,17 @@ contains
             ! Get X-face velocity
             fbx=mfi%nodaltilebox(1)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               pU(i,j,k,1)=0.5_WP*sum(pQ(i-1:i,j,k,2)/max(pQ(i-1:i,j,k,1),this%rho_floor))
+               pU(i,j,k,1)=sum(pQ(i-1:i,j,k,2))/max(sum(pQ(i-1:i,j,k,1)),this%rho_floor)
             end do; end do; end do
             ! Get Y-face velocity
             fbx=mfi%nodaltilebox(2)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               pV(i,j,k,1)=0.5_WP*sum(pQ(i,j-1:j,k,3)/max(pQ(i,j-1:j,k,1),this%rho_floor))
+               pV(i,j,k,1)=sum(pQ(i,j-1:j,k,3))/max(sum(pQ(i,j-1:j,k,1)),this%rho_floor)
             end do; end do; end do
             ! Get Z-face velocity
             fbx=mfi%nodaltilebox(3)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               pW(i,j,k,1)=0.5_WP*sum(pQ(i,j,k-1:k,4)/max(pQ(i,j,k-1:k,1),this%rho_floor))
+               pW(i,j,k,1)=sum(pQ(i,j,k-1:k,4))/max(sum(pQ(i,j,k-1:k,1)),this%rho_floor)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)

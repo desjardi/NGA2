@@ -19,7 +19,7 @@ module simulation
    !> Timetracker and compressible solver
    type(timetracker) :: time
    type(amrcomp), target :: fs
-   type(amrdata) :: dQdt,k1,k2,k3,k4
+   type(amrdata) :: dQdt
    type(amrdata) :: Umag,Mach
 
    !> IBs
@@ -31,8 +31,8 @@ module simulation
 
    ! Regrid parameters
    type(event) :: regrid_evt
-   real(WP) :: Rec_tag=huge(1.0_WP)
-   real(WP) :: Res_tag=huge(1.0_WP)
+   real(WP) :: Re_tag=huge(1.0_WP)
+   real(WP) :: Rho_tag=huge(1.0_WP)
    
    !> Simulation monitoring
    type(monitor) :: mfile,consfile,cflfile,gridfile
@@ -47,10 +47,13 @@ module simulation
    real(WP) :: rho2,p2,u2             !< Post-shock state
    real(WP) :: Reynolds,Prandtl       !< Viscous parameters
 
+   !> Sutherland viscosity parameters: mu_g = (1+Suth_T)*T^Suth_n / (Re*(T+Suth_T))
+   real(WP) :: Suth_n=1.5_WP          !< Sutherland exponent (1.0 for constant)
+   real(WP) :: Suth_T=0.4042_WP       !< Sutherland temperature (0.0 for constant)
+
    !> Sponge parameters
    real(WP) :: R_spg=3.0_WP
    real(WP) :: L_spg=1.0_WP
-   real(WP) :: nu_spg=0.01_WP
    
 contains
 
@@ -66,6 +69,7 @@ contains
       real(WP), intent(in) :: t
       real(WP) :: G
       G=sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)-0.5_WP
+      if (amr%nz.eq.1) G=sqrt(xyz(1)**2+xyz(2)**2)-0.5_WP ! Enable 2D case
    end function sphere_levelset
 
    !> P=EOS(RHO,I) - Stiffened gas
@@ -103,7 +107,13 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pT,pQ,pVisc,pBeta,pDiff
-      real(WP) :: r_cyl,blend
+      real(WP) :: r_cyl,blend,nu_spg
+      real(WP), parameter :: Tmax_visc=10.0_WP
+      real(WP), parameter :: myeps=1.0e-15_WP
+      real(WP), parameter :: max_cfl=0.5_WP
+      real(WP), parameter :: Cdiff=0.1_WP
+      ! Get maximum allowable kinematic viscosity in the sponge at finest level
+      nu_spg=max_cfl*amr%min_meshsize(amr%clvl())**2/(4.0_WP*time%dt)
       do lvl=0,amr%clvl()
          call amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
@@ -117,17 +127,18 @@ contains
             bx=mfi%growntilebox(fs%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Sutherland's law
-               pVisc(i,j,k,1)=Reynolds**(-1.0_WP)*(1.4042_WP*pT(i,j,k,1)**1.5_WP)/(pT(i,j,k,1)+0.4042_WP)
+               pVisc(i,j,k,1)=(1.0_WP+Suth_T)*min(pT(i,j,k,1),Tmax_visc)**Suth_n/(Reynolds*(min(pT(i,j,k,1),Tmax_visc)+Suth_T))
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Heat diffusivity: k = Cp*mu/Pr = Cv*Gamma*mu/Pr
                pDiff(i,j,k,1)=Gamma*Cv*pVisc(i,j,k,1)/Prandtl
                ! Apply sponge layer viscosity
                r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
+               if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
                if (r_cyl.gt.R_spg) then
                   blend=min((r_cyl-R_spg)/L_spg,1.0_WP)**2
                   pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*nu_spg*pQ(i,j,k,1))
-                  pDiff(i,j,k,1)=max(pDiff(i,j,k,1),blend*nu_spg*pQ(i,j,k,1))
+                  pDiff(i,j,k,1)=max(pDiff(i,j,k,1),Cdiff*blend*nu_spg*pQ(i,j,k,1))
                end if
             end do; end do; end do
          end do
@@ -175,24 +186,36 @@ contains
    end subroutine shock_init
 
    !> Apply inflow BC at low-x (face=1)
-   subroutine shock_dirichlet(solver,lvl,time,face,bx,pQ)
+   subroutine shock_dirichlet(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
       class(amrcomp), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      character(len=1), intent(in) :: comp
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! X-LOW: Dirichlet inflow with pre-shock (stationary) values
-         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            pQ(i,j,k,1)=rho2
-            pQ(i,j,k,2)=rho2*u2
-            pQ(i,j,k,3)=0.0_WP
-            pQ(i,j,k,4)=0.0_WP
-            pQ(i,j,k,5)=rho2*get_I(rho2,p2)
-         end do; end do; end do
+         select case (comp)
+          case ('U')  ! Staggered U=u2
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=u2
+            end do; end do; end do
+          case ('V','W')  ! Staggered V,W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered Q=(rho2,rho2*u2,0,0,rho2*I2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=rho2
+               p(i,j,k,2)=rho2*u2
+               p(i,j,k,3)=0.0_WP
+               p(i,j,k,4)=0.0_WP
+               p(i,j,k,5)=rho2*get_I(rho2,p2)
+            end do; end do; end do
+         end select
       end select
    end subroutine shock_dirichlet
 
@@ -211,6 +234,7 @@ contains
       real(WP), dimension(3) :: BL,BG
       real(WP) :: dx,dy,dz
       integer :: i,j,k
+      integer, parameter :: nref=3
       real(WP), parameter :: VFlo=1.0e-12_WP
       dx=data%amr%dx(lvl); dy=data%amr%dy(lvl); dz=data%amr%dz(lvl)
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
@@ -220,13 +244,13 @@ contains
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             call initialize_volume_moments(lo=[data%amr%xlo+real(i  ,WP)*dx,data%amr%ylo+real(j  ,WP)*dy,data%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[data%amr%xlo+real(i+1,WP)*dx,data%amr%ylo+real(j+1,WP)*dy,data%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=sphere_levelset,time=time,level=3,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
+            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
    end subroutine init_VF
 
-   !> Tagger based on vorticity and divergence
+   !> Tagger based on velocity and density laplacians
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
@@ -239,94 +263,60 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVisc
-      real(WP) :: dx,dy,dz,dxi,dyi,dzi,dudx,dudy,dudz,dvdx,dvdy,dvdz,dwdx,dwdy,dwdz
-      real(WP) :: vort_mag,div_neg,rho,mu,Rec,Res,dist
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
+      real(WP) ::  rho_cc, rho_xp, rho_xm, rho_yp, rho_ym, rho_zp, rho_zm
+      real(WP) :: irho_cc,irho_xp,irho_xm,irho_yp,irho_ym,irho_zp,irho_zm
+      real(WP) :: lapU,lapV,lapW,u_sgs,Re,lapRHO,avgRHO,r_cyl,dist
       integer :: i,j,k
-      dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
-      dy=solver%amr%dy(lvl); dyi=1.0_WP/dy
-      dz=solver%amr%dz(lvl); dzi=1.0_WP/dz
+      dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
+      dy=solver%amr%dy(lvl); dyi2=1.0_WP/dy**2
+      dz=solver%amr%dz(lvl); dzi2=1.0_WP/dz**2
+      delta=solver%amr%min_meshsize(lvl); delta2=delta**2
       tags=tags_ptr
       call solver%amr%mfiter_build(lvl,mfi)
       do while (mfi%next())
-         bx=mfi%tilebox()
          tagarr=>tags%dataPtr(mfi)
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
-         pVisc=>solver%visc%mf(lvl)%dataptr(mfi)
+         bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Get rho and mu
-            rho=pQ(i,j,k,1)
-            mu=pVisc(i,j,k,1)
-            if (mu.le.0.0_WP) mu=1.0_WP/Reynolds
-            ! Get velocity gradient
-            dudx=0.5_WP*dxi*(pQ(i+1,j,k,2)/max(pQ(i+1,j,k,1),solver%rho_floor)-pQ(i-1,j,k,2)/max(pQ(i-1,j,k,1),solver%rho_floor))
-            dudy=0.5_WP*dyi*(pQ(i,j+1,k,2)/max(pQ(i,j+1,k,1),solver%rho_floor)-pQ(i,j-1,k,2)/max(pQ(i,j-1,k,1),solver%rho_floor))
-            dudz=0.5_WP*dzi*(pQ(i,j,k+1,2)/max(pQ(i,j,k+1,1),solver%rho_floor)-pQ(i,j,k-1,2)/max(pQ(i,j,k-1,1),solver%rho_floor))
-            dvdx=0.5_WP*dxi*(pQ(i+1,j,k,3)/max(pQ(i+1,j,k,1),solver%rho_floor)-pQ(i-1,j,k,3)/max(pQ(i-1,j,k,1),solver%rho_floor))
-            dvdy=0.5_WP*dyi*(pQ(i,j+1,k,3)/max(pQ(i,j+1,k,1),solver%rho_floor)-pQ(i,j-1,k,3)/max(pQ(i,j-1,k,1),solver%rho_floor))
-            dvdz=0.5_WP*dzi*(pQ(i,j,k+1,3)/max(pQ(i,j,k+1,1),solver%rho_floor)-pQ(i,j,k-1,3)/max(pQ(i,j,k-1,1),solver%rho_floor))
-            dwdx=0.5_WP*dxi*(pQ(i+1,j,k,4)/max(pQ(i+1,j,k,1),solver%rho_floor)-pQ(i-1,j,k,4)/max(pQ(i-1,j,k,1),solver%rho_floor))
-            dwdy=0.5_WP*dyi*(pQ(i,j+1,k,4)/max(pQ(i,j+1,k,1),solver%rho_floor)-pQ(i,j-1,k,4)/max(pQ(i,j-1,k,1),solver%rho_floor))
-            dwdz=0.5_WP*dzi*(pQ(i,j,k+1,4)/max(pQ(i,j,k+1,1),solver%rho_floor)-pQ(i,j,k-1,4)/max(pQ(i,j,k-1,1),solver%rho_floor))
-            ! Get vorticity magnitude
-            vort_mag=sqrt((dwdy-dvdz)**2+(dudz-dwdx)**2+(dvdx-dudy)**2)
-            ! Get dilatation
-            div_neg=min(dudx+dvdy+dwdz,0.0_WP)
-            ! Tag based on cell Reynolds numbers
-            Rec=rho*vort_mag*solver%amr%min_meshsize(lvl)**2/mu
-            if (Rec.gt.Rec_tag) tagarr(i,j,k,1)=SETtag
-            ! Also tag based on cell shock Reynolds number
-            Res=rho*abs(div_neg)*solver%amr%min_meshsize(lvl)**2/mu
-            if (Res.gt.Res_tag) tagarr(i,j,k,1)=SETtag
+            ! Sponge check
+            r_cyl=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*dy)**2+(solver%amr%zlo+(real(k,WP)+0.5_WP)*dz)**2)
+            ! Get local densities and inverse
+            rho_cc=max(pQ(i  ,j  ,k  ,1),solver%rho_floor); irho_cc=1.0_WP/rho_cc
+            rho_xp=max(pQ(i+1,j  ,k  ,1),solver%rho_floor); irho_xp=1.0_WP/rho_xp
+            rho_xm=max(pQ(i-1,j  ,k  ,1),solver%rho_floor); irho_xm=1.0_WP/rho_xm
+            rho_yp=max(pQ(i  ,j+1,k  ,1),solver%rho_floor); irho_yp=1.0_WP/rho_yp
+            rho_ym=max(pQ(i  ,j-1,k  ,1),solver%rho_floor); irho_ym=1.0_WP/rho_ym
+            rho_zp=max(pQ(i  ,j  ,k+1,1),solver%rho_floor); irho_zp=1.0_WP/rho_zp
+            rho_zm=max(pQ(i  ,j  ,k-1,1),solver%rho_floor); irho_zm=1.0_WP/rho_zm
+            ! Laplacian of velocity (Q components 2,3,4 = rhoU,rhoV,rhoW)
+            lapU=(pQ(i+1,j,k,2)*irho_xp-2.0_WP*pQ(i,j,k,2)*irho_cc+pQ(i-1,j,k,2)*irho_xm)*dxi2 &
+            &   +(pQ(i,j+1,k,2)*irho_yp-2.0_WP*pQ(i,j,k,2)*irho_cc+pQ(i,j-1,k,2)*irho_ym)*dyi2 &
+            &   +(pQ(i,j,k+1,2)*irho_zp-2.0_WP*pQ(i,j,k,2)*irho_cc+pQ(i,j,k-1,2)*irho_zm)*dzi2
+            lapV=(pQ(i+1,j,k,3)*irho_xp-2.0_WP*pQ(i,j,k,3)*irho_cc+pQ(i-1,j,k,3)*irho_xm)*dxi2 &
+            &   +(pQ(i,j+1,k,3)*irho_yp-2.0_WP*pQ(i,j,k,3)*irho_cc+pQ(i,j-1,k,3)*irho_ym)*dyi2 &
+            &   +(pQ(i,j,k+1,3)*irho_zp-2.0_WP*pQ(i,j,k,3)*irho_cc+pQ(i,j,k-1,3)*irho_zm)*dzi2
+            lapW=(pQ(i+1,j,k,4)*irho_xp-2.0_WP*pQ(i,j,k,4)*irho_cc+pQ(i-1,j,k,4)*irho_xm)*dxi2 &
+            &   +(pQ(i,j+1,k,4)*irho_yp-2.0_WP*pQ(i,j,k,4)*irho_cc+pQ(i,j-1,k,4)*irho_ym)*dyi2 &
+            &   +(pQ(i,j,k+1,4)*irho_zp-2.0_WP*pQ(i,j,k,4)*irho_cc+pQ(i,j,k-1,4)*irho_zm)*dzi2
+            ! SGS Reynolds number
+            u_sgs=0.2_WP*sqrt(lapU**2+lapV**2+lapW**2)*delta2
+            Re=Reynolds*u_sgs*delta
+            if (Re.gt.Re_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
+            ! Normalized density Laplacian
+            lapRHO=(rho_xp-2.0_WP*rho_cc+rho_xm)*dxi2+(rho_yp-2.0_WP*rho_cc+rho_ym)*dyi2+(rho_zp-2.0_WP*rho_cc+rho_zm)*dzi2
+            avgRHO=(rho_cc+rho_xp+rho_xm+rho_yp+rho_ym+rho_zp+rho_zm)/7.0_WP
+            lapRHO=abs(lapRHO)*delta2/avgRHO
+            if (lapRHO.gt.Rho_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
             ! Tag near sphere surface
             dist=sphere_levelset([solver%amr%xlo+(real(i,WP)+0.5_WP)*dx,solver%amr%ylo+(real(j,WP)+0.5_WP)*dy,solver%amr%zlo+(real(k,WP)+0.5_WP)*dz],time)
-            if (dist.lt.5.0_WP*dx.and.dist.gt.-dx) tagarr(i,j,k,1)=SETtag
+            if (abs(dist).lt.dx) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
    end subroutine my_tagger
 
-   !> Apply IB forcing - zero Q inside solid
-   subroutine apply_ibm()
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF
-      real(WP) :: sum_VF,sum_VFQ1,sum_VFQ5,myVF
-      integer :: i,j,k,lvl,ii,jj,kk
-      do lvl=0,amr%clvl()
-         call amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            ! Get pointers to data
-            pQ=>fs%Q%mf(lvl)%dataptr(mfi)
-            pVF=>VF%mf(lvl)%dataptr(mfi)
-            ! Get interior tilebox
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! Skip pure fluid cells
-               if (pVF(i,j,k,1).eq.1.0_WP) cycle
-               ! Scale Q(2-4) by VF
-               pQ(i,j,k,2)=pVF(i,j,k,1)*pQ(i,j,k,2)
-               pQ(i,j,k,3)=pVF(i,j,k,1)*pQ(i,j,k,3)
-               pQ(i,j,k,4)=pVF(i,j,k,1)*pQ(i,j,k,4)
-               ! VF-weighted neighbor average for Q(1) and Q(5)
-               sum_VF=0.0_WP; sum_VFQ1=0.0_WP; sum_VFQ5=0.0_WP
-               do kk=-1,1; do jj=-1,1; do ii=-1,1
-                  if (ii.eq.0.and.jj.eq.0.and.kk.eq.0) cycle
-                  sum_VF  =sum_VF  +pVF(i+ii,j+jj,k+kk,1)
-                  sum_VFQ1=sum_VFQ1+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,1)
-                  sum_VFQ5=sum_VFQ5+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,5)
-               end do; end do; end do
-               if (sum_VF.gt.0.0_WP) then
-                  pQ(i,j,k,1)=pVF(i,j,k,1)*pQ(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ1/sum_VF
-                  pQ(i,j,k,5)=pVF(i,j,k,1)*pQ(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ5/sum_VF
-               end if
-            end do; end do; end do
-         end do
-         call amr%mfiter_destroy(mfi)
-      end do
-   end subroutine apply_ibm
-   
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -367,6 +357,8 @@ contains
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
+         call param_read('Sutherland exponent',Suth_n,default=1.5_WP)
+         call param_read('Sutherland temperature',Suth_T,default=0.4042_WP)
          ! Log shock conditions
          write(message,'("[Post-shock Mach] M2=",es12.5)') M2; call log(message)
          write(message,'("[Shock Mach]      Ms=",es12.5)') Ms; call log(message)
@@ -386,6 +378,11 @@ contains
          amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
          amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
+         ! Handle 2D case
+         if (amr%nz.eq.1) then
+            amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+            amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+         end if
          call amr%initialize()
       end block create_amrgrid
       
@@ -396,43 +393,49 @@ contains
          call param_read('Max dt',time%dtmax)
          call param_read('Max CFL',time%cflmax)
          time%dt=time%dtmax
+         call param_read('Subiterations',time%itmax,default=2)
       end block initialize_timetracker
 
       ! Initialize compressible solver
       create_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
+         use amrdata_class, only: interp_face_lin
          ! Create flow solver
          call fs%initialize(amr=amr)
+         ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide thermodynamic model
          fs%getP=>get_P
          fs%getC=>get_C
          fs%getT=>get_T
          ! Set initial conditions
-         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
          fs%user_init=>shock_init
          ! Set boundary conditions
+         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
+         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+         fs%U%lo_bc(1,1)=amrex_bc_ext_dir
+         fs%V%lo_bc(1,1)=amrex_bc_ext_dir
+         fs%W%lo_bc(1,1)=amrex_bc_ext_dir
+         fs%U%hi_bc(1,1)=amrex_bc_foextrap
+         fs%V%hi_bc(1,1)=amrex_bc_foextrap
+         fs%W%hi_bc(1,1)=amrex_bc_foextrap
          fs%user_bc=>shock_dirichlet
       end block create_solver
 
       ! Create VF for IB
       create_VF: block
-         use amrdata_class, only: amrex_interp_reinit
-         call VF%initialize(amr,name='VF',ncomp=1,ng=fs%nover,interp=amrex_interp_reinit)
+         use amrdata_class, only: interp_reinit
+         call VF%initialize(amr,name='VF',ncomp=1,ng=fs%nover,interp=interp_reinit)
          VF%user_init=>init_VF
          call VF%register()
       end block create_VF
       
       ! Initialize workspaces
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call dQdt%initialize(amr,name='dQdt',ncomp=5,ng=0,interp=amrex_interp_none); call dQdt%register()
-         call k1%initialize(amr,name='k1',ncomp=5,ng=0,interp=amrex_interp_none); call k1%register()
-         call k2%initialize(amr,name='k2',ncomp=5,ng=0,interp=amrex_interp_none); call k2%register()
-         call k3%initialize(amr,name='k3',ncomp=5,ng=0,interp=amrex_interp_none); call k3%register()
-         call k4%initialize(amr,name='k4',ncomp=5,ng=0,interp=amrex_interp_none); call k4%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=amrex_interp_none); call Umag%register()
-         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=amrex_interp_none); call Mach%register()
+         use amrdata_class, only: interp_none
+         call dQdt%initialize(amr,name='dQdt',ncomp=5,ng=0,interp=interp_none); call dQdt%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
+         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=interp_none); call Mach%register()
       end block create_workspace
       
       ! Initialize regridding
@@ -442,28 +445,30 @@ contains
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
          fs%user_tagging=>my_tagger
-         call param_read('Tagging Rec',Rec_tag)
-         call param_read('Tagging Res',Res_tag)
+         call param_read('Tagging Re',Re_tag)
+         call param_read('Tagging Rho',Rho_tag)
          ! Create initial grid
          call amr%init_from_scratch(time=time%t)
-         ! Compute viscosities
+         ! Initialize primitive variables and face velocity
+         call fs%get_primitive(Q=fs%Q); call fs%get_face_velocity()
+         ! Compute viscosities and add SGS models
          call get_viscosities()
-         ! Add artificial bulk viscosity
          call fs%add_viscartif(dt=time%dt)
+         call fs%add_vreman(dt=time%dt)
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
       end block init_regridding
       
       ! Initialize visualization
       create_viz: block
          ! Create visualization object
-         call viz%initialize(amr,'sphere')
+         call viz%initialize(amr=amr,name='sphere',use_hdf5=.false.)
          call viz%add_scalar(fs%Q,1,'RHO')
          call viz%add_scalar(fs%P,1,'P')
-         call viz%add_scalar(fs%U,1,'U')
-         call viz%add_scalar(fs%V,1,'V')
-         call viz%add_scalar(fs%W,1,'W')
+         call viz%add_scalar(fs%UVW,1,'U')
+         call viz%add_scalar(fs%UVW,2,'V')
+         call viz%add_scalar(fs%UVW,3,'W')
          call viz%add_scalar(fs%I,1,'I')
          call viz%add_scalar(fs%beta,1,'beta')
          call viz%add_scalar(VF,1,'VF')
@@ -540,72 +545,73 @@ contains
    !> Perform an NGA2 simulation
    subroutine simulation_run
       implicit none
-      
+
       ! Perform time integration
       do while (.not.time%done())
-         
+
          ! Increment time
          call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
-         
-         ! Remember old conserved variables
-         call fs%Qold%copy(src=fs%Q)
-         
-         ! ===== RK2/RK4 Stage 1: k1 = f(t, Q) =====
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,time=time%t); call k1%copy(src=dQdt)
-         
-         ! ===== RK2/RK4 Stage 2: k2 = f(t+dt/2, Q+k1/2) =====
-         call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=0.5_WP*time%dt,src=k1)  ! Q=Qold+dt/2*k1
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt)
-         call apply_ibm(); call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt) ! IB forcing
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,time=time%t+0.5_WP*time%dt); call k2%copy(src=dQdt)
 
-         ! ===== FOR RK2, RUN THIS =====
-         call fs%Q%copy(src=fs%Qold)
-         call fs%Q%saxpy(a=time%dt,src=k2)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
-         call apply_ibm(); call fs%Q%average_down(); call fs%Q%fill(time=time%t) ! IB forcing
-         ! =============================
-         
-         ! ===== RK4 Stage 3: k3 = f(t+dt/2, Q+k2/2) =====
-         !call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=0.5_WP*time%dt,src=k2)  ! Q=Qold+dt/2*k2
-         !call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt)
-         !call apply_ibm(); call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt) ! IB forcing
-         !call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,time=time%t+0.5_WP*time%dt); call k3%copy(src=dQdt)
-         
-         ! ===== RK4 Stage 4: k4 = f(t+dt, Q+k3) =====
-         !call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=time%dt,src=k3)  ! Q=Qold+dt*k3
-         !call fs%Q%average_down(); call fs%Q%fill(time=time%t+time%dt)
-         !call apply_ibm(); call fs%Q%average_down(); call fs%Q%fill(time=time%t+time%dt) ! IB forcing
-         !call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,time=time%t+time%dt); call k4%copy(src=dQdt)
-         
-         ! ===== RK4 Combination: Q = Qold + (k1 + 2*k2 + 2*k3 + k4)/6 =====
-         !call fs%Q%copy(src=fs%Qold)
-         !call fs%Q%saxpy(a=time%dt/6.0_WP,src=k1)
-         !call fs%Q%saxpy(a=time%dt/3.0_WP,src=k2)
-         !call fs%Q%saxpy(a=time%dt/3.0_WP,src=k3)
-         !call fs%Q%saxpy(a=time%dt/6.0_WP,src=k4)
-         !call fs%Q%average_down(); call fs%Q%fill(time=time%t)
-         !call apply_ibm(); call fs%Q%average_down(); call fs%Q%fill(time=time%t) ! IB forcing
+         ! Remember old conserved variables and face velocities
+         call fs%Qold%copy(src=fs%Q)
+         call fs%Uold%copy(src=fs%U)
+         call fs%Vold%copy(src=fs%V)
+         call fs%Wold%copy(src=fs%W)
+
+         ! Sub-iterations
+         do while (time%it.le.time%itmax)
+
+            ! Build midpoint state: Q^{mid}=0.5*(Q+Qold), U^{mid}=0.5*(U+Uold)
+            call fs%Q%lincomb(a=0.5_WP,src1=fs%Qold,b=0.5_WP,src2=fs%Q)
+            call fs%U%lincomb(a=0.5_WP,src1=fs%Uold,b=0.5_WP,src2=fs%U)
+            call fs%V%lincomb(a=0.5_WP,src1=fs%Vold,b=0.5_WP,src2=fs%V)
+            call fs%W%lincomb(a=0.5_WP,src1=fs%Wold,b=0.5_WP,src2=fs%W)
+
+            ! Get primitive variables at midpoint
+            call fs%get_primitive(Q=fs%Q)
+
+            ! Advance Q using Q^{mid}
+            call fs%get_dQdt(dQdt=dQdt)
+            call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
+            call fs%Q%average_down(); call fs%Q%fill(time%t)
+
+            ! Interpolate velocity to the faces
+            call fs%get_face_velocity()
+
+            ! Increment both velocities with current pressure term (only 1st order in time but stable)
+            call fs%get_primitive(Q=fs%Q)
+            call fs%add_pressure(scale=time%dt,phi=fs%P)
+
+            ! Apply IB direct forcing
+            call apply_ibm()
+
+            ! Average down and fill ghosts
+            call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+            call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+
+            ! Increment sub-iteration counter
+            time%it=time%it+1
+
+         end do
 
          ! Recompute primitive variables
-         call fs%get_primitive(fs%Q)
-         
+         call fs%get_primitive(Q=fs%Q)
+
          ! Regrid if event triggers
          if (regrid_evt%occurs()) then
             call amr%regrid(baselvl=0,time=time%t)
             call gridfile%write()
          end if
 
-         ! Compute viscosities
+         ! Compute viscosities and add SGS models
          call get_viscosities()
-
-         ! Add artificial bulk viscosity
          call fs%add_viscartif(dt=time%dt)
+         call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
 
          ! Visualization output
@@ -618,9 +624,68 @@ contains
          call cflfile%write()
          
       end do
-      
+
+   contains
+
+      !> Apply IB forcing - zero Q inside solid
+      subroutine apply_ibm()
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pVF
+         real(WP) :: sum_VF,sum_VFQ1,sum_VFQ5,myVF
+         integer :: i,j,k,lvl,ii,jj,kk
+         do lvl=0,amr%clvl()
+            call amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pQ=>fs%Q%mf(lvl)%dataptr(mfi)
+               pU=>fs%U%mf(lvl)%dataptr(mfi)
+               pV=>fs%V%mf(lvl)%dataptr(mfi)
+               pW=>fs%W%mf(lvl)%dataptr(mfi)
+               pVF=>VF%mf(lvl)%dataptr(mfi)
+               ! Get interior tilebox
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Skip pure fluid cells
+                  if (pVF(i,j,k,1).eq.1.0_WP) cycle
+                  ! Scale Q(2-4) by VF
+                  pQ(i,j,k,2)=pVF(i,j,k,1)*pQ(i,j,k,2)
+                  pQ(i,j,k,3)=pVF(i,j,k,1)*pQ(i,j,k,3)
+                  pQ(i,j,k,4)=pVF(i,j,k,1)*pQ(i,j,k,4)
+                  ! VF-weighted neighbor average for Q(1) and Q(5)
+                  sum_VF=0.0_WP; sum_VFQ1=0.0_WP; sum_VFQ5=0.0_WP
+                  do kk=-1,1; do jj=-1,1; do ii=-1,1
+                     if (ii.eq.0.and.jj.eq.0.and.kk.eq.0) cycle
+                     sum_VF  =sum_VF  +pVF(i+ii,j+jj,k+kk,1)
+                     sum_VFQ1=sum_VFQ1+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,1)
+                     sum_VFQ5=sum_VFQ5+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,5)
+                  end do; end do; end do
+                  if (sum_VF.gt.0.0_WP) then
+                     pQ(i,j,k,1)=pVF(i,j,k,1)*pQ(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ1/sum_VF
+                     pQ(i,j,k,5)=pVF(i,j,k,1)*pQ(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ5/sum_VF
+                  end if
+               end do; end do; end do
+               ! Force face velocities
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pU(i,j,k,1)=0.5_WP*sum(pVF(i-1:i,j,k,1))*pU(i,j,k,1)
+               end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pV(i,j,k,1)=0.5_WP*sum(pVF(i,j-1:j,k,1))*pV(i,j,k,1)
+               end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pW(i,j,k,1)=0.5_WP*sum(pVF(i,j,k-1:k,1))*pW(i,j,k,1)
+               end do; end do; end do
+            end do
+            call amr%mfiter_destroy(mfi)
+         end do
+      end subroutine apply_ibm
+
    end subroutine simulation_run
-   
+
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
@@ -632,10 +697,6 @@ contains
       ! Finalize solver
       call fs%finalize()
       call dQdt%finalize()
-      call k1%finalize()
-      call k2%finalize()
-      call k3%finalize()
-      call k4%finalize()
       call VF%finalize()
       call Umag%finalize()
       call Mach%finalize()
