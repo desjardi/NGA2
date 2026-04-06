@@ -401,6 +401,7 @@ contains
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrdata_class, only: interp_face_lin
          ! Create flow solver
+         call param_read('Use projection',fs%use_projection)
          call fs%initialize(amr=amr)
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
@@ -590,6 +591,23 @@ contains
             ! Average down and fill ghosts
             call fs%Q%average_down(); call fs%Q%fill(time=time%t)
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+
+            ! Pressure correction
+            if (fs%use_projection) then
+               ! Solve pressure Helmholtz equation and increment pressure
+               call fs%prepare_psolver(dt=time%dt,rhs=fs%div)
+               call fs%psolver%solve(rhs=fs%div)
+
+               ! Correct both velocities with new pressure increment
+               call fs%add_pressure(scale=time%dt)
+
+               ! Add pressure increment
+               call fs%P%add(src=fs%psolver%sol)
+
+               ! Average down and fill ghosts
+               call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+               call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+            end if
 
             ! Increment sub-iteration counter
             time%it=time%it+1

@@ -4,6 +4,7 @@ module amrcomp_class
    use precision,        only: WP
    use amrdata_class,    only: amrdata
    use amrflow_class,    only: amrflow
+   use amrmg_class,      only: amrmg
    use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
    implicit none
    private
@@ -23,6 +24,10 @@ module amrcomp_class
       procedure(eos_P_iface), pointer, nopass :: getP=>null()
       procedure(eos_C_iface), pointer, nopass :: getC=>null()
       procedure(eos_T_iface), pointer, nopass :: getT=>null()
+
+      ! Pressure solver for pressure projection
+      logical :: use_projection=.false.
+      type(amrmg) :: psolver
 
       ! Cell-centered primitive variables (velocities, internal energy, and pressure)
       type(amrdata) :: UVW,I,P
@@ -68,6 +73,7 @@ module amrcomp_class
       ! Utilities
       procedure :: get_face_velocity         !< Update face velocities from cell-centered data
       procedure :: add_pressure              !< Add pressure term to face velocities, cell-centered momentum, and internal energy
+      procedure :: prepare_psolver           !< Prepare Helmholtz pressure solver
       ! Physics
       procedure :: get_primitive             !< Get primitive variables from conserved variables
       procedure :: get_conserved             !< Get conserved variables from primitive variables
@@ -234,6 +240,7 @@ contains
    !> Initialize the compressible solver
    subroutine initialize(this,amr,name)
       use amrex_amr_module, only: amrex_bc_foextrap
+      use amrmg_class,      only: amrmg_varcoef
       use amrgrid_class,    only: amrgrid
       implicit none
       class(amrcomp), target, intent(inout) :: this
@@ -271,6 +278,9 @@ contains
          this%diff%lo_bc(3,1)=amrex_bc_foextrap; this%diff%hi_bc(3,1)=amrex_bc_foextrap
       end if
 
+      ! Initialize pressure solver if requested
+      if (this%use_projection) call this%psolver%initialize(amr=amr,type=amrmg_varcoef)
+
       ! Register callbacks with amrgrid
       select type (this)
        type is (amrcomp)
@@ -299,6 +309,8 @@ contains
       call this%visc%finalize()
       call this%beta%finalize()
       call this%diff%finalize()
+      if (this%use_projection) call this%psolver%finalize()
+      this%use_projection=.false.
       nullify(this%user_init)
       nullify(this%user_tagging)
       nullify(this%user_bc)
@@ -536,9 +548,12 @@ contains
             call this%amr%mfiter_destroy(mfi)
          end do
       else
-         call die('[amrcomp::add_pressure] MLMG path not implemented yet')
          ! Use psolver's solution and its internal ghosts
-         !call this%psolver%get_fluxes(Fx,Fy,Fz)
+         if (this%use_projection) then
+            call this%psolver%get_fluxes(Fx,Fy,Fz)
+         else
+            call die('[amrcomp::add_pressure] use_projection must be true to use internal phi')
+         end if
       end if
       ! Apply to face velocities and cell-centered in one pass
       do lvl=0,this%amr%clvl()
@@ -557,8 +572,12 @@ contains
             if (present(phi)) then
                pP=>phi%mf(lvl)%dataptr(mfi)
             else
-               call die('[amrcomp::add_pressure] MLMG path not implemented yet')
-               !pP=>this%psolver%sol%mf(lvl)%dataptr(mfi)
+               ! Use psolver's solution and its internal ghosts
+               if (this%use_projection) then
+                  pP=>this%psolver%sol%mf(lvl)%dataptr(mfi)
+               else
+                  call die('[amrcomp::add_pressure] use_projection must be true to use internal phi')
+               end if
             end if
             pU=>this%U%mf(lvl)%dataptr(mfi)
             pV=>this%V%mf(lvl)%dataptr(mfi)
@@ -612,6 +631,85 @@ contains
          call this%amr%mfab_destroy(Fz(lvl))
       end do
    end subroutine add_pressure
+
+   !> Prepare variable-coefficient pressure solver using face densities and speed of sound
+   subroutine prepare_psolver(this,dt,rhs)
+      use amrex_amr_module, only: amrex_mfiter,amrex_multifab
+      implicit none
+      class(amrcomp), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      type(amrdata), intent(inout) :: rhs
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      type(amrex_multifab), dimension(:), allocatable :: AA,BBx,BBy,BBz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pC,pRHS,pP,pU,pV,pW
+      real(WP) :: dxi,dyi,dzi
+      ! Allocate temporary face coefficient mfabs
+      allocate(AA(0:this%amr%clvl()),BBx(0:this%amr%clvl()),BBy(0:this%amr%clvl()),BBz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,AA (lvl),ncomp=1,nover=0,atface=[.false.,.false.,.false.])
+         call this%amr%mfab_build(lvl,BBx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.])
+         call this%amr%mfab_build(lvl,BBy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
+         call this%amr%mfab_build(lvl,BBz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+      end do
+      ! Fill Helmholtz coefficients and rhs
+      do lvl=0,this%amr%clvl()
+         ! Get mesh size
+         dxi=1.0_WP/this%amr%dx(lvl)
+         dyi=1.0_WP/this%amr%dy(lvl)
+         dzi=1.0_WP/this%amr%dz(lvl)
+         ! Loop over tiles
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pQ  =>this%Q%mf(lvl)%dataptr(mfi)
+            pC  =>this%C%mf(lvl)%dataptr(mfi)
+            pP  =>this%P%mf(lvl)%dataptr(mfi)
+            pU  =>this%U%mf(lvl)%dataptr(mfi)
+            pV  =>this%V%mf(lvl)%dataptr(mfi)
+            pW  =>this%W%mf(lvl)%dataptr(mfi)
+            pAA =>AA (lvl)%dataptr(mfi)
+            pBBx=>BBx(lvl)%dataptr(mfi)
+            pBBy=>BBy(lvl)%dataptr(mfi)
+            pBBz=>BBz(lvl)%dataptr(mfi)
+            pRHS=>rhs%mf(lvl)%dataptr(mfi)
+            ! Cell-centered
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pAA(i,j,k,1)=1.0_WP/(pQ(i,j,k,1)*pC(i,j,k,1)**2)
+               pRHS(i,j,k,1)=pAA(i,j,k,1)*pP(i,j,k,1)/dt**2-(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1)))/dt
+            end do; end do; end do
+            ! X-faces
+            bx=mfi%nodaltilebox(1)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pBBx(i,j,k,1)=2.0_WP/max(sum(pQ(i-1:i,j,k,1)),this%rho_floor)
+            end do; end do; end do
+            ! Y-faces
+            bx=mfi%nodaltilebox(2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pBBy(i,j,k,1)=2.0_WP/max(sum(pQ(i,j-1:j,k,1)),this%rho_floor)
+            end do; end do; end do
+            ! Z-faces
+            bx=mfi%nodaltilebox(3)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pBBz(i,j,k,1)=2.0_WP/max(sum(pQ(i,j,k-1:k,1)),this%rho_floor)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Rebuild operator
+      this%psolver%alpha=+1.0_WP/dt**2
+      this%psolver%beta =+1.0_WP
+      call this%psolver%setup(acoef=AA,bcoef_x=BBx,bcoef_y=BBy,bcoef_z=BBz)
+      ! Destroy temporary mfabs
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(AA (lvl))
+         call this%amr%mfab_destroy(BBx(lvl))
+         call this%amr%mfab_destroy(BBy(lvl))
+         call this%amr%mfab_destroy(BBz(lvl))
+      end do
+   end subroutine prepare_psolver
 
    ! ============================================================================
    ! PHYSICS METHODS
@@ -702,9 +800,6 @@ contains
       class(amrcomp), intent(inout) :: this
       type(amrdata), intent(inout) :: dQdt
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: Fx,Fy,Fz
-
-      ! First build primitive variables from Q
-      !call this%get_primitive(Q)
 
       ! Initialize all fluxes
       define_fluxes: block
