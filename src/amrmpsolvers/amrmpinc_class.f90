@@ -1362,7 +1362,7 @@ contains
          call this%U%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
          call this%V%mf(lvl)%saxpy(scale,Fy(lvl),1,1,1,0)
          call this%W%mf(lvl)%saxpy(scale,Fz(lvl),1,1,1,0)
-         ! Cell-centred velocities: density-weighted average of face fluxes
+         ! Cell-centered velocities: density-weighted average of face fluxes
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pUVW=>this%UVW%mf(lvl)%dataptr(mfi)

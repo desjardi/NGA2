@@ -23,7 +23,7 @@ module simulation
    type(amrdata) :: Umag,Mach
 
    !> IBs
-   type(amrdata) :: VF
+   type(amrdata), target :: VF
    
    !> Visualization
    type(event) :: viz_evt
@@ -317,6 +317,17 @@ contains
       call solver%amr%mfiter_destroy(mfi)
    end subroutine my_tagger
 
+   !> Post-regrid dispatcher for automatic VF filling
+   subroutine postregrid_VF(ctx,lbase,time)
+      use iso_c_binding, only: c_ptr,c_f_pointer
+      type(c_ptr), intent(in) :: ctx
+      integer, intent(in) :: lbase
+      real(WP), intent(in) :: time
+      type(amrdata), pointer :: this
+      call c_f_pointer(ctx,this)
+      call this%fill(time=time,lbase=lbase)
+   end subroutine postregrid_VF
+
    !> Initialization of problem solver
    subroutine simulation_init
       use param, only: param_read
@@ -405,6 +416,10 @@ contains
          call fs%initialize(amr=amr)
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
+         ! Set pressure convergence
+         fs%psolver%max_iter=20
+         fs%psolver%tol_rel=1.0e-5_WP
+         fs%psolver%verbose=2
          ! Provide thermodynamic model
          fs%getP=>get_P
          fs%getC=>get_C
@@ -425,10 +440,15 @@ contains
 
       ! Create VF for IB
       create_VF: block
-         use amrdata_class, only: interp_reinit
-         call VF%initialize(amr,name='VF',ncomp=1,ng=fs%nover,interp=interp_reinit)
+         use amrex_amr_module, only: amrex_bc_foextrap
+         use amrdata_class, only: interp_const
+         use iso_c_binding, only: c_loc
+         ! Create VF field with constant interpolation
+         call VF%initialize(amr,name='VF',ncomp=1,ng=fs%nover,interp=interp_const); call VF%register()
+         call amr%add_postregrid(postregrid_VF,c_loc(VF))
          VF%user_init=>init_VF
-         call VF%register()
+         VF%lo_bc(1,1)=amrex_bc_foextrap
+         VF%hi_bc(1,1)=amrex_bc_foextrap
       end block create_VF
       
       ! Initialize workspaces
@@ -594,9 +614,13 @@ contains
 
             ! Pressure correction
             if (fs%use_projection) then
-               ! Solve pressure Helmholtz equation and increment pressure
-               call fs%prepare_psolver(dt=time%dt,rhs=fs%div)
+               ! Solve pressure Helmholtz equation
+               call fs%get_div(); call fs%div%mult(val=1.0_WP/time%dt)
+               call fs%prepare_psolver(dt=time%dt)
                call fs%psolver%solve(rhs=fs%div)
+
+               ! Kill correction inside IB
+               !call fs%psolver%sol%multiply(src=VF)
 
                ! Correct both velocities with new pressure increment
                call fs%add_pressure(scale=time%dt)

@@ -585,9 +585,9 @@ contains
             ! Get tilebox
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*(sum(pQ(i-1:i,j,k,1))*pFx(i,j,k,1)+sum(pQ(i:i+1,j,k,1))*pFx(i+1,j,k,1))
-               pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*(sum(pQ(i,j-1:j,k,1))*pFy(i,j,k,1)+sum(pQ(i,j:j+1,k,1))*pFy(i,j+1,k,1))
-               pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*(sum(pQ(i,j,k-1:k,1))*pFz(i,j,k,1)+sum(pQ(i,j,k:k+1,1))*pFz(i,j,k+1,1))
+               pQ(i,j,k,2)=pQ(i,j,k,2)+scale*pQ(i,j,k,1)*0.5_WP*sum(pFx(i:i+1,j,k,1))
+               pQ(i,j,k,3)=pQ(i,j,k,3)+scale*pQ(i,j,k,1)*0.5_WP*sum(pFy(i,j:j+1,k,1))
+               pQ(i,j,k,4)=pQ(i,j,k,4)+scale*pQ(i,j,k,1)*0.5_WP*sum(pFz(i,j,k:k+1,1))
                pQ(i,j,k,5)=pQ(i,j,k,5)-scale*pP(i,j,k,1)*(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1)))
             end do; end do; end do
             ! Fix non-periodic boundary conditions
@@ -633,18 +633,16 @@ contains
    end subroutine add_pressure
 
    !> Prepare variable-coefficient pressure solver using face densities and speed of sound
-   subroutine prepare_psolver(this,dt,rhs)
+   subroutine prepare_psolver(this,dt)
       use amrex_amr_module, only: amrex_mfiter,amrex_multifab
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
-      type(amrdata), intent(inout) :: rhs
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       type(amrex_multifab), dimension(:), allocatable :: AA,BBx,BBy,BBz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pC,pRHS,pP,pU,pV,pW
-      real(WP) :: dxi,dyi,dzi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pC
       ! Allocate temporary face coefficient mfabs
       allocate(AA(0:this%amr%clvl()),BBx(0:this%amr%clvl()),BBy(0:this%amr%clvl()),BBz(0:this%amr%clvl()))
       do lvl=0,this%amr%clvl()
@@ -653,32 +651,21 @@ contains
          call this%amr%mfab_build(lvl,BBy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
          call this%amr%mfab_build(lvl,BBz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
       end do
-      ! Fill Helmholtz coefficients and rhs
+      ! Fill Helmholtz coefficients
       do lvl=0,this%amr%clvl()
-         ! Get mesh size
-         dxi=1.0_WP/this%amr%dx(lvl)
-         dyi=1.0_WP/this%amr%dy(lvl)
-         dzi=1.0_WP/this%amr%dz(lvl)
-         ! Loop over tiles
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointers to data
             pQ  =>this%Q%mf(lvl)%dataptr(mfi)
             pC  =>this%C%mf(lvl)%dataptr(mfi)
-            pP  =>this%P%mf(lvl)%dataptr(mfi)
-            pU  =>this%U%mf(lvl)%dataptr(mfi)
-            pV  =>this%V%mf(lvl)%dataptr(mfi)
-            pW  =>this%W%mf(lvl)%dataptr(mfi)
             pAA =>AA (lvl)%dataptr(mfi)
             pBBx=>BBx(lvl)%dataptr(mfi)
             pBBy=>BBy(lvl)%dataptr(mfi)
             pBBz=>BBz(lvl)%dataptr(mfi)
-            pRHS=>rhs%mf(lvl)%dataptr(mfi)
             ! Cell-centered
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                pAA(i,j,k,1)=1.0_WP/(pQ(i,j,k,1)*pC(i,j,k,1)**2)
-               pRHS(i,j,k,1)=pAA(i,j,k,1)*pP(i,j,k,1)/dt**2-(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1)))/dt
             end do; end do; end do
             ! X-faces
             bx=mfi%nodaltilebox(1)
@@ -699,8 +686,8 @@ contains
          call this%amr%mfiter_destroy(mfi)
       end do
       ! Rebuild operator
-      this%psolver%alpha=+1.0_WP/dt**2
-      this%psolver%beta =+1.0_WP
+      this%psolver%alpha=-1.0_WP/dt**2
+      this%psolver%beta =-1.0_WP
       call this%psolver%setup(acoef=AA,bcoef_x=BBx,bcoef_y=BBy,bcoef_z=BBz)
       ! Destroy temporary mfabs
       do lvl=0,this%amr%clvl()
