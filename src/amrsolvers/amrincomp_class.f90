@@ -355,6 +355,7 @@ contains
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (use for projection with dP)
    subroutine add_pressure(this,scale,phi)
       use amrex_amr_module, only: amrex_multifab
+      use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrincomp), intent(inout) :: this
       real(WP), intent(in) :: scale
@@ -395,6 +396,12 @@ contains
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
+         end do
+         ! Enforce flux consistency between levels
+         do lvl=this%amr%clvl(),1,-1
+            call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
          end do
       else
          ! MLMG path: use psolver's C/F-consistent internal fluxes

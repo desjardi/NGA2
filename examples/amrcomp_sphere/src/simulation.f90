@@ -526,6 +526,7 @@ contains
          call cflfile%add_column(time%n,'Timestep')
          call cflfile%add_column(time%t,'Time')
          call cflfile%add_column(time%dt,'dt')
+         call cflfile%add_column(fs%CFLp,'CFLp')
          call cflfile%add_column(fs%CFLc_x,'CFLc_x')
          call cflfile%add_column(fs%CFLc_y,'CFLc_y')
          call cflfile%add_column(fs%CFLc_z,'CFLc_z')
@@ -601,12 +602,12 @@ contains
             ! Interpolate velocity to the faces
             call fs%get_face_velocity()
 
-            ! Increment both velocities with current pressure term (only 1st order in time but stable)
+            ! Increment both velocities with current pressure term
             call fs%get_primitive(Q=fs%Q)
-            call fs%add_pressure(scale=time%dt,phi=fs%P)
+            call fs%add_pressure(scale=time%dt,phi=fs%P,mask=VF)
 
             ! Apply IB direct forcing
-            call apply_ibm()
+            call apply_ib_forcing()
 
             ! Average down and fill ghosts
             call fs%Q%average_down(); call fs%Q%fill(time=time%t)
@@ -619,14 +620,11 @@ contains
                call fs%prepare_psolver(dt=time%dt)
                call fs%psolver%solve(rhs=fs%div)
 
-               ! Kill correction inside IB
-               !call fs%psolver%sol%multiply(src=VF)
-
                ! Correct both velocities with new pressure increment
-               call fs%add_pressure(scale=time%dt)
+               call fs%add_pressure(scale=time%dt,mask=VF)
 
-               ! Add pressure increment
-               call fs%P%add(src=fs%psolver%sol)
+               ! Re-apply IB direct forcing
+               call apply_ib_forcing()
 
                ! Average down and fill ghosts
                call fs%Q%average_down(); call fs%Q%fill(time=time%t)
@@ -670,13 +668,17 @@ contains
    contains
 
       !> Apply IB forcing - zero Q inside solid
-      subroutine apply_ibm()
+      subroutine apply_ib_forcing()
          use amrex_amr_module, only: amrex_mfiter,amrex_box
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pVF
+         real(WP), dimension(:,:,:,:), allocatable :: pQold
          real(WP) :: sum_VF,sum_VFQ1,sum_VFQ5,myVF
          integer :: i,j,k,lvl,ii,jj,kk
+         ! Compressible IB scheme requires updated ghosts for Q
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         ! Apply IB scheme in solid region
          do lvl=0,amr%clvl()
             call amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
@@ -688,6 +690,9 @@ contains
                pVF=>VF%mf(lvl)%dataptr(mfi)
                ! Get interior tilebox
                bx=mfi%tilebox()
+               ! Create backup of Q
+               allocate(pQold,source=pQ)
+               ! Loop over tile interior
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   ! Skip pure fluid cells
                   if (pVF(i,j,k,1).eq.1.0_WP) cycle
@@ -700,14 +705,16 @@ contains
                   do kk=-1,1; do jj=-1,1; do ii=-1,1
                      if (ii.eq.0.and.jj.eq.0.and.kk.eq.0) cycle
                      sum_VF  =sum_VF  +pVF(i+ii,j+jj,k+kk,1)
-                     sum_VFQ1=sum_VFQ1+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,1)
-                     sum_VFQ5=sum_VFQ5+pVF(i+ii,j+jj,k+kk,1)*pQ(i+ii,j+jj,k+kk,5)
+                     sum_VFQ1=sum_VFQ1+pVF(i+ii,j+jj,k+kk,1)*pQold(i+ii,j+jj,k+kk,1)
+                     sum_VFQ5=sum_VFQ5+pVF(i+ii,j+jj,k+kk,1)*pQold(i+ii,j+jj,k+kk,5)
                   end do; end do; end do
                   if (sum_VF.gt.0.0_WP) then
-                     pQ(i,j,k,1)=pVF(i,j,k,1)*pQ(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ1/sum_VF
-                     pQ(i,j,k,5)=pVF(i,j,k,1)*pQ(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ5/sum_VF
+                     pQ(i,j,k,1)=pVF(i,j,k,1)*pQold(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ1/sum_VF
+                     pQ(i,j,k,5)=pVF(i,j,k,1)*pQold(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ5/sum_VF
                   end if
                end do; end do; end do
+               ! Deallocate pQold
+               deallocate(pQold)
                ! Force face velocities
                bx=mfi%nodaltilebox(1)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
@@ -724,7 +731,7 @@ contains
             end do
             call amr%mfiter_destroy(mfi)
          end do
-      end subroutine apply_ibm
+      end subroutine apply_ib_forcing
 
    end subroutine simulation_run
 

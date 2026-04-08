@@ -1207,6 +1207,7 @@ contains
    !> Cell-center correction averages the face gradients back to cell center
    subroutine correct_both_velocities(this,scale,phi)
       use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box
+      use amrex_interface,  only: amrmfab_average_down_face
       class(amrmpinc), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
@@ -1251,6 +1252,12 @@ contains
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
+         end do
+         ! Enforce flux consistency between levels
+         do lvl=this%amr%clvl(),1,-1
+            call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+            call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
          end do
       else
          ! Use psolver's solution and its internal ghosts
