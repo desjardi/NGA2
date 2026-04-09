@@ -399,6 +399,7 @@ contains
 
    !> Override on_clear: delete level
    subroutine on_clear(this,lvl)
+      implicit none
       class(amrcomp), intent(inout) :: this
       integer, intent(in) :: lvl
       ! Parent handles face velocities, divergence, and conserved quantities
@@ -416,6 +417,7 @@ contains
 
    !> Override post_regrid: average down for C/F consistency
    subroutine post_regrid(this,lbase,time)
+      implicit none
       class(amrcomp), intent(inout) :: this
       integer, intent(in) :: lbase
       real(WP), intent(in) :: time
@@ -505,6 +507,7 @@ contains
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface,  only: amrmfab_average_down_face
       use messager, only: die
+      implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
@@ -1088,11 +1091,17 @@ contains
 
    !> Calculate CFL numbers
    subroutine get_cfl(this,dt,cfl)
+      use parallel, only: MPI_REAL_WP
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
+      implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), intent(out) :: cfl
-      integer :: lvl
-      real(WP) :: Cmax,viscmax
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      integer :: lvl,i,j,k,ierr
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW,pVisc,pBeta,pDiff,pT,pC
+      real(WP) :: dxi,dyi,dzi,rho,conv,pgrad,viscmax
       ! Get convective CFL from parent
       call this%amrflow%get_cflc(dt=dt)
       ! Reset CFLs
@@ -1101,78 +1110,54 @@ contains
       this%CFLv_x=0.0_WP; this%CFLv_y=0.0_WP; this%CFLv_z=0.0_WP
       ! Compute CFL at each level (finest level determines dt)
       do lvl=0,this%amr%clvl()
-         ! Max speed of sound
-         Cmax=this%C%norm0(lvl=lvl)
-         ! Max viscosities
-         get_viscmax: block
-            use parallel, only: MPI_REAL_WP
-            use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
-            type(amrex_mfiter) :: mfi
-            type(amrex_box) :: bx
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVisc,pBeta,pDiff,pT
-            integer :: i,j,k,ierr
-            real(WP) :: rho
-            viscmax=0.0_WP
-            call this%amr%mfiter_build(lvl,mfi)
-            do while(mfi%next())
-               ! Get data pointers
-               pQ=>this%Q%mf(lvl)%dataptr(mfi)
-               pVisc=>this%visc%mf(lvl)%dataptr(mfi)
-               pBeta=>this%beta%mf(lvl)%dataptr(mfi)
-               pDiff=>this%diff%mf(lvl)%dataptr(mfi)
-               pT=>this%T%mf(lvl)%dataptr(mfi)
-               ! Loop over interior tiles
-               bx=mfi%tilebox()
-               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  rho=max(pQ(i,j,k,1),this%rho_floor)
-                  !viscmax=max(viscmax,pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)/rho) ! Heat diffusion cfl is incorrect
-                  viscmax=max(viscmax,pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)*pT(i,j,k,1)/max(pQ(i,j,k,5),this%rho_floor))
-               end do; end do; end do
-            end do
-            call this%amr%mfiter_destroy(mfi)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,viscmax,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
-         end block get_viscmax
-         ! Get pressure gradient+convective CFL (based on Kwatra et al)
-         get_pgradmax: block
-            use parallel, only: MPI_REAL_WP
-            use mpi_f08, only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_MAX
-            type(amrex_mfiter) :: mfi
-            type(amrex_box) :: bx
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW
-            integer :: i,j,k,ierr
-            real(WP) :: dxi,dyi,dzi,rho,conv,pgrad
-            ! Get mesh size
-            dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
-            ! Loop over tiles
-            call this%amr%mfiter_build(lvl,mfi)
-            do while(mfi%next())
-               ! Get data pointers
-               pQ=>this%Q%mf(lvl)%dataptr(mfi)
-               pP=>this%P%mf(lvl)%dataptr(mfi)
-               pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
-               ! Loop over tile interior
-               bx=mfi%tilebox()
-               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  rho=max(pQ(i,j,k,1),this%rho_floor)
-                  conv=abs(pUVW(i,j,k,1))*dxi+abs(pUVW(i,j,k,2))*dyi+abs(pUVW(i,j,k,3))*dzi
-                  pgrad=(abs(pP(i+1,j,k,1)-pP(i-1,j,k,1))*0.5_WP*dxi**2+abs(pP(i,j+1,k,1)-pP(i,j-1,k,1))*0.5_WP*dyi**2+abs(pP(i,j,k+1,1)-pP(i,j,k-1,1))*0.5_WP*dzi**2)/rho
-                  this%CFLp=max(this%CFLp,0.5_WP*dt*(conv+sqrt(conv**2+4.0_WP*pgrad)))
-               end do; end do; end do
-            end do
-            call this%amr%mfiter_destroy(mfi)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
-         end block get_pgradmax
-         ! Acoustic
-         if (this%amr%nx.gt.1) this%CFLa_x=max(this%CFLa_x,Cmax*dt/this%amr%dx(lvl))
-         if (this%amr%ny.gt.1) this%CFLa_y=max(this%CFLa_y,Cmax*dt/this%amr%dy(lvl))
-         if (this%amr%nz.gt.1) this%CFLa_z=max(this%CFLa_z,Cmax*dt/this%amr%dz(lvl))
-         ! Viscous
-         if (this%amr%nx.gt.1) this%CFLv_x=max(this%CFLv_x,4.0_WP*viscmax*dt/this%amr%dx(lvl)**2)
-         if (this%amr%ny.gt.1) this%CFLv_y=max(this%CFLv_y,4.0_WP*viscmax*dt/this%amr%dy(lvl)**2)
-         if (this%amr%nz.gt.1) this%CFLv_z=max(this%CFLv_z,4.0_WP*viscmax*dt/this%amr%dz(lvl)**2)
+         ! Get mesh spacing
+         dxi=1.0_WP/this%amr%dx(lvl)
+         dyi=1.0_WP/this%amr%dy(lvl)
+         dzi=1.0_WP/this%amr%dz(lvl)
+         ! Loop over tiles
+         call this%amr%mfiter_build(lvl,mfi)
+         do while(mfi%next())
+            ! Get data pointers
+            pQ=>this%Q%mf(lvl)%dataptr(mfi)
+            pVisc=>this%visc%mf(lvl)%dataptr(mfi)
+            pBeta=>this%beta%mf(lvl)%dataptr(mfi)
+            pDiff=>this%diff%mf(lvl)%dataptr(mfi)
+            pT=>this%T%mf(lvl)%dataptr(mfi)
+            pP=>this%P%mf(lvl)%dataptr(mfi)
+            pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+            pC=>this%C%mf(lvl)%dataptr(mfi)
+            ! Loop over interior tiles
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rho=max(pQ(i,j,k,1),this%rho_floor)
+               ! Viscous-like CFL
+               !viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)/rho) ! Heat diffusion cfl is incorrect
+               viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)*pT(i,j,k,1)/max(pQ(i,j,k,5),this%rho_floor))
+               if (this%amr%nx.gt.1) this%CFLv_x=max(this%CFLv_x,4.0_WP*viscmax*dt*dxi**2)
+               if (this%amr%ny.gt.1) this%CFLv_y=max(this%CFLv_y,4.0_WP*viscmax*dt*dyi**2)
+               if (this%amr%nz.gt.1) this%CFLv_z=max(this%CFLv_z,4.0_WP*viscmax*dt*dzi**2)
+               ! Convective+pressure CFL
+               conv=abs(pUVW(i,j,k,1))*dxi+abs(pUVW(i,j,k,2))*dyi+abs(pUVW(i,j,k,3))*dzi
+               pgrad=(abs(pP(i+1,j,k,1)-pP(i-1,j,k,1))*0.5_WP*dxi**2+abs(pP(i,j+1,k,1)-pP(i,j-1,k,1))*0.5_WP*dyi**2+abs(pP(i,j,k+1,1)-pP(i,j,k-1,1))*0.5_WP*dzi**2)/rho
+               this%CFLp=max(this%CFLp,0.5_WP*dt*(conv+sqrt(conv**2+4.0_WP*pgrad)))
+               ! Acoustic CFL
+               if (this%amr%nx.gt.1) this%CFLa_x=max(this%CFLa_x,(abs(pUVW(i,j,k,1))+pC(i,j,k,1))*dt*dxi)
+               if (this%amr%ny.gt.1) this%CFLa_y=max(this%CFLa_y,(abs(pUVW(i,j,k,2))+pC(i,j,k,1))*dt*dyi)
+               if (this%amr%nz.gt.1) this%CFLa_z=max(this%CFLa_z,(abs(pUVW(i,j,k,3))+pC(i,j,k,1))*dt*dzi)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+         ! Postprocess CFLs
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_x,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_y,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_z,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLv_x,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLv_y,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLv_z,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       end do
       ! Return max CFL
-      cfl=max(this%CFLp,this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
+      cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z)
       if (.not.this%use_projection) cfl=max(cfl,this%CFLa_x,this%CFLa_y,this%CFLa_z)
    end subroutine get_cfl
 

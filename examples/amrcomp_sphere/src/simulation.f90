@@ -54,7 +54,10 @@ module simulation
    !> Sponge parameters
    real(WP) :: R_spg=3.0_WP
    real(WP) :: L_spg=1.0_WP
-   
+
+   !> Adimensional force on IB
+   real(WP), dimension(3) :: Fib
+
 contains
 
    !> Smooth Heaviside function
@@ -197,7 +200,7 @@ contains
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
-       case (1)  ! X-LOW: Dirichlet inflow with pre-shock (stationary) values
+       case (1)  ! X-LOW: Dirichlet inflow with post-shock values
          select case (comp)
           case ('U')  ! Staggered U=u2
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
@@ -477,7 +480,7 @@ contains
          call fs%add_viscartif(dt=time%dt)
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
       end block init_regridding
       
@@ -507,6 +510,7 @@ contains
          ! Get solver info and cfl
          call fs%get_info()
          call fs%get_cfl(dt=time%dt,cfl=time%cfl)
+         call get_force()
          ! Create simulation monitor
          mfile=monitor(amRoot=amr%amRoot,name='simulation')
          call mfile%add_column(time%n,'Timestep number')
@@ -520,6 +524,7 @@ contains
          call mfile%add_column(fs%Pmax,'Pmax')
          call mfile%add_column(fs%Qmin(1),'RHOmin')
          call mfile%add_column(fs%Qmax(1),'RHOmax')
+         call mfile%add_column(Fib(1),'Cd')
          call mfile%write()
          ! Create CFL monitor
          cflfile=monitor(amRoot=amr%amRoot,name='cfl')
@@ -651,7 +656,7 @@ contains
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
 
          ! Visualization output
@@ -659,6 +664,7 @@ contains
 
          ! Perform and output monitoring
          call fs%get_info()
+         call get_force()
          call mfile%write()
          call consfile%write()
          call cflfile%write()
@@ -758,5 +764,142 @@ contains
       call consfile%finalize()
       call gridfile%finalize()
    end subroutine simulation_final
+
+   !> Compute force on sphere from divergence of stress tensor inside IB
+   subroutine get_force()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab
+      use mpi_f08,   only: MPI_SUM,MPI_ALLREDUCE,MPI_IN_PLACE
+      use parallel,  only: MPI_REAL_WP
+      use mathtools, only: Pi
+      implicit none
+      integer :: lvl,i,j,k,ierr
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx,fbx
+      type(amrex_multifab) :: Sx,Sy,Sz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pUVW,pVisc,pBeta,pP,pVF
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSx,pSy,pSz
+      real(WP) :: dxi,dyi,dzi,vol,mu_f,beta_f,div
+      real(WP), dimension(3,3) :: gradU
+      ! Zero out force
+      Fib=0.0_WP
+      ! Work at finest level only
+      lvl=amr%clvl()
+      ! Get grid spacing
+      dxi=1.0_WP/amr%dx(lvl)
+      dyi=1.0_WP/amr%dy(lvl)
+      dzi=1.0_WP/amr%dz(lvl)
+      ! Build face-centered stress MultiFabs (3 force components each)
+      call amr%mfab_build(lvl,Sx,ncomp=3,nover=0,atface=[.true. ,.false.,.false.]); call Sx%setval(0.0_WP)
+      call amr%mfab_build(lvl,Sy,ncomp=3,nover=0,atface=[.false.,.true. ,.false.]); call Sy%setval(0.0_WP)
+      call amr%mfab_build(lvl,Sz,ncomp=3,nover=0,atface=[.false.,.false.,.true. ]); call Sz%setval(0.0_WP)
+      ! Fill face-centered stress fluxes
+      call amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         ! Get pointers to data
+         pUVW =>fs%UVW%mf(lvl)%dataptr(mfi)
+         pVisc=>fs%visc%mf(lvl)%dataptr(mfi)
+         pBeta=>fs%beta%mf(lvl)%dataptr(mfi)
+         pP   =>fs%P%mf(lvl)%dataptr(mfi)
+         pSx  =>Sx%dataptr(mfi)
+         pSy  =>Sy%dataptr(mfi)
+         pSz  =>Sz%dataptr(mfi)
+         ! X-face stresses
+         fbx=mfi%nodaltilebox(1)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            ! Get velocity gradient
+            gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=0.25_WP*dzi*(pUVW(i-1,j,k+1,1)-pUVW(i-1,j,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=dxi*(pUVW(i,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=0.25_WP*dyi*(pUVW(i-1,j+1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=0.25_WP*dzi*(pUVW(i-1,j,k+1,2)-pUVW(i-1,j,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=dxi*(pUVW(i,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=0.25_WP*dyi*(pUVW(i-1,j+1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=0.25_WP*dzi*(pUVW(i-1,j,k+1,3)-pUVW(i-1,j,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            ! Get face viscosities
+            mu_f=0.5_WP*sum(pVisc(i-1:i,j,k,1)); beta_f=0.5_WP*sum(pBeta(i-1:i,j,k,1))
+            ! Compute face stresses
+            pSx(i,j,k,1)=-0.5_WP*sum(pP(i-1:i,j,k,1))+mu_f*2.0_WP*gradU(1,1)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+            pSx(i,j,k,2)=mu_f*(gradU(2,1)+gradU(1,2))
+            pSx(i,j,k,3)=mu_f*(gradU(3,1)+gradU(1,3))
+         end do; end do; end do
+         ! Y-face stresses
+         fbx=mfi%nodaltilebox(2)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            ! Get velocity gradient
+            gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=0.25_WP*dzi*(pUVW(i,j-1,k+1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j-1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=dyi*(pUVW(i,j,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=0.25_WP*dzi*(pUVW(i,j-1,k+1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j-1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=dyi*(pUVW(i,j,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=0.25_WP*dzi*(pUVW(i,j-1,k+1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            ! Get face viscosities
+            mu_f=0.5_WP*sum(pVisc(i,j-1:j,k,1)); beta_f=0.5_WP*sum(pBeta(i,j-1:j,k,1))
+            ! Compute face stresses
+            pSy(i,j,k,1)=mu_f*(gradU(1,2)+gradU(2,1))
+            pSy(i,j,k,2)=-0.5_WP*sum(pP(i,j-1:j,k,1))+mu_f*2.0_WP*gradU(2,2)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+            pSy(i,j,k,3)=mu_f*(gradU(3,2)+gradU(2,3))
+         end do; end do; end do
+         ! Z-face stresses
+         fbx=mfi%nodaltilebox(3)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            ! Get velocity gradient
+            gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=dzi*(pUVW(i,j,k,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j,k-1,2)-pUVW(i-1,j,k-1,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=0.25_WP*dyi*(pUVW(i,j+1,k-1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=dzi*(pUVW(i,j,k,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j,k-1,3)-pUVW(i-1,j,k-1,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=0.25_WP*dyi*(pUVW(i,j+1,k-1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=dzi*(pUVW(i,j,k,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            ! Get face viscosities
+            mu_f=0.5_WP*sum(pVisc(i,j,k-1:k,1)); beta_f=0.5_WP*sum(pBeta(i,j,k-1:k,1))
+            ! Compute face stresses
+            pSz(i,j,k,1)=mu_f*(gradU(1,3)+gradU(3,1))
+            pSz(i,j,k,2)=mu_f*(gradU(2,3)+gradU(3,2))
+            pSz(i,j,k,3)=-0.5_WP*sum(pP(i,j,k-1:k,1))+mu_f*2.0_WP*gradU(3,3)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+         end do; end do; end do
+      end do
+      call amr%mfiter_destroy(mfi)
+      ! Take divergence over IB cells and accumulate force
+      call amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         ! Get pointers to data
+         pSx=>Sx%dataptr(mfi)
+         pSy=>Sy%dataptr(mfi)
+         pSz=>Sz%dataptr(mfi)
+         pVF=>VF%mf(lvl)%dataptr(mfi)
+         ! Loop over tile
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            ! Skip pure fluid cells
+            if (pVF(i,j,k,1).ge.1.0_WP) cycle
+            ! Increment force
+            vol=(1.0_WP-pVF(i,j,k,1))*amr%cell_vol(lvl)
+            Fib(1)=Fib(1)+(dxi*(pSx(i+1,j,k,1)-pSx(i,j,k,1))+dyi*(pSy(i,j+1,k,1)-pSy(i,j,k,1))+dzi*(pSz(i,j,k+1,1)-pSz(i,j,k,1)))*vol
+            Fib(2)=Fib(2)+(dxi*(pSx(i+1,j,k,2)-pSx(i,j,k,2))+dyi*(pSy(i,j+1,k,2)-pSy(i,j,k,2))+dzi*(pSz(i,j,k+1,2)-pSz(i,j,k,2)))*vol
+            Fib(3)=Fib(3)+(dxi*(pSx(i+1,j,k,3)-pSx(i,j,k,3))+dyi*(pSy(i,j+1,k,3)-pSy(i,j,k,3))+dzi*(pSz(i,j,k+1,3)-pSz(i,j,k,3)))*vol
+         end do; end do; end do
+      end do
+      call amr%mfiter_destroy(mfi)
+      ! Allreduce force and normalize
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Fib,3,MPI_REAL_WP,MPI_SUM,amr%comm,ierr)
+      if (amr%nz.eq.1) then
+         Fib=Fib/(0.5_WP*rho2*u2**2*1.0_WP*amr%dz(lvl))
+      else
+         Fib=Fib/(0.5_WP*rho2*u2**2*Pi*0.25_WP)
+      end if
+      ! Cleanup
+      call amr%mfab_destroy(Sx)
+      call amr%mfab_destroy(Sy)
+      call amr%mfab_destroy(Sz)
+   end subroutine get_force
    
 end module simulation

@@ -1,7 +1,7 @@
 # AMR grid
 Base nx:   32
 Base ny:   32
-Base nz:   8
+Base nz:   32
 Max level: 5
 
 # Regridding parameters
@@ -13,7 +13,7 @@ Tagging Rho:       0.1
 Gamma: 1.4
 
 # Shock parameters
-Mach number:     0.05
+Mach number:     0.3
 Shock location: -0.6
 
 # Viscous parameters
@@ -21,10 +21,10 @@ Reynolds number:   1e4
 Prandtl number:    0.71
 
 # Time integration
-Use projection: .true.
-Max dt:   0.5e-2
-Max CFL:  0.5
-Max time: 50
+Use projection: .false.
+Max dt:   2e-3!1e-2
+Max CFL:  1
+Max time: 10
 
 # Output
-Output period: 0.01
+Output period: 0.1
