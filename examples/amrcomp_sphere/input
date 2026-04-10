@@ -21,8 +21,8 @@ Reynolds number:   1e4
 Prandtl number:    0.71
 
 # Time integration
-Use projection: .false.
-Max dt:   2e-3!1e-2
+Use projection: .true.
+Max dt:   1e-2
 Max CFL:  1
 Max time: 10
 

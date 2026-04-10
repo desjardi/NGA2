@@ -673,14 +673,14 @@ contains
 
    contains
 
-      !> Apply IB forcing - zero Q inside solid
+      !> Apply IB forcing - zero Q inside solid and apply quasi-Neumann
       subroutine apply_ib_forcing()
          use amrex_amr_module, only: amrex_mfiter,amrex_box
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pVF
          real(WP), dimension(:,:,:,:), allocatable :: pQold
-         real(WP) :: sum_VF,sum_VFQ1,sum_VFQ5,myVF
+         real(WP) :: sum_VF,sum_VFQ1,sum_VFQ5
          integer :: i,j,k,lvl,ii,jj,kk
          ! Compressible IB scheme requires updated ghosts for Q
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
