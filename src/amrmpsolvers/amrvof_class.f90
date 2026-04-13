@@ -104,6 +104,7 @@ module amrvof_class
       ! Utilities
       procedure :: store_old              !< Copy current state to old state
       procedure :: fill                   !< Fill VF/CL/CG/PLIC ghosts+BCs
+      procedure :: apply_vofbc            !< VOF BC hook
       ! VOF-PLIC methods
       procedure :: build_plic             !< Reconstruct PLIC from VF and barycenters
       procedure :: build_plicnet          !< PLICnet reconstruction
@@ -257,7 +258,7 @@ contains
 
    !> Initialize the VOF solver
    subroutine initialize(this,amr,name)
-      use amrdata_class, only: amrex_interp_pc
+      use amrdata_class, only: interp_const
       implicit none
       class(amrvof), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
@@ -271,8 +272,8 @@ contains
       ! Store amrgrid pointer
       this%amr=>amr
       ! Initialize VF/VFold as amrdata (all levels, used for tagging + average-down)
-      call this%VF%initialize   (amr,name='VF'   ,ncomp=1,ng=this%nover,interp=amrex_interp_pc); this%VF%parent   =>this
-      call this%VFold%initialize(amr,name='VFold',ncomp=1,ng=this%nover,interp=amrex_interp_pc); this%VFold%parent=>this
+      call this%VF%initialize   (amr,name='VF'   ,ncomp=1,ng=this%nover,interp=interp_const); this%VF%parent   =>this
+      call this%VFold%initialize(amr,name='VFold',ncomp=1,ng=this%nover,interp=interp_const); this%VFold%parent=>this
       ! Initialize surface mesh for visualization
       if (this%calculate_curv) then
          this%smesh=surfmesh(nvar=1,name=trim(this%name)//'_plic')
@@ -768,11 +769,9 @@ contains
                      end if
                   end do; end do; end do
                 case(BC_USER)
-                  if (associated(this%user_vof_bc)) then
-                     bc_bx=amrex_box([i1,j1,k1],[i2,j2,k2])
-                     face=2*dir-1+(1+side)/2
-                     call this%user_vof_bc(lvl=lvl,time=time,face=face,bx=bc_bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
-                  end if
+                  bc_bx=amrex_box([i1,j1,k1],[i2,j2,k2])
+                  face=2*dir-1+(1+side)/2
+                  call this%apply_vofbc(lvl=lvl,time=time,face=face,bx=bc_bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
                end select
             end do; end do
             ! Trivialize pure-cell ghosts at finest
@@ -792,6 +791,19 @@ contains
          call amrex_mfiter_destroy(mfi)
       end subroutine fill_lvl
    end subroutine fill
+
+   !> Default VOF BC hook: forwards to user_vof_bc pointer if set
+   !> Children can override to use their own typed callback instead
+   subroutine apply_vofbc(this,lvl,time,face,bx,pVF,pCL,pCG,pPLIC)
+      implicit none
+      class(amrvof), intent(inout) :: this
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      integer, intent(in) :: face
+      type(amrex_box), intent(in) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: pVF,pCL,pCG,pPLIC
+      if (associated(this%user_vof_bc)) call this%user_vof_bc(lvl=lvl,time=time,face=face,bx=bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
+   end subroutine apply_vofbc
 
    ! ============================================================================
    ! VOF-PLIC METHODS

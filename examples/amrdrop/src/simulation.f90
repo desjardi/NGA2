@@ -272,7 +272,7 @@ contains
       ! Create flow solver
       create_flow_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
-         use amrdata_class,    only: amrex_interp_face_linear
+         use amrdata_class,    only: interp_face_lin
          use amrmpinc_class,   only: BC_GAS
          use amrmg_class,      only: amrmg_outer_pcg_mlmg
          ! Create flow solver
@@ -280,7 +280,7 @@ contains
          ! Set initial conditions
          fs%user_mpinc_init=>drop_init
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
-         if (amr%nz.eq.1) fs%interp_vel=amrex_interp_face_linear
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set densities
          fs%rhoG=1.0_WP; call param_read('Density ratio',fs%rhoL)
          ! Set surface tension coefficient
@@ -306,9 +306,9 @@ contains
 
       ! Create workspace array
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call resUVW%initialize(amr,name='resUVW',ncomp=3,ng=0,interp=amrex_interp_none); call resUVW%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=amrex_interp_none); call Umag%register()
+         use amrdata_class, only: interp_none
+         call resUVW%initialize(amr,name='resUVW',ncomp=3,ng=0,interp=interp_none); call resUVW%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
       end block create_workspace
 
       ! Initialize regridding

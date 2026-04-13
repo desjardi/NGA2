@@ -1,23 +1,21 @@
-!> AMR flow solver class: base class for all single-phase flow solvers
+!> AMR multiphase flow solver class: base class for all multiphase-phase flow solvers
 !> Provides face-centered velocity storage, divergence calculation,
 !> convective CFL calculation, and outflow correction
 !> Provides storage for conserved quantity Q(nQ)
-module amrflow_class
+module amrmpflow_class
    use precision,        only: WP
    use string,           only: str_medium
    use amrdata_class,    only: amrdata,interp_face_div,interp_ublin
    use amrsolver_class,  only: amrsolver
+   use amrvof_class,     only: amrvof
    implicit none
    private
 
    ! Expose type
-   public :: amrflow
+   public :: amrmpflow
 
-   !> AMR flow solver type
-   type, extends(amrsolver) :: amrflow
-
-      ! Overlap size
-      integer :: nover=1
+   !> AMR multiphase flow solver type
+   type, extends(amrvof) :: amrmpflow
 
       ! Face velocities (current and old)
       type(amrdata) :: U,Uold
@@ -43,7 +41,10 @@ module amrflow_class
 
       ! Convective CFLs
       real(WP) :: CFLc_x=0.0_WP,CFLc_y=0.0_WP,CFLc_z=0.0_WP,CFLc=0.0_WP
-      
+
+      ! Cost for mixed cells in load balancing (1.0=same as pure, higher=more expensive)
+      real(WP) :: SLcost=1.0_WP
+
    contains
       ! Type-bound constructor/destructor
       procedure :: initialize
@@ -55,6 +56,8 @@ module amrflow_class
       procedure :: on_remake
       procedure :: on_clear
       procedure :: post_regrid
+      procedure :: tagging
+      procedure :: get_cost
       ! Face velocity fills
       procedure :: fill_velocity_lvl         !< Fill face velocity ghosts at single level
       procedure :: fill_velocity             !< Fill face velocity ghosts on all levels
@@ -68,18 +71,20 @@ module amrflow_class
       procedure :: apply_velbc               !< Velocity BC hook
       procedure :: apply_Qbc                 !< Q BC hook
       ! Utilities
+      procedure :: store_old                 !< Store current state to old state
       procedure :: get_div                   !< Compute divergence (assumes velocity ghosts filled)
       procedure :: get_cflc                  !< Compute convective CFL
       procedure :: correct_outflow           !< Correct outflow for global mass conservation
       ! Print solver info
       procedure :: get_info
-      procedure :: print=>amrflow_print
+      procedure :: print=>amrmpflow_print
       ! Checkpoint I/O
       procedure :: register_checkpoint
       procedure :: restore_checkpoint
-   end type amrflow
+   end type amrmpflow
 
 contains
+
 
    ! ============================================================================
    ! INITIALIZATION / FINALIZATION
@@ -89,17 +94,12 @@ contains
    subroutine initialize(this,amr,name)
       use amrgrid_class, only: amrgrid
       implicit none
-      class(amrflow), target, intent(inout) :: this
+      class(amrmpflow), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
-      ! Set name
-      if (present(name)) then
-         this%name=trim(name)
-      else
-         this%name='UNNAMED_AMRFLOW'
-      end if
-      ! Store amrgrid pointer
-      this%amr=>amr
+      ! Initialize amrvof parent without callback registration
+      this%amrvof%skip_registration=.true.
+      call this%amrvof%initialize(amr,name)
       ! Initialize staggered velocity
       call this%U%initialize(amr,name='U',ncomp=1,ng=this%nover,nodal=[.true. ,.false.,.false.])
       call this%V%initialize(amr,name='V',ncomp=1,ng=this%nover,nodal=[.false.,.true. ,.false.])
@@ -132,7 +132,9 @@ contains
    !> Set parent pointers to provided child
    subroutine set_parent(this)
       implicit none
-      class(amrflow), target, intent(inout) :: this
+      class(amrmpflow), target, intent(inout) :: this
+      this%VF%parent=>this
+      this%VFold%parent=>this
       this%U%parent=>this
       this%V%parent=>this
       this%W%parent=>this
@@ -149,7 +151,7 @@ contains
    !> Finalize the flow solver
    subroutine finalize(this)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       call this%U%finalize()
       call this%V%finalize()
       call this%W%finalize()
@@ -162,7 +164,7 @@ contains
          call this%Qold%finalize()
          deallocate(this%Qmax,this%Qmin,this%Qint)
       end if
-      nullify(this%amr)
+      call this%amrvof%finalize()
    end subroutine finalize
 
    ! ============================================================================
@@ -173,11 +175,13 @@ contains
    subroutine on_init(this,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
+      ! Parent handles VF/VFold + CL/CG/PLIC multifabs
+      call this%amrvof%on_init(lvl,time,ba,dm)
       ! Reset level layouts
       call this%U%reset_level(lvl,ba,dm)
       call this%V%reset_level(lvl,ba,dm)
@@ -207,11 +211,13 @@ contains
    subroutine on_coarse(this,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
+      ! Parent handles VF interpolation and CL/CG/PLIC rebuild
+      call this%amrvof%on_coarse(lvl,time,ba,dm)
       ! Face velocity: allocate then fill with divergence-free interpolation
       call this%U%reset_level(lvl,ba,dm)
       call this%V%reset_level(lvl,ba,dm)
@@ -233,11 +239,13 @@ contains
    subroutine on_remake(this,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(amrex_boxarray), intent(in) :: ba
       type(amrex_distromap), intent(in) :: dm
+      ! Parent handles VF remake and CL/CG/PLIC parallel_copy
+      call this%amrvof%on_remake(lvl,time,ba,dm)
       ! Face velocity: fill with div-free interpolation
       face_vel_remake: block
          use amrex_amr_module, only: amrex_multifab_build,amrex_multifab
@@ -269,8 +277,10 @@ contains
    !> Override on_clear: delete level
    subroutine on_clear(this,lvl)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
+      ! Parent handles VF/VFold + CL/CG/PLIC
+      call this%amrvof%on_clear(lvl)
       ! Clear velocity
       call this%U%clear_level(lvl)
       call this%V%clear_level(lvl)
@@ -290,9 +300,11 @@ contains
    !> Override post_regrid: average down for C/F consistency
    subroutine post_regrid(this,lbase,time)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lbase
       real(WP), intent(in) :: time
+      ! Parent handles VF average-down + fill
+      call this%amrvof%post_regrid(lbase,time)
       ! Average down face velocities and fill ghosts
       call this%average_down_velocity(lbase)
       call this%fill_velocity(time,lbase)
@@ -303,6 +315,71 @@ contains
       end if
    end subroutine post_regrid
 
+   !> Tag cells near interface with regrid_buffer layer growth
+   subroutine tagging(this,lvl,time,tags)
+      use iso_c_binding, only: c_ptr
+      implicit none
+      class(amrmpflow), intent(inout) :: this
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      type(c_ptr), intent(in) :: tags
+      ! Parent handles VF tagging
+      call this%amrvof%tagging(lvl,time,tags)
+   end subroutine tagging
+
+   !> Estimate per-box costs for load balancing
+   !> Cost based on number of mixed cells vs pure cells
+   subroutine get_cost(this,lvl,nboxes,costs,ba)
+      use iso_c_binding, only: c_associated
+      use amrex_amr_module, only: amrex_boxarray,amrex_box,amrex_mfiter,&
+      &                           amrex_mfiter_build,amrex_mfiter_destroy,amrex_intersection
+      use parallel, only: MPI_REAL_WP
+      use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+      use amrvof_class, only: VFlo,VFhi
+      implicit none
+      class(amrmpflow), intent(inout) :: this
+      integer, intent(in) :: lvl,nboxes
+      real(WP), intent(inout) :: costs(nboxes)
+      type(amrex_boxarray), intent(in) :: ba
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: old_bx,new_bx,isect
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      integer :: n,i,j,k,ierr
+      ! Guard: if VF data doesn't exist yet, return uniform costs
+      if (.not.allocated(this%VF%mf)) then; costs=1.0_WP; return; end if
+      if (.not.c_associated(this%VF%mf(lvl)%p)) then; costs=1.0_WP; return; end if
+      ! Coarser levels are never mixed
+      if (lvl.lt.this%amr%clvl()) then
+         do n=1,nboxes
+            new_bx=ba%get_box(n-1)
+            costs(n)=real(new_bx%numpts(),WP)
+         end do
+         return
+      end if
+      ! At finest level, count mixed cells per new box from local old data
+      costs=0.0_WP
+      call amrex_mfiter_build(mfi,this%VF%mf(lvl),tiling=.false.)
+      do while (mfi%next())
+         old_bx=mfi%tilebox()
+         pVF=>this%VF%mf(lvl)%dataptr(mfi)
+         do n=1,nboxes
+            new_bx=ba%get_box(n-1)  ! 0-indexed
+            if (.not.old_bx%intersects(new_bx)) cycle
+            isect=amrex_intersection(old_bx,new_bx)
+            do k=isect%lo(3),isect%hi(3); do j=isect%lo(2),isect%hi(2); do i=isect%lo(1),isect%hi(1)
+               if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
+                  costs(n)=costs(n)+this%SLcost
+               else
+                  costs(n)=costs(n)+1.0_WP
+               end if
+            end do; end do; end do
+         end do
+      end do
+      call amrex_mfiter_destroy(mfi)
+      ! Allreduce: sum partial mixed-cell counts across ranks
+      call MPI_ALLREDUCE(MPI_IN_PLACE,costs,nboxes,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+   end subroutine get_cost
+
    ! ============================================================================
    ! Staggered velocity fills
    ! ============================================================================
@@ -311,7 +388,7 @@ contains
    !> Uses amrdata infrastructure which handles face-centered averaging correctly
    subroutine average_down_velocity_to(this,lvl)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
       call this%U%average_downto(lvl)
       call this%V%average_downto(lvl)
@@ -323,7 +400,7 @@ contains
    !> @param lbase Optional: lowest level to average down to (default 0)
    subroutine average_down_velocity(this,lbase)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in), optional :: lbase
       integer :: lvl,lb
       lb=0; if (present(lbase)) lb=lbase
@@ -338,7 +415,7 @@ contains
       use amrex_interface, only: amrmfab_fillpatch_single,amrmfab_fillpatch_two_faces
       use amrdata_class, only: amrdata_fillbc
       implicit none
-      class(amrflow), target, intent(inout) :: this
+      class(amrmpflow), target, intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(c_ptr) :: ctx_u,ctx_v,ctx_w
@@ -390,7 +467,7 @@ contains
    !> Fill velocity ghost cells on all levels
    subroutine fill_velocity(this,time,lbase)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       real(WP), intent(in) :: time
       integer, intent(in), optional :: lbase
       integer :: lvl,lb
@@ -407,7 +484,7 @@ contains
       use amrex_interface, only: amrmfab_fillcoarsepatch_faces
       use amrdata_class, only: amrdata_fillbc
       implicit none
-      class(amrflow), target, intent(inout) :: this
+      class(amrmpflow), target, intent(inout) :: this
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       type(c_ptr) :: ctx_u,ctx_v,ctx_w
@@ -440,7 +517,7 @@ contains
    !> Sync velocity ghost cells at a single level (no C/F interpolation)
    subroutine sync_velocity_lvl(this,lvl)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl
       call this%U%sync_lvl(lvl)
       call this%V%sync_lvl(lvl)
@@ -450,7 +527,7 @@ contains
    !> Sync velocity ghost cells on all levels
    subroutine sync_velocity(this,lbase)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in), optional :: lbase
       integer :: lvl,lb
       lb=0; if (present(lbase)) lb=lbase
@@ -467,7 +544,7 @@ contains
       use amrex_amr_module, only: amrex_multifab
       use amrdata_class, only: amrdata_fillbc
       implicit none
-      class(amrflow), target, intent(inout) :: this
+      class(amrmpflow), target, intent(inout) :: this
       type(amrex_multifab), intent(inout) :: Udest,Vdest,Wdest
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -537,7 +614,7 @@ contains
       real(WP), intent(in) :: time
       type(amrex_geometry), intent(in) :: geom
       type(amrex_mfiter) :: mfi
-      class(amrflow), pointer :: solver
+      class(amrmpflow), pointer :: solver
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: dlo(3),dhi(3),flo(3),fhi(3)
       integer :: ilo,ihi,jlo,jhi,klo,khi
@@ -546,7 +623,7 @@ contains
 
       ! Get point to solver
       select type (s=>this%parent)
-       class is (amrflow)
+       class is (amrmpflow)
          solver=>s
       end select
 
@@ -705,7 +782,7 @@ contains
       real(WP), intent(in) :: time
       type(amrex_geometry), intent(in) :: geom
       type(amrex_mfiter) :: mfi
-      class(amrflow), pointer :: solver
+      class(amrmpflow), pointer :: solver
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: ilo,ihi,jlo,jhi,klo,khi
       integer, dimension(3) :: dlo,dhi
@@ -716,7 +793,7 @@ contains
 
       ! Access parent solver
       select type (s=>this%parent)
-       class is (amrflow)
+       class is (amrmpflow)
          solver=>s
       end select
 
@@ -753,7 +830,7 @@ contains
    subroutine apply_velbc(this,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl,face
       real(WP), intent(in) :: time
       type(amrex_box), intent(in) :: bx
@@ -765,7 +842,7 @@ contains
    subroutine apply_Qbc(this,lvl,time,face,bx,p)
       use amrex_amr_module, only: amrex_box
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer, intent(in) :: lvl,face
       real(WP), intent(in) :: time
       type(amrex_box), intent(in) :: bx
@@ -776,6 +853,20 @@ contains
    ! UTILITIES
    ! ============================================================================
 
+   !> Copy current state to old state
+   subroutine store_old(this)
+      implicit none
+      class(amrmpflow), intent(inout) :: this
+      ! Store amrvof state
+      call this%amrvof%store_old()
+      ! Store staggered velocity
+      call this%Uold%copy(src=this%U)
+      call this%Vold%copy(src=this%V)
+      call this%Wold%copy(src=this%W)
+      ! Store conserved variables
+      if (this%nQ.gt.0) call this%Qold%copy(src=this%Q)
+   end subroutine store_old
+
    !> Compute divergence of velocity into internal div field, update divmax
    !> Uses composite fine masking so covered coarse cells don't pollute divmax
    subroutine get_div(this)
@@ -784,7 +875,7 @@ contains
       use mpi_f08,  only: MPI_ALLREDUCE,MPI_MAX,MPI_IN_PLACE
       use parallel, only: MPI_REAL_WP
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer :: lvl,i,j,k,ierr
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
@@ -822,7 +913,7 @@ contains
    !> Compute convective CFL numbers
    subroutine get_cflc(this,dt)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       real(WP), intent(in) :: dt
       integer :: lvl
       ! Reset CFLs
@@ -849,7 +940,7 @@ contains
       use amrex_amr_module, only: amrex_box,amrex_mfiter,amrex_bc_foextrap,amrex_imultifab,amrex_imultifab_build,amrex_imultifab_destroy
       use amrex_interface,  only: amrmask_make_fine
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       class(amrdata), intent(in), optional :: VF
       ! Face classification: ftype(dir,side) where dir=1,2,3 and side=1(lo),2(hi)
       integer, parameter :: SKIP=0,FIXED=1,CORR=2,INTEGRATE=1,CORRECT=2
@@ -865,7 +956,7 @@ contains
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pVF
       integer, dimension(:,:,:,:), contiguous, pointer :: pMask
       ! Sanity check
-      if (present(VF)) then; if (VF%ng.lt.1) call die('[amrflow correct_outflow] VF must have at least 1 ghost cell'); end if
+      if (present(VF)) then; if (VF%ng.lt.1) call die('[amrmpflow correct_outflow] VF must have at least 1 ghost cell'); end if
       ! Classify faces by dir and side
       per=[this%amr%xper,this%amr%yper,this%amr%zper]
       ftype=SKIP; has_corr=.false.
@@ -993,8 +1084,10 @@ contains
    !> Get solver information: min/max velocity and divergence, Q stats
    subroutine get_info(this)
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       integer :: lvl,n
+      ! Get VF info from parent
+      call this%amrvof%get_info()
       ! First compute divergence (this updates divmax)
       call this%get_div()
       ! Initialize min/max values
@@ -1023,16 +1116,16 @@ contains
    end subroutine get_info
 
    !> Print solver info to screen
-   subroutine amrflow_print(this)
+   subroutine amrmpflow_print(this)
       use messager, only: log
       use string, only: str_long,itoa
       implicit none
-      class(amrflow), intent(in) :: this
+      class(amrmpflow), intent(in) :: this
       character(len=str_long) :: message
-      call log("Flow solver: "//trim(this%name))
+      call log("Multiphase flow solver: "//trim(this%name))
       call log("  Grid: "//trim(this%amr%name))
       call log("    nQ: "//itoa(this%nQ))
-   end subroutine amrflow_print
+   end subroutine amrmpflow_print
 
    ! ============================================================================
    ! CHECKPOINT IO
@@ -1042,11 +1135,15 @@ contains
    subroutine register_checkpoint(this,io)
       use amrio_class, only: amrio
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       class(amrio), intent(inout) :: io
+      ! VOF data is registered via parent
+      call this%amrvof%register_checkpoint(io)
+      ! Register staggered velocity components
       call io%add_data(this%U,'U')
       call io%add_data(this%V,'V')
       call io%add_data(this%W,'W')
+      ! Registered conserved variables
       if (this%nQ.gt.0) call io%add_data(this%Q,'Q')
    end subroutine register_checkpoint
 
@@ -1054,17 +1151,21 @@ contains
    subroutine restore_checkpoint(this,io,dirname,time)
       use amrio_class, only: amrio
       implicit none
-      class(amrflow), intent(inout) :: this
+      class(amrmpflow), intent(inout) :: this
       class(amrio), intent(inout) :: io
       character(len=*), intent(in) :: dirname
       real(WP), intent(in) :: time
+      ! VOF data is restored via parent
+      call this%amrvof%restore_checkpoint(io,dirname,time)
+      ! Restore staggered velocity components
       call io%read_data(dirname,this%U,'U')
       call io%read_data(dirname,this%V,'V')
       call io%read_data(dirname,this%W,'W')
+      ! Restore conserved variables
       if (this%nQ.gt.0) call io%read_data(dirname,this%Q,'Q')
       ! Fill ghost cells (VisMF reads valid data only)
       call this%fill_velocity(time=time)
       if (this%nQ.gt.0) call this%Q%fill(time=time)
    end subroutine restore_checkpoint
-
-end module amrflow_class
+   
+end module amrmpflow_class
