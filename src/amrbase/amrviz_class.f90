@@ -696,8 +696,8 @@ contains
       class(amrviz), intent(in) :: this
       character(len=*), intent(in) :: srf_name
       integer, intent(in) :: rank
-      character(len=str_long) :: filename, dirname
-      character(len=str_medium) :: basename
+      character(len=str_long) :: filename,dirname
+      character(len=str_medium) :: basename,time_str
       integer :: iunit, ierr, n
       
       ! Only rank 0 writes PVD
@@ -714,7 +714,8 @@ contains
       
       do n = 1, this%ntime
          write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), n
-         write(iunit,'(a,es18.10,a,a,a)') '    <DataSet timestep="', this%time(n), &
+         write(time_str,'(es17.10)') this%time(n)
+         write(iunit,'(a,a,a,a,a)') '    <DataSet timestep="', trim(adjustl(time_str)), &
             '" file="', trim(basename), '"/>'
       end do
       

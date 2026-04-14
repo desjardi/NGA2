@@ -25,7 +25,7 @@ module simulation
 
    ! Solver data
    type(amrmpinc), target :: fs
-   type(amrdata) :: resUVW,Umag
+   type(amrdata) :: dQdt,Umag
 
    ! Visualization
    type(amrviz) :: viz
@@ -99,39 +99,30 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pUVW
-      real(WP) :: dx,dy,dz,dxi,dyi,dzi,gradU_mag,Re_cell
-      real(WP), dimension(3,3) :: gradU
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
+      real(WP) :: lapU,lapV,lapW,u_sgs,Re
       integer :: i,j,k
       tags=tags_ptr
       ! Get mesh spacing
-      dx=solver%amr%dx(lvl); dxi=1.0_WP/dx
-      dy=solver%amr%dy(lvl); dyi=1.0_WP/dy
-      dz=solver%amr%dz(lvl); dzi=1.0_WP/dz
+      dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
+      dy=solver%amr%dy(lvl); dyi2=1.0_WP/dy**2
+      dz=solver%amr%dz(lvl); dzi2=1.0_WP/dz**2
+      delta=solver%amr%min_meshsize(lvl); delta2=delta**2
       call solver%amr%mfiter_build(lvl,mfi)
       do while (mfi%next())
          tagarr=>tags%dataPtr(mfi)
-         pUVW=>solver%UVW%mf(lvl)%dataptr(mfi)
+         pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! No refinement 5D from the outflow
-            if (solver%amr%xlo+(real(i,WP)+0.5_WP)*dx.gt.solver%amr%xhi-5.0_WP) cycle
-            ! Velocity gradient tensor
-            gradU(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
-            gradU(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
-            gradU(3,1)=0.5_WP*dzi*(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
-            gradU(1,2)=0.5_WP*dxi*(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
-            gradU(2,2)=0.5_WP*dyi*(pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
-            gradU(3,2)=0.5_WP*dzi*(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
-            gradU(1,3)=0.5_WP*dxi*(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
-            gradU(2,3)=0.5_WP*dyi*(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
-            gradU(3,3)=0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
-            ! |∇u| = sqrt(sum of all gradients squared)
-            gradU_mag=sqrt(sum(gradU**2))
-            ! Normalize into a local gas Reynolds number
-            Re_cell=solver%rhoG*gradU_mag*solver%amr%min_meshsize(lvl)**2/viscG_mol
-            ! Tagged based on cell Re value
-            if (Re_cell.gt.Re_tag) tagarr(i,j,k,1)=SETtag
+            ! Laplacian of velocity Q=UVW
+            lapU=(pQ(i+1,j,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i-1,j,k,1))*dxi2+(pQ(i,j+1,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j-1,k,1))*dyi2+(pQ(i,j,k+1,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j,k-1,1))*dzi2
+            lapV=(pQ(i+1,j,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i-1,j,k,2))*dxi2+(pQ(i,j+1,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j-1,k,2))*dyi2+(pQ(i,j,k+1,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j,k-1,2))*dzi2
+            lapW=(pQ(i+1,j,k,3)-2.0_WP*pQ(i,j,k,3)+pQ(i-1,j,k,3))*dxi2+(pQ(i,j+1,k,3)-2.0_WP*pQ(i,j,k,3)+pQ(i,j-1,k,3))*dyi2+(pQ(i,j,k+1,3)-2.0_WP*pQ(i,j,k,3)+pQ(i,j,k-1,3))*dzi2
+            ! SGS Reynolds number
+            u_sgs=0.2_WP*sqrt(lapU**2+lapV**2+lapW**2)*delta2
+            Re=u_sgs*delta/viscG_mol
+            if (Re.gt.Re_tag) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
@@ -140,30 +131,30 @@ contains
    !> Dirichlet BC: uniform inflow at 1 at xlo/xhi for U, 0 for V/W
    subroutine dirichlet_velocity(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
-      class(amrmpinc), intent(in) :: solver
+      class(amrmpinc), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
       character(len=1), intent(in) :: comp
-      real(WP), dimension(:,:,:,:), pointer, intent(inout) :: p
-      integer :: i,j,k,ic
-      ! Find component to modify
-      if (size(p,4).eq.1) then; ic=1 ! Staggered velocity has one component
-      else; ic=merge(1,merge(2,3,comp.eq.'V'),comp.eq.'U')  ! cell-centered: U→1, V→2, W→3
-      end if
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
+      integer :: i,j,k
       select case (face)
        case (1)  ! Inflow in X-
          select case (comp)
-          ! U=1
-          case ('U')
+          case ('U')  ! Staggered U = 1
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               p(i,j,k,ic)=1.0_WP
+               p(i,j,k,1)=1.0_WP
             end do; end do; end do
-          ! V=0, W=0
-          case ('V','W')
+          case ('V','W')  ! Staggered V,W = 0
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               p(i,j,k,ic)=0.0_WP
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered: U=1, V=0, W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=1.0_WP
+               p(i,j,k,2)=0.0_WP
+               p(i,j,k,3)=0.0_WP
             end do; end do; end do
          end select
       end select
@@ -181,7 +172,7 @@ contains
       type(amrex_distromap), intent(in) :: dm
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pU,pUVW
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pU,pQ
       real(WP), dimension(3) :: BL,BG  ! Dummy barycenters
       real(WP) :: dx,dy,dz,VF
       integer :: i,j,k
@@ -193,7 +184,7 @@ contains
       do while (mfi%next())
          ! Get pointers to data
          pVF=>solver%VF%mf(lvl)%dataptr(mfi)
-         pUVW=>solver%UVW%mf(lvl)%dataptr(mfi)
+         pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          pU=>solver%U%mf(lvl)%dataptr(mfi)
          if (lvl.eq.solver%amr%maxlvl) then
             pCL=>solver%CL%dataptr(mfi)
@@ -278,7 +269,7 @@ contains
          ! Create flow solver
          call fs%initialize(amr,name='drop')
          ! Set initial conditions
-         fs%user_mpinc_init=>drop_init
+         fs%user_init=>drop_init
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set densities
@@ -293,21 +284,21 @@ contains
          fs%psolver%tol_rel=1.0e-5_WP
          ! Set boundary conditions
          fs%lo_bc(1)=BC_GAS
-         fs%UVW%lo_bc(1,:)=amrex_bc_ext_dir
-         fs%UVW%hi_bc(1,:)=amrex_bc_foextrap
+         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
+         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
          fs%U%lo_bc(1,1)=amrex_bc_ext_dir
          fs%V%lo_bc(1,1)=amrex_bc_ext_dir
          fs%W%lo_bc(1,1)=amrex_bc_ext_dir
          fs%U%hi_bc(1,1)=amrex_bc_foextrap
          fs%V%hi_bc(1,1)=amrex_bc_foextrap
          fs%W%hi_bc(1,1)=amrex_bc_foextrap
-         fs%user_mpinc_bc=>dirichlet_velocity
+         fs%user_bc=>dirichlet_velocity
       end block create_flow_solver
 
       ! Create workspace array
       create_workspace: block
          use amrdata_class, only: interp_none
-         call resUVW%initialize(amr,name='resUVW',ncomp=3,ng=0,interp=interp_none); call resUVW%register()
+         call dQdt%initialize(amr,name='dQdt',ncomp=3,ng=0,interp=interp_none); call dQdt%register()
          call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
       end block create_workspace
 
@@ -317,7 +308,7 @@ contains
          regrid_evt=event(time=time,name='Regrid')
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
-         fs%user_mpinc_tagging=>my_tagger
+         fs%user_tagging=>my_tagger
          call param_read('Tagging Reynolds',Re_tag)
          ! Create initial grid from scratch or restore from checkpoint
          if (restarted) then
@@ -332,7 +323,7 @@ contains
             call fs%build_plic(time%t)
             ! Initialize face velocities
             call fs%build_subVF()
-            call fs%interp_vel_to_face()
+            call fs%get_face_velocity()
             call fs%average_down_velocity()
             call fs%fill_velocity(time=time%t)
          end if
@@ -340,7 +331,7 @@ contains
          call get_viscosity()
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag
-         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
       end block init_regridding
 
       ! Initialize checkpoint save event
@@ -359,9 +350,9 @@ contains
          ! Create visualization object
          call viz%initialize(amr,'amrdrop',use_hdf5=.false.)
          call viz%add_scalar(Umag,1,'Umag')
-         call viz%add_scalar(fs%UVW,1,'U')
-         call viz%add_scalar(fs%UVW,2,'V')
-         call viz%add_scalar(fs%UVW,3,'W')
+         call viz%add_scalar(fs%Q,1,'U')
+         call viz%add_scalar(fs%Q,2,'V')
+         call viz%add_scalar(fs%Q,3,'W')
          call viz%add_scalar(fs%visc,1,'visc')
          call viz%add_scalar(fs%P,1,'pressure')
          call viz%add_scalar(fs%VF,1,'VF')
@@ -443,31 +434,31 @@ contains
          do while (time%it.le.time%itmax)
 
             ! Build mid-time velocity: U^{mid} = 0.5*(U + Uold)
-            call fs%UVW%lincomb(a=0.5_WP,src1=fs%UVWold,b=0.5_WP,src2=fs%UVW)
+            call fs%Q%lincomb(a=0.5_WP,src1=fs%Qold,b=0.5_WP,src2=fs%Q)
             call fs%U%lincomb(a=0.5_WP,src1=fs%Uold,b=0.5_WP,src2=fs%U)
             call fs%V%lincomb(a=0.5_WP,src1=fs%Vold,b=0.5_WP,src2=fs%V)
             call fs%W%lincomb(a=0.5_WP,src1=fs%Wold,b=0.5_WP,src2=fs%W)
 
             ! Increment velocity with advection+viscous terms
-            call fs%get_dUVWdt(dUVWdt=resUVW,dt=time%dt,time=time%t)
-            call fs%UVW%lincomb(a=1.0_WP,src1=fs%UVWold,b=time%dt,src2=resUVW)
-            call fs%UVW%average_down(); call fs%UVW%fill(time%t)
+            call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
+            call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
+            call fs%Q%average_down(); call fs%Q%fill(time%t)
 
             ! Rebuild PLIC and sub-cell VF
             call fs%build_plic(time%t)
             call fs%build_subVF()
 
             ! Interpolate velocity to the faces
-            call fs%interp_vel_to_face()
+            call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%correct_both_velocities(scale=time%dt,phi=fs%P)
+            call fs%add_pressure(scale=time%dt,phi=fs%P)
 
             ! Add surface tension to both velocities
             call fs%add_surface_tension(scale=time%dt)
 
             ! Average down and fill ghosts
-            call fs%UVW%average_down(); call fs%UVW%fill(time=time%t)
+            call fs%Q%average_down(); call fs%Q%fill(time=time%t)
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
 
             ! Correct outflow for mass conservation
@@ -479,13 +470,13 @@ contains
             call fs%psolver%solve(rhs=fs%div)
 
             ! Correct both velocities with pressure increment
-            call fs%correct_both_velocities(scale=time%dt)
+            call fs%add_pressure(scale=time%dt)
 
             ! Add pressure increment
             call fs%P%add(src=fs%psolver%sol)
 
             ! Average down and fill ghosts
-            call fs%UVW%average_down(); call fs%UVW%fill(time=time%t)
+            call fs%Q%average_down(); call fs%Q%fill(time=time%t)
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
 
             ! Increment sub-iteration counter
@@ -504,7 +495,7 @@ contains
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag
-         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
+         call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
 
          ! Monitor output
          call fs%get_info()
@@ -536,7 +527,7 @@ contains
       call regrid_evt%finalize()
       ! Finalize solver
       call fs%finalize()
-      call resUVW%finalize()
+      call dQdt%finalize()
       call Umag%finalize()
       ! Finalize visualization
       call viz%finalize()

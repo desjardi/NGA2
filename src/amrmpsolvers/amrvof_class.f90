@@ -156,7 +156,7 @@ module amrvof_class
          real(WP), intent(in) :: time
          integer, intent(in) :: face                 !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
          type(amrex_box), intent(in) :: bx           !< Ghost region to fill
-         real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: pVF,pCL,pCG,pPLIC
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
       end subroutine vof_bc_iface
    end interface
 
@@ -801,7 +801,7 @@ contains
       real(WP), intent(in) :: time
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: pVF,pCL,pCG,pPLIC
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
       if (associated(this%user_vof_bc)) call this%user_vof_bc(lvl=lvl,time=time,face=face,bx=bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
    end subroutine apply_vofbc
 

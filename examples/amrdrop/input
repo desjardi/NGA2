@@ -11,8 +11,8 @@ Tagging Reynolds: 10
 # Flow parameters
 Density ratio:   1e3
 Weber number:    15
-Reynolds number: 2e3
-Viscosity ratio: 1
+Reynolds number: 5e3
+Viscosity ratio: 50
 
 # Time integration
 Max time: 100
