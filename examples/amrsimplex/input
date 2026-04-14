@@ -31,4 +31,4 @@ Max CFL:  0.9
 # Output
 Output period:     1e-4
 Checkpoint period: 1e-3
-Restart from:      restart/RSA_8.00000E-03
+Restart from:      !restart/RSA_8.00000E-03

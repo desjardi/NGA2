@@ -121,7 +121,7 @@ contains
             lapW=(pQ(i+1,j,k,3)-2.0_WP*pQ(i,j,k,3)+pQ(i-1,j,k,3))*dxi2+(pQ(i,j+1,k,3)-2.0_WP*pQ(i,j,k,3)+pQ(i,j-1,k,3))*dyi2+(pQ(i,j,k+1,3)-2.0_WP*pQ(i,j,k,3)+pQ(i,j,k-1,3))*dzi2
             ! SGS Reynolds number
             u_sgs=0.2_WP*sqrt(lapU**2+lapV**2+lapW**2)*delta2
-            Re=u_sgs*delta/viscG_mol
+            Re=solver%rhoG*u_sgs*delta/viscG_mol
             if (Re.gt.Re_tag) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
