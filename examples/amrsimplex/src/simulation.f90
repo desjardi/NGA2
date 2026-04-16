@@ -122,7 +122,8 @@ contains
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
-      use amrgrid_class,    only: SETtag
+      use amrgrid_class,    only: SETtag,CLRtag
+      use amrmpinc_class,   only: VFlo,VFhi
       class(amrmpinc), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -131,9 +132,9 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF
       real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
-      real(WP) :: lapU,lapV,lapW,u_sgs,Re,dist
+      real(WP) :: lapU,lapV,lapW,u_sgs,Re,dist,VFmin,VFmax
       integer :: i,j,k
       tags=tags_ptr
       ! Get mesh spacing
@@ -145,6 +146,7 @@ contains
       do while (mfi%next())
          tagarr=>tags%dataPtr(mfi)
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
+         pVF=>solver%VF%mf(lvl)%dataptr(mfi)
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             ! No refinement in the last 10% of the domain from the outflow
@@ -162,6 +164,12 @@ contains
             &                      solver%amr%ylo+(real(j,WP)+0.5_WP)*dy, &
             &                      solver%amr%zlo+(real(k,WP)+0.5_WP)*dz],time)
             if (abs(dist).lt.delta) tagarr(i,j,k,1)=SETtag
+            ! Final, reduce tagging near mixture cells in the walls
+            if (dist.le.-dx) then
+               VFmin=minval(pVF(i-1:i+1,j-1:j+1,k-1:k+1,1))
+               VFmax=maxval(pVF(i-1:i+1,j-1:j+1,k-1:k+1,1))
+               if (VFmin.gt.VFhi.or.VFmax.lt.VFlo) tagarr(i,j,k,1)=CLRtag
+            end if
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
