@@ -8,7 +8,7 @@ module amrviz_class
    use amrgrid_class,  only: amrgrid
    use amrdata_class,  only: amrdata
    use surfmesh_class, only: surfmesh
-   use mpi_f08,        only: MPI_Comm,MPI_BARRIER,MPI_BCAST,MPI_INTEGER,MPI_COMM_SIZE,MPI_COMM_RANK
+   use mpi_f08,        only: MPI_BARRIER,MPI_BCAST,MPI_ALLREDUCE,MPI_IN_PLACE,MPI_INTEGER,MPI_SUM
    use parallel,       only: MPI_REAL_WP
    use amrex_interface, only: amrplotfile_write_hdf5,amrplotfile_write_native,amrplotfile_read_time
    use amrex_amr_module, only: amrex_multifab,amrex_mfiter,amrex_box, &
@@ -551,19 +551,15 @@ contains
       integer(4) :: header_size
       real(WP), dimension(:), allocatable :: pts_data
       integer(4), dimension(:), allocatable :: conn_data, off_data
-      integer :: nproc, rank
-      
-      ! Get MPI info
-      call MPI_COMM_SIZE(this%amr%comm, nproc, ierr)
-      call MPI_COMM_RANK(this%amr%comm, rank, ierr)
+      integer :: nPoly
       
       ! Construct filename with timestep
       dirname = 'amrviz/'//trim(this%name)
       write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), this%ntime
       filename = trim(dirname)//'/'//trim(basename)
       
-      ! Rank 0 creates header
-      if (rank.eq.0) then
+      ! Root creates header
+      if (this%amr%amRoot) then
          open(newunit=iunit, file=trim(filename), status='replace', action='write', iostat=ierr)
          write(iunit,'(a)') '<?xml version="1.0"?>'
          write(iunit,'(a)') '<VTKFile type="PolyData" version="1.0" byte_order="LittleEndian" header_type="UInt32">'
@@ -573,8 +569,8 @@ contains
       call MPI_BARRIER(this%amr%comm, ierr)
       
       ! Each rank writes its data sequentially
-      do irank = 0, nproc - 1
-         if (irank.eq.rank) then
+      do irank = 0, this%amr%nproc - 1
+         if (irank.eq.this%amr%rank) then
             open(newunit=iunit, file=trim(filename), status='old', position='append', action='write', iostat=ierr)
             
             ! Write this rank's piece
@@ -675,9 +671,16 @@ contains
          call MPI_BARRIER(this%amr%comm, ierr)
       end do
       
+      ! Check how many polygons were written
+      nPoly=smesh%nPoly; call MPI_ALLREDUCE(MPI_IN_PLACE,nPoly,1,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+
       ! Rank 0 writes footer
-      if (rank.eq.0) then
+      if (this%amr%amRoot) then
          open(newunit=iunit, file=trim(filename), status='old', position='append', action='write', iostat=ierr)
+         if (nPoly.eq.0) then
+            write(iunit,'(a)') '    <Piece NumberOfPoints="0" NumberOfPolys="0">'
+            write(iunit,'(a)') '    </Piece>'
+         end if
          write(iunit,'(a)') '  </PolyData>'
          write(iunit,'(a)') '</VTKFile>'
          close(iunit)
@@ -685,23 +688,22 @@ contains
       call MPI_BARRIER(this%amr%comm, ierr)
       
       ! Write PVD collection file
-      call this%write_pvd(srf_name, rank)
+      call this%write_pvd(srf_name)
       
    end subroutine write_vtp
 
 
    !> Write PVD collection file for time series
-   subroutine write_pvd(this, srf_name, rank)
+   subroutine write_pvd(this, srf_name)
       implicit none
       class(amrviz), intent(in) :: this
       character(len=*), intent(in) :: srf_name
-      integer, intent(in) :: rank
       character(len=str_long) :: filename,dirname
       character(len=str_medium) :: basename,time_str
       integer :: iunit, ierr, n
       
-      ! Only rank 0 writes PVD
-      if (rank.ne.0) return
+      ! Only root writes PVD
+      if (.not.this%amr%amRoot) return
       
       dirname = 'amrviz/'//trim(this%name)
       filename = trim(dirname)//'/'//trim(srf_name)//'.pvd'

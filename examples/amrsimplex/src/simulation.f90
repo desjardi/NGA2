@@ -164,7 +164,7 @@ contains
             &                      solver%amr%ylo+(real(j,WP)+0.5_WP)*dy, &
             &                      solver%amr%zlo+(real(k,WP)+0.5_WP)*dz],time)
             if (abs(dist).lt.delta) tagarr(i,j,k,1)=SETtag
-            ! Final, reduce tagging near mixture cells in the walls
+            ! Finally, reduce tagging near mixture cells in the walls
             if (dist.le.-dx) then
                VFmin=minval(pVF(i-1:i+1,j-1:j+1,k-1:k+1,1))
                VFmax=maxval(pVF(i-1:i+1,j-1:j+1,k-1:k+1,1))
