@@ -113,7 +113,7 @@ module amrcomp_class
       end subroutine comp_tagging_iface
    end interface
 
-   !> Abstract interface for user-provided velocity BC callback
+   !> Abstract interface for user-provided BC callback
    abstract interface
       subroutine comp_bc_iface(solver,lvl,time,face,bx,comp,p)
          use amrex_amr_module, only: amrex_box
@@ -651,7 +651,7 @@ contains
 
    !> Prepare variable-coefficient pressure solver using face densities and speed of sound
    subroutine prepare_psolver(this,dt)
-      use amrex_amr_module, only: amrex_mfiter,amrex_multifab
+      use amrex_amr_module, only: amrex_multifab
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -713,6 +713,7 @@ contains
          call this%amr%mfab_destroy(BBy(lvl))
          call this%amr%mfab_destroy(BBz(lvl))
       end do
+      deallocate(AA,BBx,BBy,BBz)
    end subroutine prepare_psolver
 
    ! ============================================================================
@@ -797,7 +798,6 @@ contains
    end subroutine get_conserved
 
    !> Calculate dQdt from passed Q without pressure term (user can add it via add_pressure)
-   !> Uses flux averaging at C/F interfaces for conservation
    subroutine get_dQdt(this,dQdt)
       use amrex_amr_module, only: amrex_multifab
       implicit none
@@ -1273,6 +1273,8 @@ contains
       real(WP), intent(in) :: time
       ! Restore face velocities and conserved variables via parent
       call this%amrflow%restore_checkpoint(io,dirname,time)
+      ! Rebuild primitive variables
+      call this%get_primitive(this%Q)
    end subroutine restore_checkpoint
 
 end module amrcomp_class

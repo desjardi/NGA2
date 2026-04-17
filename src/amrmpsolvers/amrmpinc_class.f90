@@ -1,9 +1,8 @@
 !> AMR collocated incompressible multiphase solver class
 !> Inherits from amrvof_class
 module amrmpinc_class
-   use iso_c_binding,    only: c_ptr,c_null_ptr,c_loc,c_f_pointer
+   use iso_c_binding,    only: c_ptr,c_loc,c_f_pointer
    use precision,        only: WP
-   use string,           only: str_medium
    use amrdata_class,    only: amrdata
    use amrmpflow_class,  only: amrmpflow
    use amrmg_class,      only: amrmg
@@ -42,6 +41,8 @@ module amrmpinc_class
       real(WP) :: rhoVint=0.0_WP        !< Integral of rho*V
       real(WP) :: rhoWint=0.0_WP        !< Integral of rho*W
       real(WP) :: rhoKint=0.0_WP        !< Integral of rho*K
+
+      ! CFL numbers
       real(WP) :: CFLv_x=0.0_WP         !< Viscous CFL in x
       real(WP) :: CFLv_y=0.0_WP         !< Viscous CFL in y
       real(WP) :: CFLv_z=0.0_WP         !< Viscous CFL in z
@@ -126,7 +127,7 @@ module amrmpinc_class
          real(WP), intent(in) :: time
          type(amrex_box), intent(in) :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
-      end subroutine
+      end subroutine mpinc_vofbc_iface
    end interface
 
 contains
@@ -527,6 +528,7 @@ contains
          call this%amr%mfab_destroy(By(lvl))
          call this%amr%mfab_destroy(Bz(lvl))
       end do
+      deallocate(Bx,By,Bz)
    end subroutine prepare_psolver
 
    !> Add (-scale*pressure gradient/rho) to both U/V/W and Q=UVW velocities. Two flavors:
@@ -774,7 +776,6 @@ contains
    ! ============================================================================
 
    !> Compute dQ/dt for all levels without pressure term (user can add it via add_pressure)
-   !> Uses flux averaging at C/F interfaces for conservation
    subroutine get_dQdt(this,dQdt,dt,time)
       use amrex_amr_module, only: amrex_multifab
       implicit none
@@ -1577,7 +1578,7 @@ contains
          if (this%amr%ny.gt.1) this%CFLv_y=max(this%CFLv_y,4.0_WP*viscmax*dt/this%amr%dy(lvl)**2)
          if (this%amr%nz.gt.1) this%CFLv_z=max(this%CFLv_z,4.0_WP*viscmax*dt/this%amr%dz(lvl)**2)
       end do
-      ! Surface-tension CFL (capillary wave stability criterion)
+      ! Surface tension CFL
       if (this%sigma.gt.0.0_WP.and.this%amr%clvl().eq.this%amr%maxlvl) this%CFLst=dt/sqrt((this%rhoL+this%rhoG)*this%amr%min_meshsize(this%amr%maxlvl)**3/(4.0_WP*Pi*this%sigma))
       ! Compute max overall CFL
       this%CFL=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
