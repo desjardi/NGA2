@@ -1202,13 +1202,12 @@ contains
       end do
    end subroutine get_conserved
 
-   !> Calculate dQdt from passed Q without pressure term (user can add it via add_pressure)
-   subroutine get_dQdt(this,Q,dQdt,dt,time)
+   !> Calculate dQdt from this%Q without pressure term (user can add it via add_pressure)
+   subroutine get_dQdt(this,dQdt,dt,time)
       use amrex_amr_module, only: amrex_multifab
       use mpi_f08, only: MPI_Wtime
       implicit none
       class(amrmpcomp), intent(inout) :: this
-      type(amrdata), intent(inout) :: Q
       type(amrdata), intent(inout) :: dQdt
       real(WP), intent(in) :: dt,time
       real(WP) :: t0,t1
@@ -1224,9 +1223,6 @@ contains
       logical :: crossed_plic ! Used in tet2flux/tet2flux_plic
       ! Start full routine timer
       t0=MPI_Wtime()
-
-      ! First build primitive variables from Q
-      call this%get_primitive(Q)
 
       ! Build transport band at finest level to localize SL computation
       call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=band,ncomp=1,nover=1)
@@ -1439,7 +1435,7 @@ contains
             call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
             do while (mfi%next())
                ! Get data pointers
-               pQ   =>Q%mf(lvl)%dataptr(mfi)
+               pQ   =>this%Q%mf(lvl)%dataptr(mfi)
                pU   =>this%U%mf(lvl)%dataptr(mfi)
                pV   =>this%V%mf(lvl)%dataptr(mfi)
                pW   =>this%W%mf(lvl)%dataptr(mfi)

@@ -1157,6 +1157,8 @@ contains
       real(WP), intent(in) :: time
       ! VOF data is restored via parent
       call this%amrvof%restore_checkpoint(io,dirname,time)
+      ! Build sub-cell volume fractions from restored PLIC
+      call this%build_subVF()
       ! Restore staggered velocity components
       call io%read_data(dirname,this%U,'U')
       call io%read_data(dirname,this%V,'V')

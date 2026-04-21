@@ -284,14 +284,10 @@ contains
          fs%psolver%tol_rel=1.0e-5_WP
          ! Set boundary conditions
          fs%lo_bc(1)=BC_GAS
-         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-         fs%U%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%V%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%W%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%U%hi_bc(1,1)=amrex_bc_foextrap
-         fs%V%hi_bc(1,1)=amrex_bc_foextrap
-         fs%W%hi_bc(1,1)=amrex_bc_foextrap
+         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir; fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+         fs%U%lo_bc(1,1)=amrex_bc_ext_dir; fs%U%hi_bc(1,1)=amrex_bc_foextrap
+         fs%V%lo_bc(1,1)=amrex_bc_ext_dir; fs%V%hi_bc(1,1)=amrex_bc_foextrap
+         fs%W%lo_bc(1,1)=amrex_bc_ext_dir; fs%W%hi_bc(1,1)=amrex_bc_foextrap
          fs%user_bc=>dirichlet_velocity
       end block create_flow_solver
 
@@ -321,11 +317,10 @@ contains
             call amr%init_from_scratch(time=time%t)
             ! Build PLIC
             call fs%build_plic(time%t)
-            ! Initialize face velocities
             call fs%build_subVF()
+            ! Initialize face velocities
             call fs%get_face_velocity()
-            call fs%average_down_velocity()
-            call fs%fill_velocity(time=time%t)
+            call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          end if
          ! Set viscosity: molecular + SGS
          call get_viscosity()

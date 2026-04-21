@@ -430,14 +430,10 @@ contains
          ! Set initial conditions
          fs%user_init=>shock_init
          ! Set boundary conditions
-         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-         fs%U%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%V%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%W%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%U%hi_bc(1,1)=amrex_bc_foextrap
-         fs%V%hi_bc(1,1)=amrex_bc_foextrap
-         fs%W%hi_bc(1,1)=amrex_bc_foextrap
+         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir; fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+         fs%U%lo_bc(1,1)=amrex_bc_ext_dir; fs%U%hi_bc(1,1)=amrex_bc_foextrap
+         fs%V%lo_bc(1,1)=amrex_bc_ext_dir; fs%V%hi_bc(1,1)=amrex_bc_foextrap
+         fs%W%lo_bc(1,1)=amrex_bc_ext_dir; fs%W%hi_bc(1,1)=amrex_bc_foextrap
          fs%user_bc=>shock_dirichlet
       end block create_solver
 

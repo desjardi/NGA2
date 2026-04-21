@@ -136,39 +136,6 @@ contains
 
    !> Implicit mechanical relaxation for stiffened gas EOS pair
    !> Solves quadratic for equilibrium pressure Peq where PL=PG=Peq,
-   !> then computes adjustments to VF and internal energies via p*dV work exchange.
-   !> Conserves: phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   ! subroutine P_relax_implicit(VF,Q,Peq,dVF,dQ)
-   !    use amrmpcomp_class, only: VFlo,VFhi
-   !    implicit none
-   !    real(WP),               intent(in) :: VF
-   !    real(WP), dimension(:), intent(in) :: Q
-   !    real(WP), intent(inout) :: Peq
-   !    real(WP), intent(out), optional :: dVF
-   !    real(WP), dimension(:), intent(out), optional :: dQ
-   !    real(WP) :: invG1G,invG1L,d0,d1,facG,facL,a,b,d
-   !    ! Skip if any conserved quantity is non-positive (EOS undefined)
-   !    if (any(Q(1:4).le.0.0_WP)) return
-   !    ! Precompute EOS constants
-   !    invG1L=1.0_WP/(GammaL-1.0_WP); d0=GammaL*PinfL*invG1L; d1=1.0_WP+invG1L
-   !    ! Switch behavior depending on how the subroutine is called
-   !    if (.not.present(dVF)) then
-   !       ! First mode: return Peq by solving a*Peq^2 + b*Peq + d = 0
-   !       invG1G=1.0_WP/(GammaG-1.0_WP); facG=GammaG*PinfG*invG1G; facL=invG1G+VF
-   !       a=d1*facL-VF*(invG1G+1.0_WP)
-   !       b=d1*(facG-Q(4))-VF*facG+d0*facL-Q(3)*(invG1G+1.0_WP)
-   !       d=d0*(facG-Q(4))-Q(3)*facG
-   !       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
-   !       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-   !    else
-   !       ! Second mode: use provided Peq to compute dVF and dQ
-   !       dVF=(VF*Peq+Q(3))/(d1*Peq+d0)-VF
-   !       dQ=0.0_WP; dQ(3)=-Peq*dVF; dQ(4)=+Peq*dVF
-   !    end if
-   ! end subroutine P_relax_implicit
-
-   !> Implicit mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL=PG=Peq,
    !> then adjusts VF and internal energies via p*dV work exchange.
    !> Conserves: phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
    subroutine P_relax_implicit(VF,Q)
@@ -337,26 +304,38 @@ contains
    end subroutine shockdrop_init
 
    !> Apply inflow BC at low-x (face=1)
-   subroutine shock_dirichlet(solver,lvl,time,face,bx,pQ)
+   subroutine shock_dirichlet(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
       class(amrmpcomp), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      character(len=1), intent(in) :: comp
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! X-LOW: Dirichlet inflow with post-shock (gas only, no liquid)
-         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            pQ(i,j,k,1)=0.0_WP                  ! No liquid
-            pQ(i,j,k,2)=rhoG2                   ! Gas density
-            pQ(i,j,k,3)=0.0_WP                  ! No liquid energy
-            pQ(i,j,k,4)=rhoG2*get_IG(rhoG2,pG2) ! Gas internal energy
-            pQ(i,j,k,5)=rhoG2*u2                ! X-momentum
-            pQ(i,j,k,6)=0.0_WP
-            pQ(i,j,k,7)=0.0_WP
-         end do; end do; end do
+         select case (comp)
+          case ('U')  ! Staggered U=u2
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=u2
+            end do; end do; end do
+          case ('V','W')  ! Staggered V,W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered Q=(rho2,rho2*u2,0,0,rho2*I2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP                  ! No liquid
+               p(i,j,k,2)=rhoG2                   ! Gas density
+               p(i,j,k,3)=0.0_WP                  ! No liquid energy
+               p(i,j,k,4)=rhoG2*get_IG(rhoG2,pG2) ! Gas internal energy
+               p(i,j,k,5)=rhoG2*u2                ! X-momentum
+               p(i,j,k,6)=0.0_WP
+               p(i,j,k,7)=0.0_WP
+            end do; end do; end do
+         end select
       end select
    end subroutine shock_dirichlet
 
@@ -542,30 +521,35 @@ contains
       create_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrmpcomp_class,  only: BC_GAS
+         use amrdata_class,    only: interp_face_lin
          ! Create flow solver
          call fs%initialize(amr=amr,name='drop')
+         ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide thermodynamic model (6 EOS pointers)
          fs%getPL=>get_PL; fs%getCL=>get_CL; fs%getTL=>get_TL
          fs%getPG=>get_PG; fs%getCG=>get_CG; fs%getTG=>get_TG
          ! Provide pressure relaxation model
          fs%relax=>P_relax_implicit
          ! Set initial conditions
-         fs%user_mpcomp_init=>shockdrop_init
+         fs%user_init=>shockdrop_init
          ! Set BCs
          if (.not.amr%xper) then
             fs%lo_bc(1)=BC_GAS
-            fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-            fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-            fs%user_mpcomp_bc=>shock_dirichlet
+            fs%Q%lo_bc(1,:)=amrex_bc_ext_dir; fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+            fs%U%lo_bc(1,:)=amrex_bc_ext_dir; fs%U%hi_bc(1,:)=amrex_bc_foextrap
+            fs%V%lo_bc(1,:)=amrex_bc_ext_dir; fs%V%hi_bc(1,:)=amrex_bc_foextrap
+            fs%W%lo_bc(1,:)=amrex_bc_ext_dir; fs%W%hi_bc(1,:)=amrex_bc_foextrap
+            fs%user_bc=>shock_dirichlet
          end if
       end block create_solver
       
       ! Initialize workspaces
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call dQdt%initialize(amr,name='dQdt',ncomp=7,ng=0,interp=amrex_interp_none); call dQdt%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=amrex_interp_none); call Umag%register()
-         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=amrex_interp_none); call Mach%register()
+         use amrdata_class, only: interp_none
+         call dQdt%initialize(amr,name='dQdt',ncomp=7,ng=0,interp=interp_none); call dQdt%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
+         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=interp_none); call Mach%register()
       end block create_workspace
 
       ! Initialize regridding
@@ -576,7 +560,7 @@ contains
          regrid_evt=event(time=time,name='Regrid')
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
-         fs%user_mpcomp_tagging=>my_tagger
+         fs%user_tagging=>my_tagger
          call param_read('Tagging Re',Re_tag)
          call param_read('Tagging Rho',Rho_tag)
          ! Build the grid
@@ -590,6 +574,12 @@ contains
             call amr%init_from_scratch(time=time%t)
             ! Build PLIC
             call fs%build_plic(time%t)
+            call fs%build_subVF()
+            ! Initialize primitive variables
+            call fs%get_primitive(Q=fs%Q)
+            ! Initialize face velocities
+            call fs%get_face_velocity()
+            call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          end if
          ! Compute viscosities
          call get_viscosities()
@@ -597,7 +587,7 @@ contains
          call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
       end block init_regridding
 
@@ -621,9 +611,9 @@ contains
          call viz%add_scalar(fs%RHOG,1,'RHOG')
          call viz%add_scalar(fs%PL,1,'PL')
          call viz%add_scalar(fs%PG,1,'PG')
-         call viz%add_scalar(fs%U,1,'U')
-         call viz%add_scalar(fs%V,1,'V')
-         call viz%add_scalar(fs%W,1,'W')
+         call viz%add_scalar(fs%UVW,1,'U')
+         call viz%add_scalar(fs%UVW,2,'V')
+         call viz%add_scalar(fs%UVW,3,'W')
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(Mach,1,'Mach')
          call viz%add_surfmesh(fs%smesh,'plic')
@@ -745,29 +735,53 @@ contains
          ! Remember old state
          call fs%store_old()
          
-         ! ===== RK2 Stage 1: dQdt = f(t, Q) =====
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,dt=0.5_WP*time%dt,time=time%t)
-         
-         ! ===== RK2 Stage 2: Q* = Qold + dt/2*dQdt, dQdt* = f(t+dt/2, Q*) =====
-         call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=0.5_WP*time%dt,src=dQdt)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt)
-         call check_Q('RK1   ')
-         call fs%apply_relax(time=time%t+0.5_WP*time%dt)
-         call check_Q('RELAX1')
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,dt=time%dt,time=time%t+0.5_WP*time%dt)
-
-         ! ===== RK2 Final: Q = Qold + dt*dQdt* =====
-         call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=time%dt,src=dQdt)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
-         call check_Q('RK2   ')
-         call fs%apply_relax(time=time%t)
-         call check_Q('RELAX2')
-
-         ! Rebuild PLIC
-         call fs%build_plic(time%t)
-
-         ! Recompute primitive variables
+         ! ======================= RK2 Stage 1: Q*=Q[n]+dt/2*dQdt(t,Q[n]) =======================
+         ! Increment Q without pressure
+         call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
+         call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
+         ! Rebuild primitive variables
          call fs%get_primitive(fs%Q)
+         ! Rebuild PLIC and sub-cell VF
+         call fs%build_plic(time%t)
+         call fs%build_subVF()
+         ! Get face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=0.5_WP*time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
+         ! Apply relaxation
+         call fs%apply_relax(time=time%tmid)
+         ! Get primitive variables
+         call fs%get_primitive(fs%Q)
+         ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
+         ! Increment Q without pressure
+         call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
+         call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
+         ! Rebuild primitive variables
+         call fs%get_primitive(fs%Q)
+         ! Rebuild PLIC and sub-cell VF
+         call fs%build_plic(time%t)
+         call fs%build_subVF()
+         ! Get face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+         ! Apply relaxation
+         call fs%apply_relax(time=time%t)
+         ! Get primitive variables
+         call fs%get_primitive(fs%Q)
+         ! ======================================================================================
 
          ! Regrid if event triggers
          if (regrid_evt%occurs()) then
@@ -783,7 +797,7 @@ contains
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
 
          ! Visualization output
