@@ -823,7 +823,7 @@ contains
          real(WP), dimension(:,:,:,:), allocatable :: proj
          real(WP), dimension(8) :: Vflux
          real(WP), dimension(3) :: Qflux
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pVx,pVy,pVz,pFx,pFy,pFz,pQ
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pVx,pVy,pVz,pFx,pFy,pFz
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx,nbx
          ! Skip if clvl < maxlvl
@@ -841,7 +841,6 @@ contains
             pQold   =>this%Qold%mf(lvl)%dataptr(mfi)
             pVFold  =>this%VFold%mf(lvl)%dataptr(mfi)
             pBand   =>band%dataptr(mfi)
-            pQ      =>this%Q%mf(lvl)%dataptr(mfi)
             pU      =>this%U%mf(lvl)%dataptr(mfi)
             pV      =>this%V%mf(lvl)%dataptr(mfi)
             pW      =>this%W%mf(lvl)%dataptr(mfi)
@@ -889,7 +888,7 @@ contains
                ! Convert to flux rate
                pFx(i,j,k,:)=-pFx(i,j,k,:)/(dt*dy*dz)
                ! Switch to dissipation-free momentum flux for BB-pure regions
-               if (.not.crossed_plic) pFx(i,j,k,:)=-(this%rhoL*pVx(i,j,k,1)+this%rhoG*pVx(i,j,k,2))/(dt*dy*dz)*0.5_WP*(pQ(i-1,j,k,:)+pQ(i,j,k,:))
+               if (.not.crossed_plic) pFx(i,j,k,:)=-(this%rhoL*pVx(i,j,k,1)+this%rhoG*pVx(i,j,k,2))/(dt*dy*dz)*0.5_WP*(pQold(i-1,j,k,:)+pQold(i,j,k,:))
             end do; end do; end do
             ! Y-fluxes
             fbx=mfi%nodaltilebox(2)
@@ -923,7 +922,7 @@ contains
                ! Convert to flux rate
                pFy(i,j,k,:)=-pFy(i,j,k,:)/(dt*dz*dx)
                ! Switch to dissipation-free momentum flux for BB-pure regions
-               if (.not.crossed_plic) pFy(i,j,k,:)=-(this%rhoL*pVy(i,j,k,1)+this%rhoG*pVy(i,j,k,2))/(dt*dz*dx)*0.5_WP*(pQ(i,j-1,k,:)+pQ(i,j,k,:))
+               if (.not.crossed_plic) pFy(i,j,k,:)=-(this%rhoL*pVy(i,j,k,1)+this%rhoG*pVy(i,j,k,2))/(dt*dz*dx)*0.5_WP*(pQold(i,j-1,k,:)+pQold(i,j,k,:))
             end do; end do; end do
             ! Z-fluxes
             fbx=mfi%nodaltilebox(3)
@@ -957,7 +956,7 @@ contains
                ! Convert to flux rate
                pFz(i,j,k,:)=-pFz(i,j,k,:)/(dt*dx*dy)
                ! Switch to dissipation-free momentum flux for BB-pure regions
-               if (.not.crossed_plic) pFz(i,j,k,:)=-(this%rhoL*pVz(i,j,k,1)+this%rhoG*pVz(i,j,k,2))/(dt*dx*dy)*0.5_WP*(pQ(i,j,k-1,:)+pQ(i,j,k,:))
+               if (.not.crossed_plic) pFz(i,j,k,:)=-(this%rhoL*pVz(i,j,k,1)+this%rhoG*pVz(i,j,k,2))/(dt*dx*dy)*0.5_WP*(pQold(i,j,k-1,:)+pQold(i,j,k,:))
             end do; end do; end do
             ! Deallocate proj for this tile
             deallocate(proj)

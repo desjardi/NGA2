@@ -1335,9 +1335,10 @@ contains
          real(WP), dimension(:,:,:,:), allocatable :: proj
          real(WP), dimension(8) :: Vflux
          real(WP), dimension(7) :: Qflux
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pVx,pVy,pVz,pFx,pFy,pFz,pUVW
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pVx,pVy,pVz,pFx,pFy,pFz
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx,nbx
+         real(WP) :: rhoLo,rhoHi
          ! Skip if clvl < maxlvl
          if (this%amr%clvl().lt.this%amr%maxlvl) exit semilagrangian_fluxes
          ! Get finest level info
@@ -1356,7 +1357,6 @@ contains
             pU      =>this%U%mf(lvl)%dataptr(mfi)
             pV      =>this%V%mf(lvl)%dataptr(mfi)
             pW      =>this%W%mf(lvl)%dataptr(mfi)
-            pUVW    =>this%UVW%mf(lvl)%dataptr(mfi)
             pVx     =>Vx%dataptr(mfi)
             pVy     =>Vy%dataptr(mfi)
             pVz     =>Vz%dataptr(mfi)
@@ -1402,9 +1402,11 @@ contains
                pFx(i,j,k,1:7)=-pFx(i,j,k,1:7)/(dt*dy*dz)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
-                  pFx(i,j,k,5)=sum(pFx(i,j,k,1:2))*0.5_WP*sum(pUVW(i-1:i,j,k,1))
-                  pFx(i,j,k,6)=sum(pFx(i,j,k,1:2))*0.5_WP*sum(pUVW(i-1:i,j,k,2))
-                  pFx(i,j,k,7)=sum(pFx(i,j,k,1:2))*0.5_WP*sum(pUVW(i-1:i,j,k,3))
+                  rhoLo=max(pQold(i-1,j,k,1)+pQold(i-1,j,k,2),this%rho_floor)
+                  rhoHi=max(pQold(i  ,j,k,1)+pQold(i  ,j,k,2),this%rho_floor)
+                  pFx(i,j,k,5)=sum(pFx(i,j,k,1:2))*0.5_WP*(pQold(i-1,j,k,5)/rhoLo+pQold(i,j,k,5)/rhoHi)
+                  pFx(i,j,k,6)=sum(pFx(i,j,k,1:2))*0.5_WP*(pQold(i-1,j,k,6)/rhoLo+pQold(i,j,k,6)/rhoHi)
+                  pFx(i,j,k,7)=sum(pFx(i,j,k,1:2))*0.5_WP*(pQold(i-1,j,k,7)/rhoLo+pQold(i,j,k,7)/rhoHi)
                end if
             end do; end do; end do
             ! Y-fluxes
@@ -1440,9 +1442,11 @@ contains
                pFy(i,j,k,1:7)=-pFy(i,j,k,1:7)/(dt*dz*dx)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
-                  pFy(i,j,k,5)=sum(pFy(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j-1:j,k,1))
-                  pFy(i,j,k,6)=sum(pFy(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j-1:j,k,2))
-                  pFy(i,j,k,7)=sum(pFy(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j-1:j,k,3))
+                  rhoLo=max(pQold(i,j-1,k,1)+pQold(i,j-1,k,2),this%rho_floor)
+                  rhoHi=max(pQold(i,j  ,k,1)+pQold(i,j  ,k,2),this%rho_floor)
+                  pFy(i,j,k,5)=sum(pFy(i,j,k,1:2))*0.5_WP*(pQold(i,j-1,k,5)/rhoLo+pQold(i,j,k,5)/rhoHi)
+                  pFy(i,j,k,6)=sum(pFy(i,j,k,1:2))*0.5_WP*(pQold(i,j-1,k,6)/rhoLo+pQold(i,j,k,6)/rhoHi)
+                  pFy(i,j,k,7)=sum(pFy(i,j,k,1:2))*0.5_WP*(pQold(i,j-1,k,7)/rhoLo+pQold(i,j,k,7)/rhoHi)
                end if
             end do; end do; end do
             ! Z-fluxes
@@ -1478,9 +1482,11 @@ contains
                pFz(i,j,k,1:7)=-pFz(i,j,k,1:7)/(dt*dx*dy)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
-                  pFz(i,j,k,5)=sum(pFz(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j,k-1:k,1))
-                  pFz(i,j,k,6)=sum(pFz(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j,k-1:k,2))
-                  pFz(i,j,k,7)=sum(pFz(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j,k-1:k,3))
+                  rhoLo=max(pQold(i,j,k-1,1)+pQold(i,j,k-1,2),this%rho_floor)
+                  rhoHi=max(pQold(i,j,k  ,1)+pQold(i,j,k  ,2),this%rho_floor)
+                  pFz(i,j,k,5)=sum(pFz(i,j,k,1:2))*0.5_WP*(pQold(i,j,k-1,5)/rhoLo+pQold(i,j,k,5)/rhoHi)
+                  pFz(i,j,k,6)=sum(pFz(i,j,k,1:2))*0.5_WP*(pQold(i,j,k-1,6)/rhoLo+pQold(i,j,k,6)/rhoHi)
+                  pFz(i,j,k,7)=sum(pFz(i,j,k,1:2))*0.5_WP*(pQold(i,j,k-1,7)/rhoLo+pQold(i,j,k,7)/rhoHi)
                end if
             end do; end do; end do
             ! Deallocate proj for this tile
