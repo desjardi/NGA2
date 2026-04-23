@@ -740,8 +740,6 @@ contains
          call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
-         ! Rebuild primitive variables
-         call fs%get_primitive(fs%Q)
          ! Rebuild PLIC and sub-cell VF
          call fs%build_plic(time%t)
          call fs%build_subVF()
@@ -763,8 +761,6 @@ contains
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
-         ! Rebuild primitive variables
-         call fs%get_primitive(fs%Q)
          ! Rebuild PLIC and sub-cell VF
          call fs%build_plic(time%t)
          call fs%build_subVF()
