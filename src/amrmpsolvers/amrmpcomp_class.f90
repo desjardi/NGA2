@@ -206,10 +206,11 @@ module amrmpcomp_class
 
    !> Abstract interface for pressure relaxation callback
    abstract interface
-      subroutine relax_iface(VF,Q)
+      subroutine relax_iface(VF,Q,Pjump)
          import :: WP
          real(WP), intent(inout) :: VF
          real(WP), dimension(:), intent(inout) :: Q
+         real(WP), intent(in) :: Pjump
       end subroutine relax_iface
    end interface
 
@@ -2204,7 +2205,7 @@ contains
       real(WP) :: t0
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG,pCurv
       real(WP) :: dx,dy,dz
       ! If no relaxation model was provided, return
       if (.not.associated(this%relax)) return
@@ -2222,6 +2223,7 @@ contains
          pQ   =>this%Q%mf(lvl)%dataptr(mfi)
          pCL  =>this%CL%dataptr(mfi)
          pCG  =>this%CG%dataptr(mfi)
+         pCurv=>this%curv%dataptr(mfi)
          ! Loop over all cells
          bx=mfi%growntilebox(this%nover)
          ! Loop over valid cells
@@ -2230,7 +2232,7 @@ contains
             ! Only relax mixture cells
             if (pVF(i,j,k,1).lt.VFlo.or.pVF(i,j,k,1).gt.VFhi) cycle
             ! Apply user-provided relaxation model (modifies VF and Q)
-            call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:))
+            call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
             ! Ensure consistency with modified VF
             if (pVF(i,j,k,1).lt.VFlo) then
                ! Pure liquid

@@ -54,6 +54,7 @@ module simulation
    real(WP) :: ML                     !< Liquid Mach number
    real(WP) :: Reynolds,visc_ratio    !< Viscosity 
    real(WP) :: Prandtl ,diff_ratio    !< Heat diffusivity
+   real(WP) :: Weber                  !< Weber number
    
    !> Sutherland viscosity parameters: mu_g = (1+Suth_T)*T^Suth_n / (Re*(T+Suth_T))
    real(WP) :: Suth_n=1.5_WP          !< Sutherland exponent (1.0 for constant)
@@ -134,45 +135,53 @@ contains
       get_IG=(P+GammaG*PinfG)/(RHO*(GammaG-1.0_WP))
    end function get_IG
 
-   !> Implicit mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL=PG=Peq,
+   !> Generalized mechanical relaxation for stiffened gas EOS pair
+   !> Solves quadratic for equilibrium pressure Peq where PL+Pjump=PG=Peq,
    !> then adjusts VF and internal energies via p*dV work exchange.
-   !> Conserves: phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   subroutine P_relax_implicit(VF,Q)
-      use amrmpcomp_class, only: VFlo,VFhi
+   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
+   !> Enforces pressure jump provided in Pjump
+   subroutine P_relax_generalized(VF,Q,Pjump)
       implicit none
-      real(WP),               intent(inout) :: VF
+      real(WP), intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
-      real(WP) :: a,b,d,Peq,VFeq
-      real(WP) :: invG1G,invG1L,d0,d1,facG,facL
+      real(WP), intent(in) :: Pjump
+      real(WP) :: PG,PL,ZG,ZL,Pint,cJ
+      real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
       real(WP), parameter :: RHOGmin=1.0e-2_WP
+      real(WP), parameter :: phist=1.0_WP,phi0=0.0_WP   !< Temporal weighting, phist=1 should yield best results
       ! Skip if any conserved quantity is non-positive (EOS undefined)
       if (any(Q(1:4).le.0.0_WP)) return
       ! Skip near-pure-liquid cells (gas density too low)
       if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-      ! Precompute EOS constants
-      invG1G=1.0_WP/(GammaG-1.0_WP)
-      invG1L=1.0_WP/(GammaL-1.0_WP)
-      d0=GammaL*PinfL*invG1L
-      d1=1.0_WP+invG1L
-      facG=GammaG*PinfG*invG1G
-      facL=invG1G+VF
-      ! Quadratic coefficients: a*Peq^2 + b*Peq + d = 0
-      a=d1*facL-VF*(invG1G+1.0_WP)
-      b=d1*(facG-Q(4))-VF*facG+d0*facL-Q(3)*(invG1G+1.0_WP)
-      d=d0*(facG-Q(4))-Q(3)*facG
-      ! Solve for equilibrium pressure (positive root)
+      ! Get phasic pressures
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+      ! Get phasic impedances
+      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
+      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+      cJ=ZL/(ZG+ZL)
+      ! Calculate model interface pressure
+      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
+      ! Setup quadratic problem
+      n1=VF*phist
+      n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3) 
+      d1=phist+1.0_WP/(GammaL-1.0_WP)
+      d0=phi0*Pint-phist*cJ*pjump+GammaL/(GammaL-1.0_WP)*PinfL
+      a=d1*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n1*(-1.0_WP/(GammaG-1.0_WP)-phist)
+      b=d1*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n0*(-1.0_WP/(GammaG-1.0_WP)-phist)
+      d=d0*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)
+      ! Get equilibrium pressure
       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-      ! Bail if pressure is unphysical
+      ! Check if pressure is sound
       if (Peq.le.max(-PinfG,-PinfL)) return
-      ! Equilibrium volume fraction from liquid energy constraint
-      VFeq=(VF*Peq+Q(3))/(d1*Peq+d0)
-      ! Update internal energies via p*dV work exchange
-      Q(3)=Q(3)-Peq*(VFeq-VF)
-      Q(4)=Q(4)+Peq*(VFeq-VF)
+      ! Get equilibrium volume fraction
+      VFeq=(n1*Peq+n0)/(d1*Peq+d0)
+      ! Adjust conserved quantities
+      Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
+      Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
       VF=VFeq
-   end subroutine P_relax_implicit
+   end subroutine P_relax_generalized
 
    !> Compute viscosity: Sutherland for gas, VF-weighted blend with liquid
    subroutine get_viscosities()
@@ -456,6 +465,8 @@ contains
          call param_read('Diffusivity ratio',diff_ratio)
          call param_read('Sutherland exponent',Suth_n)
          call param_read('Sutherland temperature',Suth_T)
+         ! Surface tension
+         call param_read('Weber number',Weber)
          ! Log
          write(message,'("[Post-shock Mach] M2=",es12.5)') M2; call log(message)
          write(message,'("[Shock Mach]      Ms=",es12.5)') Ms; call log(message)
@@ -465,6 +476,7 @@ contains
          write(message,'("[Liquid] GammaL=",es12.5," PinfL=",es12.5," CvL=",es12.5)') GammaL,PinfL,CvL; call log(message)
          write(message,'("[Gas]    GammaG=",es12.5," PinfG=",es12.5," CvG=",es12.5)') GammaG,PinfG,CvG; call log(message)
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
+         write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
       end block init_eos_and_flow
       
       ! Initialize AMR grid
@@ -524,13 +536,15 @@ contains
          use amrdata_class,    only: interp_face_lin
          ! Create flow solver
          call fs%initialize(amr=amr,name='drop')
+         ! Set surface tension coefficient
+         fs%sigma=1.0_WP/Weber
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide thermodynamic model (6 EOS pointers)
          fs%getPL=>get_PL; fs%getCL=>get_CL; fs%getTL=>get_TL
          fs%getPG=>get_PG; fs%getCG=>get_CG; fs%getTG=>get_TG
          ! Provide pressure relaxation model
-         fs%relax=>P_relax_implicit
+         fs%relax=>P_relax_generalized
          ! Set initial conditions
          fs%user_init=>shockdrop_init
          ! Set BCs
@@ -665,6 +679,7 @@ contains
          call cflfile%add_column(fs%CFLv_x,'CFLv_x')
          call cflfile%add_column(fs%CFLv_y,'CFLv_y')
          call cflfile%add_column(fs%CFLv_z,'CFLv_z')
+         call cflfile%add_column(fs%CFLst ,'CFLst' )
          call cflfile%write()
          ! Create conservation monitor
          consfile=monitor(amRoot=amr%amRoot,name='conservation')

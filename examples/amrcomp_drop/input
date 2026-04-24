@@ -22,6 +22,7 @@ Density ratio:      133.5
 Liquid Mach number: 1.0
 
 # Viscous parameters
+Weber number:           1e3
 Reynolds number:        3e5
 Prandtl number:         0.71
 Viscosity ratio:        12.6
