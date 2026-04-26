@@ -416,7 +416,32 @@ contains
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
+
+      ! Initialize AMR grid
+      create_amrgrid: block
+         ! Set name
+         amr%name='amrcomp_drop'
+         ! Read in base grid size
+         call param_read('Base nx',amr%nx)
+         call param_read('Base ny',amr%ny)
+         call param_read('Base nz',amr%nz)
+         ! Set domain
+         amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
+         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
+         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         ! Set periodicity
+         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
+         ! Read in max level
+         call param_read('Max level',amr%maxlvl)
+         ! Enable quasi-2D
+         if (amr%nz.eq.1) then
+            amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+            amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+         end if
+         ! Initialize
+         call amr%initialize()
+      end block create_amrgrid
+
       ! Read EoS and flow parameters
       init_eos_and_flow: block
          use messager, only: log,die
@@ -451,13 +476,16 @@ contains
          u1=0.0_WP
          ! CvG from T2=1
          CvG=pG2/(rhoG2*(GammaG-1.0_WP))
+         ! Surface tension
+         call param_read('Weber number',Weber)
          ! Liquid state from density ratio and liquid Mach number
          call param_read('Density ratio',density_ratio)
          call param_read('Liquid Mach number',ML)
          rhoL1=density_ratio
-         PinfL=rhoL1/(GammaL*ML**2)-pG1
-         pL1=pG1                                                        ! Force pressure equilibrium
-         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*get_TG(rhoG1,pG1))      ! Force thermal equilibrium
+         pL1=pG1+4.0_WP/Weber                   ! Force pressure equilibrium, accounting for 3D Laplace pressure
+         if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! Force pressure equilibrium, accounting for 2D Laplace pressure
+         PinfL=rhoL1/(GammaL*ML**2)-pL1
+         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*get_TG(rhoG1,pG1)) ! Force thermal equilibrium
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -465,8 +493,6 @@ contains
          call param_read('Diffusivity ratio',diff_ratio)
          call param_read('Sutherland exponent',Suth_n)
          call param_read('Sutherland temperature',Suth_T)
-         ! Surface tension
-         call param_read('Weber number',Weber)
          ! Log
          write(message,'("[Post-shock Mach] M2=",es12.5)') M2; call log(message)
          write(message,'("[Shock Mach]      Ms=",es12.5)') Ms; call log(message)
@@ -478,31 +504,6 @@ contains
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
          write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
       end block init_eos_and_flow
-      
-      ! Initialize AMR grid
-      create_amrgrid: block
-         ! Set name
-         amr%name='amrcomp_drop'
-         ! Read in base grid size
-         call param_read('Base nx',amr%nx)
-         call param_read('Base ny',amr%ny)
-         call param_read('Base nz',amr%nz)
-         ! Set domain
-         amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
-         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
-         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
-         ! Set periodicity
-         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
-         ! Read in max level
-         call param_read('Max level',amr%maxlvl)
-         ! Enable quasi-2D
-         if (amr%nz.eq.1) then
-            amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
-            amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
-         end if
-         ! Initialize
-         call amr%initialize()
-      end block create_amrgrid
 
       ! Handle restart/saves here
       handle_restart: block
