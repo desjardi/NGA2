@@ -175,7 +175,7 @@ contains
       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Check if pressure is sound
-      if (Peq-Pjump.le.max(-PinfG,-PinfL)) return
+      if (Peq.le.-PinfL.or.Peq-Pjump.le.-PinfG) return
       ! Get equilibrium volume fraction
       VFeq=(n1*Peq+n0)/(d1*Peq+d0)
       if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
