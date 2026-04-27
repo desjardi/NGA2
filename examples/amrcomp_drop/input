@@ -38,4 +38,4 @@ Max time: 1e2
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      restart/drop_6.00000E+00
+Restart from:      !restart/drop_6.00000E+00

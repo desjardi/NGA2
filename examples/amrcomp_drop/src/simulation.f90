@@ -141,6 +141,7 @@ contains
    !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
    !> Enforces pressure jump provided in Pjump
    subroutine P_relax_generalized(VF,Q,Pjump)
+      use amrmpcomp_class, only: VFlo,VFhi
       implicit none
       real(WP), intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
@@ -174,9 +175,10 @@ contains
       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Check if pressure is sound
-      if (Peq.le.max(-PinfG,-PinfL)) return
+      if (Peq-Pjump.le.max(-PinfG,-PinfL)) return
       ! Get equilibrium volume fraction
       VFeq=(n1*Peq+n0)/(d1*Peq+d0)
+      if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
       ! Adjust conserved quantities
       Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
       Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
@@ -756,10 +758,14 @@ contains
          call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
-         ! Rebuild PLIC and sub-cell VF
-         call fs%build_plic(time%t)
+         ! Rebuild PLIC
+         call fs%build_plic(time=time%t)
+         ! Get most up-to-date pressure
+         call fs%apply_relax(time=time%tmid)
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Get face velocities
+         ! Compute face velocities
          call fs%get_face_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
@@ -768,19 +774,21 @@ contains
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
-         ! Apply relaxation
-         call fs%apply_relax(time=time%tmid)
          ! Get primitive variables
-         call fs%get_primitive(fs%Q)
+         call fs%get_primitive(Q=fs%Q)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
          ! Increment Q without pressure
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
-         ! Rebuild PLIC and sub-cell VF
-         call fs%build_plic(time%t)
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         ! Rebuild PLIC
+         call fs%build_plic(time=time%t)
+         ! Get most up-to-date pressure
+         call fs%apply_relax(time=time%t)
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Get face velocities
+         ! Compute face velocities
          call fs%get_face_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=time%dt)
@@ -789,10 +797,8 @@ contains
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
-         ! Apply relaxation
-         call fs%apply_relax(time=time%t)
          ! Get primitive variables
-         call fs%get_primitive(fs%Q)
+         call fs%get_primitive(Q=fs%Q)
          ! ======================================================================================
 
          ! Regrid if event triggers
@@ -813,7 +819,7 @@ contains
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
 
          ! Visualization output
-         if (viz_evt%occurs()) call viz%write(time%t)
+         if (viz_evt%occurs()) call viz%write(time=time%t)
 
          ! Checkpoint save
          if (save_evt%occurs()) then

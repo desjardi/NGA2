@@ -568,71 +568,58 @@ contains
    ! UTILITIES
    ! ============================================================================
 
-   !> Update face velocity from VF and Q using sub-cell density-weighting (subVF must be up-to-date)
+   !> Update face velocity from VF and Q using sub-cell density-weighting (subVF and primitives must be up-to-date)
    subroutine get_face_velocity(this)
       implicit none
       class(amrmpcomp), intent(inout) :: this
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: fbx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pU,pV,pW,pSubVF
-      real(WP) :: RHOL,RHOG,rhoLo,rhoHi,UVWlo,UVWhi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pUVW,pRHOL,pRHOG,pSubVF
+      real(WP) :: rhoLo,rhoHi
       ! Traverse levels
       do lvl=0,this%amr%clvl()
          ! Loop over tiles
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointers to data
-            pVF=>this%VF%mf(lvl)%dataptr(mfi)
-            pQ =>this%Q%mf(lvl)%dataptr(mfi)
-            pU =>this%U%mf(lvl)%dataptr(mfi)
-            pV =>this%V%mf(lvl)%dataptr(mfi)
-            pW =>this%W%mf(lvl)%dataptr(mfi)
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pU   =>this%U%mf(lvl)%dataptr(mfi)
+            pV   =>this%V%mf(lvl)%dataptr(mfi)
+            pW   =>this%W%mf(lvl)%dataptr(mfi)
+            pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
             if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
             ! Get X-face velocity
             fbx=mfi%nodaltilebox(1)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               rhoLo=sum(pQ(i-1,j,k,1:2)); UVWlo=pQ(i-1,j,k,5)/max(rhoLo,this%rho_floor)
-               rhoHi=sum(pQ(i  ,j,k,1:2)); UVWhi=pQ(i  ,j,k,5)/max(rhoHi,this%rho_floor)
+               rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i-1,j,k,1).ge.VFlo.and.pQ(i-1,j,k,1).gt.0.0_WP.and.pQ(i-1,j,k,3).gt.0.0_WP) RHOL=pQ(i-1,j,k,1)/(       pVF(i-1,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i-1,j,k,1).le.VFhi.and.pQ(i-1,j,k,2).gt.0.0_WP.and.pQ(i-1,j,k,4).gt.0.0_WP) RHOG=pQ(i-1,j,k,2)/(1.0_WP-pVF(i-1,j,k,1))
-                  rhoLo=RHOL*pSubVF(i-1,j,k,2)+RHOG*(1.0_WP-pSubVF(i-1,j,k,2))
-                  RHOL=0.0_WP; if (pVF(i  ,j,k,1).ge.VFlo.and.pQ(i  ,j,k,1).gt.0.0_WP.and.pQ(i  ,j,k,3).gt.0.0_WP) RHOL=pQ(i  ,j,k,1)/(       pVF(i  ,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i  ,j,k,1).le.VFhi.and.pQ(i  ,j,k,2).gt.0.0_WP.and.pQ(i  ,j,k,4).gt.0.0_WP) RHOG=pQ(i  ,j,k,2)/(1.0_WP-pVF(i  ,j,k,1))
-                  rhoHi=RHOL*pSubVF(i  ,j,k,1)+RHOG*(1.0_WP-pSubVF(i  ,j,k,1))
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
                end if
-               pU(i,j,k,1)=(rhoLo*UVWlo+rhoHi*UVWhi)/(rhoLo+rhoHi)
+               pU(i,j,k,1)=(rhoLo*pUVW(i-1,j,k,1)+rhoHi*pUVW(i,j,k,1))/(rhoLo+rhoHi)
             end do; end do; end do
             ! Get Y-face velocity
             fbx=mfi%nodaltilebox(2)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               rhoLo=sum(pQ(i,j-1,k,1:2)); UVWlo=pQ(i,j-1,k,6)/max(rhoLo,this%rho_floor)
-               rhoHi=sum(pQ(i,j  ,k,1:2)); UVWhi=pQ(i,j  ,k,6)/max(rhoHi,this%rho_floor)
+               rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j-1,k,1).ge.VFlo.and.pQ(i,j-1,k,1).gt.0.0_WP.and.pQ(i,j-1,k,3).gt.0.0_WP) RHOL=pQ(i,j-1,k,1)/(       pVF(i,j-1,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j-1,k,1).le.VFhi.and.pQ(i,j-1,k,2).gt.0.0_WP.and.pQ(i,j-1,k,4).gt.0.0_WP) RHOG=pQ(i,j-1,k,2)/(1.0_WP-pVF(i,j-1,k,1))
-                  rhoLo=RHOL*pSubVF(i,j-1,k,4)+RHOG*(1.0_WP-pSubVF(i,j-1,k,4))
-                  RHOL=0.0_WP; if (pVF(i,j  ,k,1).ge.VFlo.and.pQ(i,j  ,k,1).gt.0.0_WP.and.pQ(i,j  ,k,3).gt.0.0_WP) RHOL=pQ(i,j  ,k,1)/(       pVF(i,j  ,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j  ,k,1).le.VFhi.and.pQ(i,j  ,k,2).gt.0.0_WP.and.pQ(i,j  ,k,4).gt.0.0_WP) RHOG=pQ(i,j  ,k,2)/(1.0_WP-pVF(i,j  ,k,1))
-                  rhoHi=RHOL*pSubVF(i,j  ,k,3)+RHOG*(1.0_WP-pSubVF(i,j  ,k,3))
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
                end if
-               pV(i,j,k,1)=(rhoLo*UVWlo+rhoHi*UVWhi)/(rhoLo+rhoHi)
+               pV(i,j,k,1)=(rhoLo*pUVW(i,j-1,k,2)+rhoHi*pUVW(i,j,k,2))/(rhoLo+rhoHi)
             end do; end do; end do
             ! Get Z-face velocity
             fbx=mfi%nodaltilebox(3)
             do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-               rhoLo=sum(pQ(i,j,k-1,1:2)); UVWlo=pQ(i,j,k-1,7)/max(rhoLo,this%rho_floor)
-               rhoHi=sum(pQ(i,j,k  ,1:2)); UVWhi=pQ(i,j,k  ,7)/max(rhoHi,this%rho_floor)
+               rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j,k-1,1).ge.VFlo.and.pQ(i,j,k-1,1).gt.0.0_WP.and.pQ(i,j,k-1,3).gt.0.0_WP) RHOL=pQ(i,j,k-1,1)/(       pVF(i,j,k-1,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k-1,1).le.VFhi.and.pQ(i,j,k-1,2).gt.0.0_WP.and.pQ(i,j,k-1,4).gt.0.0_WP) RHOG=pQ(i,j,k-1,2)/(1.0_WP-pVF(i,j,k-1,1))
-                  rhoLo=RHOL*pSubVF(i,j,k-1,6)+RHOG*(1.0_WP-pSubVF(i,j,k-1,6))
-                  RHOL=0.0_WP; if (pVF(i,j,k  ,1).ge.VFlo.and.pQ(i,j,k  ,1).gt.0.0_WP.and.pQ(i,j,k  ,3).gt.0.0_WP) RHOL=pQ(i,j,k  ,1)/(       pVF(i,j,k  ,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k  ,1).le.VFhi.and.pQ(i,j,k  ,2).gt.0.0_WP.and.pQ(i,j,k  ,4).gt.0.0_WP) RHOG=pQ(i,j,k  ,2)/(1.0_WP-pVF(i,j,k  ,1))
-                  rhoHi=RHOL*pSubVF(i,j,k  ,5)+RHOG*(1.0_WP-pSubVF(i,j,k  ,5))
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
                end if
-               pW(i,j,k,1)=(rhoLo*UVWlo+rhoHi*UVWhi)/(rhoLo+rhoHi)
+               pW(i,j,k,1)=(rhoLo*pUVW(i,j,k-1,3)+rhoHi*pUVW(i,j,k,3))/(rhoLo+rhoHi)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -652,8 +639,8 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pVF,pSubVF
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pPmix
-      real(WP) :: dxi,dyi,dzi,RHOL,RHOG,rhoLo,rhoHi,div
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pPmix,pRHOL,pRHOG
+      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div
       integer :: lvl,i,j,k
       ! Build temp face mfabs to store pressure fluxes
       allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
@@ -684,8 +671,9 @@ contains
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pQ   =>this%Q%mf(lvl)%dataptr(mfi)
-            pVF  =>this%VF%mf(lvl)%dataptr(mfi)
             pPmix=>Pmix%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
             pFx  =>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
             if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
             ! X-faces
@@ -693,12 +681,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i-1,j,k,1).ge.VFlo.and.pQ(i-1,j,k,1).gt.0.0_WP.and.pQ(i-1,j,k,3).gt.0.0_WP) RHOL=pQ(i-1,j,k,1)/(       pVF(i-1,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i-1,j,k,1).le.VFhi.and.pQ(i-1,j,k,2).gt.0.0_WP.and.pQ(i-1,j,k,4).gt.0.0_WP) RHOG=pQ(i-1,j,k,2)/(1.0_WP-pVF(i-1,j,k,1))
-                  rhoLo=RHOL*pSubVF(i-1,j,k,2)+RHOG*(1.0_WP-pSubVF(i-1,j,k,2))
-                  RHOL=0.0_WP; if (pVF(i  ,j,k,1).ge.VFlo.and.pQ(i  ,j,k,1).gt.0.0_WP.and.pQ(i  ,j,k,3).gt.0.0_WP) RHOL=pQ(i  ,j,k,1)/(       pVF(i  ,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i  ,j,k,1).le.VFhi.and.pQ(i  ,j,k,2).gt.0.0_WP.and.pQ(i  ,j,k,4).gt.0.0_WP) RHOG=pQ(i  ,j,k,2)/(1.0_WP-pVF(i  ,j,k,1))
-                  rhoHi=RHOL*pSubVF(i  ,j,k,1)+RHOG*(1.0_WP-pSubVF(i  ,j,k,1))
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
                end if
                pFx(i,j,k,1)=-2.0_WP*(pPmix(i,j,k,1)-pPmix(i-1,j,k,1))*dxi/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -707,12 +691,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j-1,k,1).ge.VFlo.and.pQ(i,j-1,k,1).gt.0.0_WP.and.pQ(i,j-1,k,3).gt.0.0_WP) RHOL=pQ(i,j-1,k,1)/(       pVF(i,j-1,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j-1,k,1).le.VFhi.and.pQ(i,j-1,k,2).gt.0.0_WP.and.pQ(i,j-1,k,4).gt.0.0_WP) RHOG=pQ(i,j-1,k,2)/(1.0_WP-pVF(i,j-1,k,1))
-                  rhoLo=RHOL*pSubVF(i,j-1,k,4)+RHOG*(1.0_WP-pSubVF(i,j-1,k,4))
-                  RHOL=0.0_WP; if (pVF(i,j  ,k,1).ge.VFlo.and.pQ(i,j  ,k,1).gt.0.0_WP.and.pQ(i,j  ,k,3).gt.0.0_WP) RHOL=pQ(i,j  ,k,1)/(       pVF(i,j  ,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j  ,k,1).le.VFhi.and.pQ(i,j  ,k,2).gt.0.0_WP.and.pQ(i,j  ,k,4).gt.0.0_WP) RHOG=pQ(i,j  ,k,2)/(1.0_WP-pVF(i,j  ,k,1))
-                  rhoHi=RHOL*pSubVF(i,j  ,k,3)+RHOG*(1.0_WP-pSubVF(i,j  ,k,3))
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
                end if
                pFy(i,j,k,1)=-2.0_WP*(pPmix(i,j,k,1)-pPmix(i,j-1,k,1))*dyi/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -721,12 +701,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j,k-1,1).ge.VFlo.and.pQ(i,j,k-1,1).gt.0.0_WP.and.pQ(i,j,k-1,3).gt.0.0_WP) RHOL=pQ(i,j,k-1,1)/(       pVF(i,j,k-1,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k-1,1).le.VFhi.and.pQ(i,j,k-1,2).gt.0.0_WP.and.pQ(i,j,k-1,4).gt.0.0_WP) RHOG=pQ(i,j,k-1,2)/(1.0_WP-pVF(i,j,k-1,1))
-                  rhoLo=RHOL*pSubVF(i,j,k-1,6)+RHOG*(1.0_WP-pSubVF(i,j,k-1,6))
-                  RHOL=0.0_WP; if (pVF(i,j,k  ,1).ge.VFlo.and.pQ(i,j,k  ,1).gt.0.0_WP.and.pQ(i,j,k  ,3).gt.0.0_WP) RHOL=pQ(i,j,k  ,1)/(       pVF(i,j,k  ,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k  ,1).le.VFhi.and.pQ(i,j,k  ,2).gt.0.0_WP.and.pQ(i,j,k  ,4).gt.0.0_WP) RHOG=pQ(i,j,k  ,2)/(1.0_WP-pVF(i,j,k  ,1))
-                  rhoHi=RHOL*pSubVF(i,j,k  ,5)+RHOG*(1.0_WP-pSubVF(i,j,k  ,5))
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
                end if
                pFz(i,j,k,1)=-2.0_WP*(pPmix(i,j,k,1)-pPmix(i,j,k-1,1))*dzi/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -782,8 +758,8 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       type(amrex_multifab), dimension(:), allocatable :: AA,BBx,BBy,BBz
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pVF,pC,pSubVF
-      real(WP) :: RHOL,RHOG,rhoLo,rhoHi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pC,pSubVF,pRHOL,pRHOG
+      real(WP) :: rhoLo,rhoHi
       ! Allocate temporary face coefficient mfabs
       allocate(AA(0:this%amr%clvl()),BBx(0:this%amr%clvl()),BBy(0:this%amr%clvl()),BBz(0:this%amr%clvl()))
       do lvl=0,this%amr%clvl()
@@ -797,13 +773,14 @@ contains
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointers to data
-            pQ  =>this%Q%mf(lvl)%dataptr(mfi)
-            pVF =>this%VF%mf(lvl)%dataptr(mfi)
-            pC  =>this%C%mf(lvl)%dataptr(mfi)
-            pAA =>AA(lvl)%dataptr(mfi)
-            pBBx=>BBx(lvl)%dataptr(mfi)
-            pBBy=>BBy(lvl)%dataptr(mfi)
-            pBBz=>BBz(lvl)%dataptr(mfi)
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pC   =>this%C%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            pAA  =>AA(lvl)%dataptr(mfi)
+            pBBx =>BBx(lvl)%dataptr(mfi)
+            pBBy =>BBy(lvl)%dataptr(mfi)
+            pBBz =>BBz(lvl)%dataptr(mfi)
             if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
             ! Cell-centered
             bx=mfi%tilebox()
@@ -815,12 +792,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i-1,j,k,1).ge.VFlo.and.pQ(i-1,j,k,1).gt.0.0_WP.and.pQ(i-1,j,k,3).gt.0.0_WP) RHOL=pQ(i-1,j,k,1)/(       pVF(i-1,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i-1,j,k,1).le.VFhi.and.pQ(i-1,j,k,2).gt.0.0_WP.and.pQ(i-1,j,k,4).gt.0.0_WP) RHOG=pQ(i-1,j,k,2)/(1.0_WP-pVF(i-1,j,k,1))
-                  rhoLo=RHOL*pSubVF(i-1,j,k,2)+RHOG*(1.0_WP-pSubVF(i-1,j,k,2))
-                  RHOL=0.0_WP; if (pVF(i  ,j,k,1).ge.VFlo.and.pQ(i  ,j,k,1).gt.0.0_WP.and.pQ(i  ,j,k,3).gt.0.0_WP) RHOL=pQ(i  ,j,k,1)/(       pVF(i  ,j,k,1))
-                  RHOG=0.0_WP; if (pVF(i  ,j,k,1).le.VFhi.and.pQ(i  ,j,k,2).gt.0.0_WP.and.pQ(i  ,j,k,4).gt.0.0_WP) RHOG=pQ(i  ,j,k,2)/(1.0_WP-pVF(i  ,j,k,1))
-                  rhoHi=RHOL*pSubVF(i  ,j,k,1)+RHOG*(1.0_WP-pSubVF(i  ,j,k,1))
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
                end if
                pBBx(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -829,12 +802,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j-1,k,1).ge.VFlo.and.pQ(i,j-1,k,1).gt.0.0_WP.and.pQ(i,j-1,k,3).gt.0.0_WP) RHOL=pQ(i,j-1,k,1)/(       pVF(i,j-1,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j-1,k,1).le.VFhi.and.pQ(i,j-1,k,2).gt.0.0_WP.and.pQ(i,j-1,k,4).gt.0.0_WP) RHOG=pQ(i,j-1,k,2)/(1.0_WP-pVF(i,j-1,k,1))
-                  rhoLo=RHOL*pSubVF(i,j-1,k,4)+RHOG*(1.0_WP-pSubVF(i,j-1,k,4))
-                  RHOL=0.0_WP; if (pVF(i,j  ,k,1).ge.VFlo.and.pQ(i,j  ,k,1).gt.0.0_WP.and.pQ(i,j  ,k,3).gt.0.0_WP) RHOL=pQ(i,j  ,k,1)/(       pVF(i,j  ,k,1))
-                  RHOG=0.0_WP; if (pVF(i,j  ,k,1).le.VFhi.and.pQ(i,j  ,k,2).gt.0.0_WP.and.pQ(i,j  ,k,4).gt.0.0_WP) RHOG=pQ(i,j  ,k,2)/(1.0_WP-pVF(i,j  ,k,1))
-                  rhoHi=RHOL*pSubVF(i,j  ,k,3)+RHOG*(1.0_WP-pSubVF(i,j  ,k,3))
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
                end if
                pBBy(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -843,12 +812,8 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
                if (lvl.eq.this%amr%maxlvl) then
-                  RHOL=0.0_WP; if (pVF(i,j,k-1,1).ge.VFlo.and.pQ(i,j,k-1,1).gt.0.0_WP.and.pQ(i,j,k-1,3).gt.0.0_WP) RHOL=pQ(i,j,k-1,1)/(       pVF(i,j,k-1,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k-1,1).le.VFhi.and.pQ(i,j,k-1,2).gt.0.0_WP.and.pQ(i,j,k-1,4).gt.0.0_WP) RHOG=pQ(i,j,k-1,2)/(1.0_WP-pVF(i,j,k-1,1))
-                  rhoLo=RHOL*pSubVF(i,j,k-1,6)+RHOG*(1.0_WP-pSubVF(i,j,k-1,6))
-                  RHOL=0.0_WP; if (pVF(i,j,k  ,1).ge.VFlo.and.pQ(i,j,k  ,1).gt.0.0_WP.and.pQ(i,j,k  ,3).gt.0.0_WP) RHOL=pQ(i,j,k  ,1)/(       pVF(i,j,k  ,1))
-                  RHOG=0.0_WP; if (pVF(i,j,k  ,1).le.VFhi.and.pQ(i,j,k  ,2).gt.0.0_WP.and.pQ(i,j,k  ,4).gt.0.0_WP) RHOG=pQ(i,j,k  ,2)/(1.0_WP-pVF(i,j,k  ,1))
-                  rhoHi=RHOL*pSubVF(i,j,k  ,5)+RHOG*(1.0_WP-pSubVF(i,j,k  ,5))
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
                end if
                pBBz(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
@@ -941,8 +906,8 @@ contains
       type(amrex_multifab), dimension(:), allocatable :: STFx,STFy,STFz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz,pVF,pQ,pSubVF,pCurv,pSD
-      real(WP) :: dxi,dyi,dzi,mysurf,mycurv,RHOL,RHOG,rhoLo,rhoHi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz,pVF,pQ,pSubVF,pCurv,pSD,pRHOL,pRHOG
+      real(WP) :: dxi,dyi,dzi,mysurf,mycurv,rhoLo,rhoHi
       integer :: lvl,i,j,k
       ! Guard: no surface tension or clvl<maxlvl
       if (this%sigma.eq.0.0_WP.or.this%amr%clvl().lt.this%amr%maxlvl) return
@@ -963,6 +928,8 @@ contains
          pSubVF=>this%subVF%dataptr(mfi)
          pCurv =>this%curv%dataptr(mfi)
          pSD   =>this%SD%dataptr(mfi)
+         pRHOL =>this%RHOL%mf(lvl)%dataptr(mfi)
+         pRHOG =>this%RHOG%mf(lvl)%dataptr(mfi)
          pSTFx =>STFx(lvl)%dataptr(mfi)
          pSTFy =>STFy(lvl)%dataptr(mfi)
          pSTFz =>STFz(lvl)%dataptr(mfi)
@@ -971,12 +938,8 @@ contains
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             mycurv=0.0_WP
             mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
-            RHOL=0.0_WP; if (pVF(i-1,j,k,1).ge.VFlo.and.pQ(i-1,j,k,1).gt.0.0_WP.and.pQ(i-1,j,k,3).gt.0.0_WP) RHOL=pQ(i-1,j,k,1)/(       pVF(i-1,j,k,1))
-            RHOG=0.0_WP; if (pVF(i-1,j,k,1).le.VFhi.and.pQ(i-1,j,k,2).gt.0.0_WP.and.pQ(i-1,j,k,4).gt.0.0_WP) RHOG=pQ(i-1,j,k,2)/(1.0_WP-pVF(i-1,j,k,1))
-            rhoLo=RHOL*pSubVF(i-1,j,k,2)+RHOG*(1.0_WP-pSubVF(i-1,j,k,2))
-            RHOL=0.0_WP; if (pVF(i  ,j,k,1).ge.VFlo.and.pQ(i  ,j,k,1).gt.0.0_WP.and.pQ(i  ,j,k,3).gt.0.0_WP) RHOL=pQ(i  ,j,k,1)/(       pVF(i  ,j,k,1))
-            RHOG=0.0_WP; if (pVF(i  ,j,k,1).le.VFhi.and.pQ(i  ,j,k,2).gt.0.0_WP.and.pQ(i  ,j,k,4).gt.0.0_WP) RHOG=pQ(i  ,j,k,2)/(1.0_WP-pVF(i  ,j,k,1))
-            rhoHi=RHOL*pSubVF(i  ,j,k,1)+RHOG*(1.0_WP-pSubVF(i  ,j,k,1))
+            rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+            rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
             pSTFx(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/max(rhoLo+rhoHi,this%rho_floor)
          end do; end do; end do
          ! Y-faces
@@ -984,12 +947,8 @@ contains
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             mycurv=0.0_WP
             mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
-            RHOL=0.0_WP; if (pVF(i,j-1,k,1).ge.VFlo.and.pQ(i,j-1,k,1).gt.0.0_WP.and.pQ(i,j-1,k,3).gt.0.0_WP) RHOL=pQ(i,j-1,k,1)/(       pVF(i,j-1,k,1))
-            RHOG=0.0_WP; if (pVF(i,j-1,k,1).le.VFhi.and.pQ(i,j-1,k,2).gt.0.0_WP.and.pQ(i,j-1,k,4).gt.0.0_WP) RHOG=pQ(i,j-1,k,2)/(1.0_WP-pVF(i,j-1,k,1))
-            rhoLo=RHOL*pSubVF(i,j-1,k,4)+RHOG*(1.0_WP-pSubVF(i,j-1,k,4))
-            RHOL=0.0_WP; if (pVF(i,j  ,k,1).ge.VFlo.and.pQ(i,j  ,k,1).gt.0.0_WP.and.pQ(i,j  ,k,3).gt.0.0_WP) RHOL=pQ(i,j  ,k,1)/(       pVF(i,j  ,k,1))
-            RHOG=0.0_WP; if (pVF(i,j  ,k,1).le.VFhi.and.pQ(i,j  ,k,2).gt.0.0_WP.and.pQ(i,j  ,k,4).gt.0.0_WP) RHOG=pQ(i,j  ,k,2)/(1.0_WP-pVF(i,j  ,k,1))
-            rhoHi=RHOL*pSubVF(i,j  ,k,3)+RHOG*(1.0_WP-pSubVF(i,j  ,k,3))
+            rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+            rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
             pSTFy(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/max(rhoLo+rhoHi,this%rho_floor)
          end do; end do; end do
          ! Z-faces
@@ -997,12 +956,8 @@ contains
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             mycurv=0.0_WP
             mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
-            RHOL=0.0_WP; if (pVF(i,j,k-1,1).ge.VFlo.and.pQ(i,j,k-1,1).gt.0.0_WP.and.pQ(i,j,k-1,3).gt.0.0_WP) RHOL=pQ(i,j,k-1,1)/(       pVF(i,j,k-1,1))
-            RHOG=0.0_WP; if (pVF(i,j,k-1,1).le.VFhi.and.pQ(i,j,k-1,2).gt.0.0_WP.and.pQ(i,j,k-1,4).gt.0.0_WP) RHOG=pQ(i,j,k-1,2)/(1.0_WP-pVF(i,j,k-1,1))
-            rhoLo=RHOL*pSubVF(i,j,k-1,6)+RHOG*(1.0_WP-pSubVF(i,j,k-1,6))
-            RHOL=0.0_WP; if (pVF(i,j,k  ,1).ge.VFlo.and.pQ(i,j,k  ,1).gt.0.0_WP.and.pQ(i,j,k  ,3).gt.0.0_WP) RHOL=pQ(i,j,k  ,1)/(       pVF(i,j,k  ,1))
-            RHOG=0.0_WP; if (pVF(i,j,k  ,1).le.VFhi.and.pQ(i,j,k  ,2).gt.0.0_WP.and.pQ(i,j,k  ,4).gt.0.0_WP) RHOG=pQ(i,j,k  ,2)/(1.0_WP-pVF(i,j,k  ,1))
-            rhoHi=RHOL*pSubVF(i,j,k  ,5)+RHOG*(1.0_WP-pSubVF(i,j,k  ,5))
+            rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+            rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
             pSTFz(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/max(rhoLo+rhoHi,this%rho_floor)
          end do; end do; end do
       end do
@@ -1033,8 +988,8 @@ contains
       type(amrex_multifab), intent(in) :: Fx(0:),Fy(0:),Fz(0:)
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pVF,pSubVF
-      real(WP) :: rho,RHOL,RHOG,rhoLo,rhoHi
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pSubVF,pRHOL,pRHOG
+      real(WP) :: rho,rhoLo,rhoHi
       integer :: lvl,i,j,k
       do lvl=0,this%amr%clvl()
          ! Face velocities: direct saxpy
@@ -1044,38 +999,33 @@ contains
          ! Cell-centered momentum: density-weighted average of face accelerations
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
-            pQ =>this%Q%mf(lvl)%dataptr(mfi)
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
             pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
-            pVF=>this%VF%mf(lvl)%dataptr(mfi)
             if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rho=sum(pQ(i,j,k,1:2))
-               ! Compute cell-local RHOL/RHOG
-               RHOL=0.0_WP; RHOG=0.0_WP
-               if (lvl.eq.this%amr%maxlvl) then
-                  if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                  if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-               end if
                ! X-momentum
                rhoLo=rho; rhoHi=rho
                if (lvl.eq.this%amr%maxlvl) then
-                  rhoLo=RHOL*pSubVF(i,j,k,1)+RHOG*(1.0_WP-pSubVF(i,j,k,1))
-                  rhoHi=RHOL*pSubVF(i,j,k,2)+RHOG*(1.0_WP-pSubVF(i,j,k,2))
+                  rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,1)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,1))
+                  rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,2)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,2))
                end if
                pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*(rhoLo*pFx(i,j,k,1)+rhoHi*pFx(i+1,j,k,1))
                ! Y-momentum
                rhoLo=rho; rhoHi=rho
                if (lvl.eq.this%amr%maxlvl) then
-                  rhoLo=RHOL*pSubVF(i,j,k,3)+RHOG*(1.0_WP-pSubVF(i,j,k,3))
-                  rhoHi=RHOL*pSubVF(i,j,k,4)+RHOG*(1.0_WP-pSubVF(i,j,k,4))
+                  rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,3)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,3))
+                  rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,4)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,4))
                end if
                pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*(rhoLo*pFy(i,j,k,1)+rhoHi*pFy(i,j+1,k,1))
                ! Z-momentum
                rhoLo=rho; rhoHi=rho
                if (lvl.eq.this%amr%maxlvl) then
-                  rhoLo=RHOL*pSubVF(i,j,k,5)+RHOG*(1.0_WP-pSubVF(i,j,k,5))
-                  rhoHi=RHOL*pSubVF(i,j,k,6)+RHOG*(1.0_WP-pSubVF(i,j,k,6))
+                  rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,5)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,5))
+                  rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,6)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,6))
                end if
                pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*(rhoLo*pFz(i,j,k,1)+rhoHi*pFz(i,j,k+1,1))
             end do; end do; end do
@@ -1083,66 +1033,42 @@ contains
             if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
                i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
                   rhoHi=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoHi=RHOL*pSubVF(i,j,k,2)+RHOG*(1.0_WP-pSubVF(i,j,k,2))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,2)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,2))
                   pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*rhoHi*pFx(i+1,j,k,1)
                end do; end do
             end if
             if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
                i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
                   rhoLo=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoLo=RHOL*pSubVF(i,j,k,1)+RHOG*(1.0_WP-pSubVF(i,j,k,1))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,1)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,1))
                   pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*rhoLo*pFx(i,  j,k,1)
                end do; end do
             end if
             if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
                j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
                   rhoHi=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoHi=RHOL*pSubVF(i,j,k,4)+RHOG*(1.0_WP-pSubVF(i,j,k,4))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,4)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,4))
                   pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*rhoHi*pFy(i,j+1,k,1)
                end do; end do
             end if
             if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
                j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
                   rhoLo=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoLo=RHOL*pSubVF(i,j,k,3)+RHOG*(1.0_WP-pSubVF(i,j,k,3))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,3)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,3))
                   pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*rhoLo*pFy(i,j,  k,1)
                end do; end do
             end if
             if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
                k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   rhoHi=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoHi=RHOL*pSubVF(i,j,k,6)+RHOG*(1.0_WP-pSubVF(i,j,k,6))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,6)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,6))
                   pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*rhoHi*pFz(i,j,k+1,1)
                end do; end do
             end if
             if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
                k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   rhoLo=sum(pQ(i,j,k,1:2))
-                  if (lvl.eq.this%amr%maxlvl) then
-                     RHOL=0.0_WP; if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) RHOL=pQ(i,j,k,1)/(       pVF(i,j,k,1))
-                     RHOG=0.0_WP; if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) RHOG=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                     rhoLo=RHOL*pSubVF(i,j,k,5)+RHOG*(1.0_WP-pSubVF(i,j,k,5))
-                  end if
+                  if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,5)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,5))
                   pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*rhoLo*pFz(i,j,k,  1)
                end do; end do
             end if
@@ -2198,6 +2124,7 @@ contains
    !> Apply relaxation to mixture cells
    subroutine apply_relax(this,time)
       use mpi_f08, only: MPI_Wtime
+      use amrvof_geometry, only: get_plane_dist,cut_hex_vol
       implicit none
       class(amrmpcomp), intent(inout) :: this
       real(WP), intent(in) :: time
@@ -2205,8 +2132,11 @@ contains
       real(WP) :: t0
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG,pCurv
-      real(WP) :: dx,dy,dz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG,pCurv,pPLIC
+      real(WP) :: dx,dy,dz,cell_vol,vol_liq,vol_gas
+      real(WP), dimension(3) :: lo,hi,bary_liq,bary_gas
+      real(WP), dimension(3,8) :: hex
+      real(WP), dimension(4) :: plane
       ! If no relaxation model was provided, return
       if (.not.associated(this%relax)) return
       ! Return if clvl<maxlvl
@@ -2216,6 +2146,7 @@ contains
       ! Apply relaxation on finest level only (mixture cells are always at finest)
       lvl=this%amr%maxlvl
       dx=this%amr%dx(lvl); dy=this%amr%dy(lvl); dz=this%amr%dz(lvl)
+      cell_vol=this%amr%cell_vol(lvl)
       call this%amr%mfiter_build(lvl,mfi)
       do while (mfi%next())
          ! Get pointers to data
@@ -2224,15 +2155,33 @@ contains
          pCL  =>this%CL%dataptr(mfi)
          pCG  =>this%CG%dataptr(mfi)
          pCurv=>this%curv%dataptr(mfi)
+         pPLIC=>this%plic%dataptr(mfi)
          ! Loop over all cells
          bx=mfi%growntilebox(this%nover)
-         ! Loop over valid cells
-         !bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
             ! Only relax mixture cells
             if (pVF(i,j,k,1).lt.VFlo.or.pVF(i,j,k,1).gt.VFhi) cycle
             ! Apply user-provided relaxation model (modifies VF and Q)
             call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
+            ! Adjust PLIC plane to match new VF
+            lo=[this%amr%xlo+real(i  ,WP)*dx,this%amr%ylo+real(j  ,WP)*dy,this%amr%zlo+real(k  ,WP)*dz]
+            hi=[this%amr%xlo+real(i+1,WP)*dx,this%amr%ylo+real(j+1,WP)*dy,this%amr%zlo+real(k+1,WP)*dz]
+            ! Reposition plane: keep normal, adjust distance for new VF
+            pPLIC(i,j,k,4)=get_plane_dist(pPLIC(i,j,k,1:3),lo,hi,pVF(i,j,k,1))
+            ! Recompute barycenters from adjusted PLIC
+            hex(:,1)=[lo(1),lo(2),lo(3)]
+            hex(:,2)=[hi(1),lo(2),lo(3)]
+            hex(:,3)=[hi(1),hi(2),lo(3)]
+            hex(:,4)=[lo(1),hi(2),lo(3)]
+            hex(:,5)=[lo(1),lo(2),hi(3)]
+            hex(:,6)=[hi(1),lo(2),hi(3)]
+            hex(:,7)=[hi(1),hi(2),hi(3)]
+            hex(:,8)=[lo(1),hi(2),hi(3)]
+            plane=pPLIC(i,j,k,:)
+            call cut_hex_vol(hex,plane,vol_liq,vol_gas,bary_liq,bary_gas)
+            pVF(i,j,k,1)=vol_liq/cell_vol
+            pCL(i,j,k,1:3)=bary_liq
+            pCG(i,j,k,1:3)=bary_gas
             ! Ensure consistency with modified VF
             if (pVF(i,j,k,1).lt.VFlo) then
                ! Pure liquid
@@ -2241,6 +2190,7 @@ contains
                pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                pQ(i,j,k,1)=0.0_WP
                pQ(i,j,k,3)=0.0_WP
+               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,-1.0e10_WP]
             else if (pVF(i,j,k,1).gt.VFhi) then
                ! Pure gas
                pVF(i,j,k,1)=1.0_WP
@@ -2248,13 +2198,11 @@ contains
                pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                pQ(i,j,k,2)=0.0_WP
                pQ(i,j,k,4)=0.0_WP
+               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,+1.0e10_WP]
             end if
          end do; end do; end do
       end do
       call this%amr%mfiter_destroy(mfi)
-      ! Sync and apply BC
-      !call this%fill(lvl=this%amr%maxlvl,time=time)
-      !call this%Q%fill(time=time)
       ! End timer
       this%wt_relax=this%wt_relax+(MPI_Wtime()-t0)
    end subroutine apply_relax
