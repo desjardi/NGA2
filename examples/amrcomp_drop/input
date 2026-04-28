@@ -22,13 +22,13 @@ Density ratio:      133.5
 Liquid Mach number: 1.0
 
 # Viscous parameters
-Weber number:           1e3
+Weber number:           3.69e5
 Reynolds number:        3e5
 Prandtl number:         0.71
-Viscosity ratio:        12.6
-Diffusivity ratio:      5.0
+Viscosity ratio:        21.05
+Diffusivity ratio:      8.34
 Sutherland exponent:    1.5
-Sutherland temperature: 0.4042
+Sutherland temperature: 0.073
 
 # Time integration
 Max dt:   1e-3
