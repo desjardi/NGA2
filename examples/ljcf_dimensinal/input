@@ -37,6 +37,7 @@ Pressure iteration : 100
 # Data output
 Ensight output period : 2.5e-3 # s
 Restart output period : 0.05 # s
+Drop stats output period = 2.5e-3
 
 # Data restart
 #Restart from : 1.00000E+01

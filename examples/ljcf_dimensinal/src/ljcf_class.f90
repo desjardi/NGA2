@@ -67,6 +67,9 @@ module ljcf_class
       type(event)   :: save_evt
       type(pardata) :: df
       logical :: restarted
+      
+      !> Drop statistics output event
+      type(event)   :: drops_evt
 
       !> Problem definition
       real(WP) :: djet, Vjet
@@ -496,6 +499,20 @@ contains
       end block create_ensight
       
       
+      ! Create drop statistics output event
+      create_drops_output: block
+         use param, only: param_read
+         use filesys, only: makedir,isdir
+         ! Create event for drop statistics output
+         this%drops_evt=event(time=this%time,name='Drop statistics output')
+         call param_read('Drop stats output period',this%drops_evt%tper,default=this%time%dtmax)
+         ! Create drop_stats directory if needed
+         if (this%cfg%amRoot) then
+            if (.not.isdir('drop_stats')) call makedir('drop_stats')
+         end if
+      end block create_drops_output
+      
+      
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -803,6 +820,106 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
       end block remove_vof
+
+      ! Analyze drops 
+      analyze_drops: block
+         use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_MAX,MPI_IN_PLACE
+         use parallel,  only: MPI_REAL_WP
+         use mathtools, only: pi
+         use string,    only: str_medium
+         real(WP), dimension(:)    , allocatable :: dvol
+         real(WP), dimension(:,:)  , allocatable :: dpos
+         real(WP), dimension(:,:)  , allocatable :: dvel
+         real(WP), dimension(:,:,:), allocatable :: dmoi
+         real(WP), dimension(:,:)  , allocatable :: dgvel
+         real(WP), dimension(:)    , allocatable :: weights
+         integer :: n,m,ierr,i,j,k,nmax
+         integer :: iunit
+         real(WP) :: x,y,z,x0,y0,z0
+         character(len=str_medium) :: timestamp
+         ! Start by performing a CCL
+         call this%ccl%build(make_label,same_label)
+
+         ! Allocate droplet stats arrays
+         allocate(dvol(1:this%ccl%nstruct        )); dvol=0.0_WP
+         allocate(dpos(1:this%ccl%nstruct,1:3    )); dpos=0.0_WP
+         allocate(dvel(1:this%ccl%nstruct,1:3    )); dvel=0.0_WP
+         allocate(dmoi(1:this%ccl%nstruct,1:3,1:3)); dmoi=0.0_WP
+         allocate(dgvel(1:this%ccl%nstruct,1:3   )); dgvel=0.0_WP
+         allocate(weights(1:this%ccl%nstruct     )); weights=0.0_WP
+
+         ! First pass to accumulate volume, position, and velocity
+         do n=1,this%ccl%nstruct
+            ! Loop over cells in structure
+            do m=1,this%ccl%struct(n)%n_
+               ! Get cell indices
+               i=this%ccl%struct(n)%map(1,m)
+               j=this%ccl%struct(n)%map(2,m)
+               k=this%ccl%struct(n)%map(3,m)
+               ! Get cell position, accounting for periodicity
+               x=this%vf%cfg%xm(i)-this%ccl%struct(n)%per(1)*this%vf%cfg%xL
+               y=this%vf%cfg%ym(j)-this%ccl%struct(n)%per(2)*this%vf%cfg%yL
+               z=this%vf%cfg%zm(k)-this%ccl%struct(n)%per(3)*this%vf%cfg%zL
+               ! Accumulate volume, position, and velocity
+               dvol(n  )=dvol(n  )+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
+               dpos(n,:)=dpos(n,:)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*[x,y,z]
+               dvel(n,:)=dvel(n,:)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*[this%Ui(i,j,k),this%Vi(i,j,k),this%Wi(i,j,k)]
+            end do
+         end do   
+         call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,1*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,dpos,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE,dvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+
+         ! Second pass to accumulate moment of inertia
+         do n=1,this%ccl%nstruct
+            ! Get drop barycenter
+            x0=dpos(n,1)/dvol(n)
+            y0=dpos(n,2)/dvol(n)
+            z0=dpos(n,3)/dvol(n)
+            ! Loop over cells in structure
+            do m=1,this%ccl%struct(n)%n_
+               ! Get cell indices
+               i=this%ccl%struct(n)%map(1,m)
+               j=this%ccl%struct(n)%map(2,m)
+               k=this%ccl%struct(n)%map(3,m)
+               ! Get cell position relative to drop barycenter, accounting for periodicity
+               x=this%vf%cfg%xm(i)-this%ccl%struct(n)%per(1)*this%vf%cfg%xL-x0
+               y=this%vf%cfg%ym(j)-this%ccl%struct(n)%per(2)*this%vf%cfg%yL-y0
+               z=this%vf%cfg%zm(k)-this%ccl%struct(n)%per(3)*this%vf%cfg%zL-z0
+               ! Accumulate moment of inertia
+               dmoi(n,1,1)=dmoi(n,1,1)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(y**2+z**2)
+               dmoi(n,2,2)=dmoi(n,2,2)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(z**2+x**2)
+               dmoi(n,3,3)=dmoi(n,3,3)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(x**2+y**2)
+               dmoi(n,1,2)=dmoi(n,1,2)-this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(x*y)
+               dmoi(n,1,3)=dmoi(n,1,3)-this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(x*z)
+               dmoi(n,2,3)=dmoi(n,2,3)-this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*(y*z)
+            end do
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,dmoi,9*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
+         
+         ! Third pass to generate normalized drop stats
+         do n=1,this%ccl%nstruct
+            ! Get drop barycenter, accounting for periodicity
+            dpos(n,:)=dpos(n,:)/dvol(n)
+            if (this%vf%cfg%xper.and.dpos(n,1).lt.this%vf%cfg%x(this%vf%cfg%imin)) dpos(n,1)=dpos(n,1)+this%vf%cfg%xL
+            if (this%vf%cfg%yper.and.dpos(n,2).lt.this%vf%cfg%y(this%vf%cfg%jmin)) dpos(n,2)=dpos(n,2)+this%vf%cfg%yL
+            if (this%vf%cfg%zper.and.dpos(n,3).lt.this%vf%cfg%z(this%vf%cfg%kmin)) dpos(n,3)=dpos(n,3)+this%vf%cfg%zL
+            ! Get drop velocity
+            dvel(n,:)=dvel(n,:)/dvol(n)
+         end do
+
+         ! Write drop statistics
+         if (this%drops_evt%occurs().and.this%cfg%amRoot) then
+            write(timestamp,'(es12.5)') this%time%t
+            open(newunit=iunit,file='drop_stats/drop_stats_'//trim(adjustl(timestamp))//'.dat',status='replace')
+            write(iunit,'(A)') '# DropID Volume X Y Z U V W Ixx Iyy Izz Ixy Ixz Iyz'
+            do n=1,this%ccl%nstruct
+               write(iunit,'(I6,1X,F12.5,1X,3F12.5,1X,3F12.5,1X,6F12.5,1X,F12.5)') n,dvol(n),dpos(n,1),dpos(n,2),dpos(n,3),&
+               & dvel(n,1),dvel(n,2),dvel(n,3),dmoi(n,1,1),dmoi(n,2,2),dmoi(n,3,3),dmoi(n,1,2),dmoi(n,1,3),dmoi(n,2,3)
+            end do
+            close(iunit)
+         end if
+      end block analyze_drops
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
@@ -900,6 +1017,30 @@ contains
             deallocate(P11,P12,P13,P14,P21,P22,P23,P24)
          end block save_restart
       end if
+
+   contains
+      !> Function that identifies cells that need a label
+      logical function make_label(i,j,k)
+         implicit none
+         integer, intent(in) :: i,j,k
+         if (this%vf%VF(i,j,k).gt.0.0_WP) then
+            make_label=.true.
+         else
+            make_label=.false.
+         end if
+      end function make_label
+
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         if (this%vf%VF(i1,j1,k1).gt.0.0_WP .and. this%vf%VF(i2,j2,k2).gt.0.0_WP) then
+            same_label=.true.
+         else
+             same_label=.false.
+         end if
+         same_label=.true.
+      end function same_label
       
    end subroutine step
    
