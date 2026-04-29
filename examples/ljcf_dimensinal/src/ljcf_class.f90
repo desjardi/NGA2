@@ -912,7 +912,7 @@ contains
             open(newunit=iunit,file='drop_stats/drop_stats_'//trim(adjustl(timestamp))//'.dat',status='replace')
             write(iunit,'(A)') '# DropID Volume X Y Z U V W Ixx Iyy Izz Ixy Ixz Iyz'
             do n=1,this%ccl%nstruct
-               write(iunit,'(I6,1X,F12.5,1X,3F12.5,1X,3F12.5,1X,6F12.5,1X,F12.5)') n,dvol(n),dpos(n,1),dpos(n,2),dpos(n,3),&
+               write(iunit,'(I6,1X,E12.5,1X,3E12.5,1X,3E12.5,1X,6E12.5,1X,E12.5)') n,dvol(n),dpos(n,1),dpos(n,2),dpos(n,3),&
                & dvel(n,1),dvel(n,2),dvel(n,3),dmoi(n,1,1),dmoi(n,2,2),dmoi(n,3,3),dmoi(n,1,2),dmoi(n,1,3),dmoi(n,2,3)
             end do
             close(iunit)
