@@ -219,8 +219,6 @@ contains
             end do
          end do
 
-         print *, "VOF(14,1,13) = ", this%vf%VF(14,1-1,13), " after initialization"
-
          ! Update the band
          call this%vf%update_band()
          ! Perform interface reconstruction from VOF field
