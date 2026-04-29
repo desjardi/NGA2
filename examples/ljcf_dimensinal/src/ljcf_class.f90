@@ -132,6 +132,7 @@ contains
          call param_read('Max timestep size',this%time%dtmax)
          call param_read('Max cfl number',this%time%cflmax)
          call param_read('Max time',this%time%tmax)
+         call param_read('Max steps',this%time%nmax, default=this%time%nmax)
          this%time%dt=this%time%dtmax
          this%time%itmax=2
       end block initialize_timetracker
