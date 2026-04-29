@@ -226,7 +226,6 @@ contains
          ! Set interface planes at the boundaries
          call this%vf%set_full_bcond()
 
-               print *, "VOF(14,1,13) = ", this%vf%VF(14,1-1:1,13), " after full_bcond"
          ! Now apply Neumann condition on interface at inlet to have proper round injection
          neumann_irl: block
             use irl_fortran_interface, only: getPlane,new,construct_2pt,RectCub_type,&
