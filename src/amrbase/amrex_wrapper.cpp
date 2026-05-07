@@ -934,8 +934,10 @@ void amrmfab_average_down_face(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 
@@ -959,8 +961,10 @@ void amrmfab_average_down_edge(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 
@@ -984,8 +988,10 @@ void amrmfab_average_down_node(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 

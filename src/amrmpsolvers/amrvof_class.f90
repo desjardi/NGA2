@@ -349,6 +349,10 @@ contains
          call mfab_rebuild(this%CLold  ,ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%CGold  ,ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
+         if (this%calculate_curv) then
+            call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
+            call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
+         end if
       end if
    end subroutine on_init
 
@@ -373,6 +377,10 @@ contains
          call mfab_rebuild(this%CLold,  ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%CGold,  ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
+         if (this%calculate_curv) then
+            call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
+            call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
+         end if
          ! Set to trivial values
          trivialize: block
             use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
@@ -419,7 +427,7 @@ contains
          remake_finest: block
             use amrex_amr_module, only: amrex_multifab_build,amrex_multifab_destroy, &
             &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-            type(amrex_multifab) :: CL_new,CG_new,PLIC_new
+            type(amrex_multifab) :: CL_new,CG_new,PLIC_new,curv_new,SD_new
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
@@ -455,7 +463,16 @@ contains
             call this%CL%move(CL_new)
             call this%CG%move(CG_new)
             call this%PLIC%move(PLIC_new)
-            ! Rebuild old multifabs
+            ! Rebuild curv/SD with parallel_copy of surviving data
+            if (this%calculate_curv) then
+               call amrex_multifab_build(curv_new,ba,dm,nc=1,ng=this%nover); call curv_new%setval(0.0_WP)
+               call amrex_multifab_build(SD_new  ,ba,dm,nc=1,ng=this%nover); call SD_new  %setval(0.0_WP)
+               call curv_new%parallel_copy(this%curv,this%amr%geom(lvl))
+               call SD_new  %parallel_copy(this%SD  ,this%amr%geom(lvl))
+               call this%curv%move(curv_new)
+               call this%SD  %move(SD_new)
+            end if
+            ! Rebuild empty old multifabs
             call mfab_rebuild(this%CLold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild(this%CGold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
@@ -478,6 +495,10 @@ contains
          call amrex_multifab_destroy(this%CLold)
          call amrex_multifab_destroy(this%CGold)
          call amrex_multifab_destroy(this%PLICold)
+         if (this%calculate_curv) then
+            call amrex_multifab_destroy(this%curv)
+            call amrex_multifab_destroy(this%SD)
+         end if
       end if
    end subroutine on_clear
 
@@ -1005,8 +1026,6 @@ contains
       t0=MPI_Wtime()
       ! Reset polygon and curvature storage
       call this%smesh%reset()
-      call amrex_multifab_destroy(this%curv)
-      call amrex_multifab_destroy(this%SD)
       ! Return if clvl<maxlvl
       if (this%amr%clvl().lt.this%amr%maxlvl) return
       ! Get level and cell size
@@ -1015,8 +1034,8 @@ contains
       maxcurv=1.0_WP/this%amr%min_meshsize(lvl)
       ! Create new curv and SD mfabs
       if (this%calculate_curv) then
-         call mfab_rebuild(this%curv,this%amr%get_boxarray(lvl),this%amr%get_distromap(lvl),nc=1,ng=this%nover)
-         call mfab_rebuild(this%SD  ,this%amr%get_boxarray(lvl),this%amr%get_distromap(lvl),nc=1,ng=this%nover)
+         call this%curv%setval(0.0_WP)
+         call this%SD  %setval(0.0_WP)
       end if
       ! Compute new polygons
       call this%amr%mfiter_build(lvl,mfi,tiling=.false.)

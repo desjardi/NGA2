@@ -504,7 +504,7 @@ contains
    !> Cell-center correction averages the face gradients back to cell center
    !> Optional mask argument is used for IB masking
    subroutine add_pressure(this,scale,phi,mask)
-      use amrex_amr_module, only: amrex_multifab
+      use amrex_amr_module, only: amrex_multifab,amrex_bc_reflect_odd
       use amrex_interface,  only: amrmfab_average_down_face
       use messager, only: die
       implicit none
@@ -606,38 +606,20 @@ contains
                coeff=1.0_WP; if (present(mask)) coeff=pMask(i,j,k,1)
                crossterm=0.0_WP; if (.not.present(phi)) crossterm=-coeff*scale**2*pPold(i,j,k,1)*(dxi*(pFx(i+1,j,k,1)-pFx(i,j,k,1))+dyi*(pFy(i,j+1,k,1)-pFy(i,j,k,1))+dzi*(pFz(i,j,k+1,1)-pFz(i,j,k,1)))
                pQ(i,j,k,5)=pQ(i,j,k,5)-coeff*scale*pP(i,j,k,1)*(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1)))+crossterm
+               ! Fix non-periodic boundary conditions
+               if (.not.this%amr%xper) then
+                  if (i.eq.this%amr%geom(lvl)%domain%lo(1).and.this%U%lo_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i:i+1,j,k,1))*pFx(i+1,j,k,1)
+                  if (i.eq.this%amr%geom(lvl)%domain%hi(1).and.this%U%hi_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i-1:i,j,k,1))*pFx(i  ,j,k,1)
+               end if
+               if (.not.this%amr%yper) then
+                  if (j.eq.this%amr%geom(lvl)%domain%lo(2).and.this%V%lo_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j:j+1,k,1))*pFy(i,j+1,k,1)
+                  if (j.eq.this%amr%geom(lvl)%domain%hi(2).and.this%V%hi_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j-1:j,k,1))*pFy(i,j  ,k,1)
+               end if
+               if (.not.this%amr%zper) then
+                  if (k.eq.this%amr%geom(lvl)%domain%lo(3).and.this%W%lo_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k:k+1,1))*pFz(i,j,k+1,1)
+                  if (k.eq.this%amr%geom(lvl)%domain%hi(3).and.this%W%hi_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k-1:k,1))*pFz(i,j,k  ,1)
+               end if
             end do; end do; end do
-            ! Fix non-periodic boundary conditions
-            if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
-               i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i:i+1,j,k,1))*pFx(i+1,j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
-               i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.25_WP*sum(pQ(i-1:i,j,k,1))*pFx(i  ,j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
-               j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j:j+1,k,1))*pFy(i,j+1,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
-               j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.25_WP*sum(pQ(i,j-1:j,k,1))*pFy(i,j,  k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
-               k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k:k+1,1))*pFz(i,j,k+1,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
-               k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,4)=pQ(i,j,k,4)+scale*0.25_WP*sum(pQ(i,j,k-1:k,1))*pFz(i,j,k,  1)
-               end do; end do
-            end if
          end do
          call this%amr%mfiter_destroy(mfi)
       end do
@@ -652,6 +634,7 @@ contains
    !> Prepare variable-coefficient pressure solver using face densities and speed of sound
    subroutine prepare_psolver(this,dt)
       use amrex_amr_module, only: amrex_multifab
+      use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
@@ -701,6 +684,12 @@ contains
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Enforce coefficient consistency between levels
+      do lvl=this%amr%clvl(),1,-1
+         call amrmfab_average_down_face(fmf=BBx(lvl),cmf=BBx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=BBy(lvl),cmf=BBy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=BBz(lvl),cmf=BBz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
       end do
       ! Rebuild operator
       this%psolver%alpha=-1.0_WP/dt**2

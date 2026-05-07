@@ -407,7 +407,7 @@ contains
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
    subroutine add_pressure(this,scale,phi)
-      use amrex_amr_module, only: amrex_multifab
+      use amrex_amr_module, only: amrex_multifab,amrex_bc_reflect_odd
       use amrex_interface,  only: amrmfab_average_down_face
       class(amrcinc), intent(inout) :: this
       real(WP), intent(in) :: scale
@@ -475,38 +475,20 @@ contains
                pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*sum(pFx(i:i+1,j,k,1))
                pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*sum(pFy(i,j:j+1,k,1))
                pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*sum(pFz(i,j,k:k+1,1))
+               ! Fix non-periodic boundary conditions
+               if (.not.this%amr%xper) then
+                  if (i.eq.this%amr%geom(lvl)%domain%lo(1).and.this%U%lo_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i+1,j,k,1)
+                  if (i.eq.this%amr%geom(lvl)%domain%hi(1).and.this%U%hi_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i  ,j,k,1)
+               end if
+               if (.not.this%amr%yper) then
+                  if (j.eq.this%amr%geom(lvl)%domain%lo(2).and.this%V%lo_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j+1,k,1)
+                  if (j.eq.this%amr%geom(lvl)%domain%hi(2).and.this%V%hi_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j  ,k,1)
+               end if
+               if (.not.this%amr%zper) then
+                  if (k.eq.this%amr%geom(lvl)%domain%lo(3).and.this%W%lo_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k+1,1)
+                  if (k.eq.this%amr%geom(lvl)%domain%hi(3).and.this%W%hi_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k  ,1)
+               end if
             end do; end do; end do
-            ! Fix non-periodic boundary conditions
-            if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
-               i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i+1,j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
-               i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*pFx(i,  j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
-               j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j+1,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
-               j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*pFy(i,j,  k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
-               k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k+1,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
-               k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*pFz(i,j,k,  1)
-               end do; end do
-            end if
          end do
          call this%amr%mfiter_destroy(mfi)
       end do

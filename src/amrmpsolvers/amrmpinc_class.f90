@@ -474,6 +474,7 @@ contains
    !> Prepare variable-coefficient pressure solver using face densities
    subroutine prepare_psolver(this)
       use amrex_amr_module, only: amrex_multifab
+      use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrmpinc), intent(inout) :: this
       integer :: lvl,i,j,k
@@ -519,6 +520,12 @@ contains
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Enforce coefficient consistency between levels
+      do lvl=this%amr%clvl(),1,-1
+         call amrmfab_average_down_face(fmf=Bx(lvl),cmf=Bx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=By(lvl),cmf=By(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=Bz(lvl),cmf=Bz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
       end do
       ! Rebuild operator
       call this%psolver%setup(bcoef_x=Bx,bcoef_y=By,bcoef_z=Bz)
@@ -685,7 +692,7 @@ contains
    !> Apply pre-built face fluxes to both face and cell-centered velocities
    !> scale * Fx/Fy/Fz is saxpy'd onto U/V/W, then density-weighted to Q=UVW
    subroutine apply_face_fluxes(this,scale,Fx,Fy,Fz)
-      use amrex_amr_module, only: amrex_multifab
+      use amrex_amr_module, only: amrex_multifab,amrex_bc_reflect_odd
       implicit none
       class(amrmpinc), intent(inout) :: this
       real(WP), intent(in) :: scale
@@ -714,58 +721,27 @@ contains
                rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,1)+this%rhoG*(1.0_WP-pSubVF(i,j,k,1))
                rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,2)+this%rhoG*(1.0_WP-pSubVF(i,j,k,2))
                pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*(rhoLo*pFx(i,j,k,1)+rhoHi*pFx(i+1,j,k,1))/rho
+               if (.not.this%amr%xper) then
+                  if (i.eq.this%amr%geom(lvl)%domain%lo(1).and.this%U%lo_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*rhoLo*pFx(i+1,j,k,1)/rho
+                  if (i.eq.this%amr%geom(lvl)%domain%hi(1).and.this%U%hi_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*rhoHi*pFx(i  ,j,k,1)/rho
+               end if
                ! Y
                rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,3)+this%rhoG*(1.0_WP-pSubVF(i,j,k,3))
                rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,4)+this%rhoG*(1.0_WP-pSubVF(i,j,k,4))
                pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*(rhoLo*pFy(i,j,k,1)+rhoHi*pFy(i,j+1,k,1))/rho
+               if (.not.this%amr%yper) then
+                  if (j.eq.this%amr%geom(lvl)%domain%lo(2).and.this%V%lo_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*rhoLo*pFy(i,j+1,k,1)/rho
+                  if (j.eq.this%amr%geom(lvl)%domain%hi(2).and.this%V%hi_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*rhoHi*pFy(i,j  ,k,1)/rho
+               end if
                ! Z
                rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,5)+this%rhoG*(1.0_WP-pSubVF(i,j,k,5))
                rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,6)+this%rhoG*(1.0_WP-pSubVF(i,j,k,6))
                pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*(rhoLo*pFz(i,j,k,1)+rhoHi*pFz(i,j,k+1,1))/rho
+               if (.not.this%amr%zper) then
+                  if (k.eq.this%amr%geom(lvl)%domain%lo(3).and.this%W%lo_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*rhoLo*pFz(i,j,k+1,1)/rho
+                  if (k.eq.this%amr%geom(lvl)%domain%hi(3).and.this%W%hi_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*rhoHi*pFz(i,j,k  ,1)/rho
+               end if
             end do; end do; end do
-            ! Non-periodic boundary cells (only one face flux available)
-            if (.not.this%amr%xper.and.bx%lo(1).eq.this%amr%geom(lvl)%domain%lo(1)) then
-               i=this%amr%geom(lvl)%domain%lo(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,2)+this%rhoG*(1.0_WP-pSubVF(i,j,k,2))
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*rhoHi/rho*pFx(i+1,j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%xper.and.bx%hi(1).eq.this%amr%geom(lvl)%domain%hi(1)) then
-               i=this%amr%geom(lvl)%domain%hi(1); do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,1)+this%rhoG*(1.0_WP-pSubVF(i,j,k,1))
-                  pQ(i,j,k,1)=pQ(i,j,k,1)+scale*0.5_WP*rhoLo/rho*pFx(i,  j,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%lo(2).eq.this%amr%geom(lvl)%domain%lo(2)) then
-               j=this%amr%geom(lvl)%domain%lo(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,4)+this%rhoG*(1.0_WP-pSubVF(i,j,k,4))
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*rhoHi/rho*pFy(i,j+1,k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%yper.and.bx%hi(2).eq.this%amr%geom(lvl)%domain%hi(2)) then
-               j=this%amr%geom(lvl)%domain%hi(2); do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,3)+this%rhoG*(1.0_WP-pSubVF(i,j,k,3))
-                  pQ(i,j,k,2)=pQ(i,j,k,2)+scale*0.5_WP*rhoLo/rho*pFy(i,j,  k,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%lo(3).eq.this%amr%geom(lvl)%domain%lo(3)) then
-               k=this%amr%geom(lvl)%domain%lo(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=this%rhoL*pSubVF(i,j,k,6)+this%rhoG*(1.0_WP-pSubVF(i,j,k,6))
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*rhoHi/rho*pFz(i,j,k+1,1)
-               end do; end do
-            end if
-            if (.not.this%amr%zper.and.bx%hi(3).eq.this%amr%geom(lvl)%domain%hi(3)) then
-               k=this%amr%geom(lvl)%domain%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  rho=this%rhoL*pVF(i,j,k,1)+this%rhoG*(1.0_WP-pVF(i,j,k,1))
-                  rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=this%rhoL*pSubVF(i,j,k,5)+this%rhoG*(1.0_WP-pSubVF(i,j,k,5))
-                  pQ(i,j,k,3)=pQ(i,j,k,3)+scale*0.5_WP*rhoLo/rho*pFz(i,j,k,  1)
-               end do; end do
-            end if
          end do
          call this%amr%mfiter_destroy(mfi)
       end do

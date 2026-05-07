@@ -591,12 +591,8 @@ contains
             call amr%init_from_scratch(time=time%t)
             ! Build PLIC
             call fs%build_plic(time%t)
-            call fs%build_subVF()
             ! Initialize primitive variables
             call fs%get_primitive(Q=fs%Q)
-            ! Initialize face velocities
-            call fs%get_face_velocity()
-            call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          end if
          ! Compute viscosities
          call get_viscosities()
@@ -754,50 +750,24 @@ contains
          call fs%store_old()
          
          ! ======================= RK2 Stage 1: Q*=Q[n]+dt/2*dQdt(t,Q[n]) =======================
-         ! Increment Q without pressure
+         ! Increment Q
          call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          ! Rebuild PLIC
-         call fs%build_plic(time=time%t)
-         ! Get most up-to-date pressure
+         call fs%build_plic(time=time%tmid)
+         ! Apply relaxation
          call fs%apply_relax(time=time%tmid)
-         call fs%get_primitive(Q=fs%Q)
-         ! Rebuild sub-cell VF
-         call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
-         ! Add pressure term
-         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
-         ! Add surface tension term
-         call fs%add_surface_tension(scale=0.5_WP*time%dt)
-         ! Average down and fill ghosts
-         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
-         call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
-         ! Get primitive variables
-         call fs%get_primitive(Q=fs%Q)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
-         ! Increment Q without pressure
+         ! Increment Q
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
-         ! Get most up-to-date pressure
+         ! Apply relaxation
          call fs%apply_relax(time=time%t)
-         call fs%get_primitive(Q=fs%Q)
-         ! Rebuild sub-cell VF
-         call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
-         ! Add pressure term
-         call fs%add_phasic_pressure(scale=time%dt)
-         ! Add surface tension term
-         call fs%add_surface_tension(scale=time%dt)
-         ! Average down and fill ghosts
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
-         call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
-         ! Get primitive variables
+         ! Update primitive variables
          call fs%get_primitive(Q=fs%Q)
          ! ======================================================================================
 
@@ -866,167 +836,5 @@ contains
       call gridfile%finalize()
       call tfile%finalize()
    end subroutine simulation_final
-   
-   !> Diagnostic: scan Q/primitives for extreme values
-   subroutine check_Q(label)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
-      use amrmpcomp_class,  only: VFlo,VFhi
-      use ieee_arithmetic,  only: ieee_is_nan
-      use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM,MPI_MAX,MPI_MIN,MPI_INTEGER
-      use parallel,         only: MPI_REAL_WP
-      implicit none
-      character(len=*), intent(in) :: label
-      integer :: lvl,i,j,k,nbad,nnan,nnan_print,nbad_print,ierr,flvl
-      integer :: nbadF,nnanF
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF
-      real(WP) :: IL,IG,PG,PL
-      real(WP) :: Q1min,Q2min,Q3min,Q4min,VFmin,VFmax,dPmax,PGmax,PLmin
-      real(WP) :: Q1minF,Q2minF,Q3minF,Q4minF,VFminF,VFmaxF,dPmaxF,PGmaxF,PLminF
-      logical  :: is_bad,has_nan,is_finest
-      integer, parameter :: max_nan_print=10,max_bad_print=5
-      flvl=fs%amr%clvl()
-      ! Initialize coarse-level counters
-      nbad=0; nnan=0; nnan_print=0; nbad_print=0
-      Q1min=huge(1.0_WP); Q2min=huge(1.0_WP); Q3min=huge(1.0_WP); Q4min=huge(1.0_WP)
-      VFmin=huge(1.0_WP); VFmax=-huge(1.0_WP)
-      dPmax=0.0_WP; PGmax=-huge(1.0_WP); PLmin=huge(1.0_WP)
-      ! Initialize finest-level counters
-      nbadF=0; nnanF=0
-      Q1minF=huge(1.0_WP); Q2minF=huge(1.0_WP); Q3minF=huge(1.0_WP); Q4minF=huge(1.0_WP)
-      VFminF=huge(1.0_WP); VFmaxF=-huge(1.0_WP)
-      dPmaxF=0.0_WP; PGmaxF=-huge(1.0_WP); PLminF=huge(1.0_WP)
-      ! Loop over ALL levels
-      do lvl=0,flvl
-         is_finest=(lvl.eq.flvl)
-         call fs%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            pQ =>fs%Q%mf(lvl)%dataptr(mfi)
-            pVF=>fs%VF%mf(lvl)%dataptr(mfi)
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! NaN check
-               has_nan=ieee_is_nan(pQ(i,j,k,1)).or.ieee_is_nan(pQ(i,j,k,2)).or. &
-               &       ieee_is_nan(pQ(i,j,k,3)).or.ieee_is_nan(pQ(i,j,k,4)).or. &
-               &       ieee_is_nan(pQ(i,j,k,5)).or.ieee_is_nan(pQ(i,j,k,6)).or. &
-               &       ieee_is_nan(pQ(i,j,k,7)).or.ieee_is_nan(pVF(i,j,k,1))
-               if (has_nan) then
-                  if (is_finest) then; nnanF=nnanF+1; else; nnan=nnan+1; end if
-                  if (nnan_print.lt.max_nan_print) then
-                     nnan_print=nnan_print+1
-                     print '(A,A,A,I6,A,I2,A,3I5)', '  [',label,'] NaN n=',time%n,' l=',lvl,' ijk=',i,j,k
-                     print '(4(A,ES20.13))', '    Q1=',pQ(i,j,k,1),' Q2=',pQ(i,j,k,2),' Q3=',pQ(i,j,k,3),' Q4=',pQ(i,j,k,4)
-                     print '(4(A,ES20.13))', '    Q5=',pQ(i,j,k,5),' Q6=',pQ(i,j,k,6),' Q7=',pQ(i,j,k,7),' VF=',pVF(i,j,k,1)
-                  end if
-                  cycle
-               end if
-               ! Track Q1/Q3 min (liquid present)
-               if (pVF(i,j,k,1).ge.VFlo) then
-                  if (is_finest) then
-                     if (pQ(i,j,k,1).lt.Q1minF) Q1minF=pQ(i,j,k,1)
-                     if (pQ(i,j,k,3).lt.Q3minF) Q3minF=pQ(i,j,k,3)
-                  else
-                     if (pQ(i,j,k,1).lt.Q1min) Q1min=pQ(i,j,k,1)
-                     if (pQ(i,j,k,3).lt.Q3min) Q3min=pQ(i,j,k,3)
-                  end if
-               end if
-               ! Track Q2/Q4 min (gas present)
-               if (pVF(i,j,k,1).le.VFhi) then
-                  if (is_finest) then
-                     if (pQ(i,j,k,2).lt.Q2minF) Q2minF=pQ(i,j,k,2)
-                     if (pQ(i,j,k,4).lt.Q4minF) Q4minF=pQ(i,j,k,4)
-                  else
-                     if (pQ(i,j,k,2).lt.Q2min) Q2min=pQ(i,j,k,2)
-                     if (pQ(i,j,k,4).lt.Q4min) Q4min=pQ(i,j,k,4)
-                  end if
-               end if
-               ! Track VF extrema
-               if (is_finest) then
-                  if (pVF(i,j,k,1).lt.VFminF) VFminF=pVF(i,j,k,1)
-                  if (pVF(i,j,k,1).gt.VFmaxF) VFmaxF=pVF(i,j,k,1)
-               else
-                  if (pVF(i,j,k,1).lt.VFmin) VFmin=pVF(i,j,k,1)
-                  if (pVF(i,j,k,1).gt.VFmax) VFmax=pVF(i,j,k,1)
-               end if
-               ! Compute phasic pressures
-               PG=0.0_WP; PL=0.0_WP
-               if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP) then
-                  IG=pQ(i,j,k,4)/pQ(i,j,k,2)
-                  PG=(GammaG-1.0_WP)*pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))*IG-GammaG*PinfG
-               end if
-               if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP) then
-                  IL=pQ(i,j,k,3)/pQ(i,j,k,1)
-                  PL=(GammaL-1.0_WP)*pQ(i,j,k,1)/pVF(i,j,k,1)*IL-GammaL*PinfL
-               end if
-               if (is_finest) then
-                  if (PG.gt.PGmaxF) PGmaxF=PG
-                  if (PL.lt.PLminF.and.pVF(i,j,k,1).ge.VFlo) PLminF=PL
-                  if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
-                     if (abs(PL-PG).gt.dPmaxF) dPmaxF=abs(PL-PG)
-                  end if
-               else
-                  if (PG.gt.PGmax) PGmax=PG
-                  if (PL.lt.PLmin.and.pVF(i,j,k,1).ge.VFlo) PLmin=PL
-                  if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
-                     if (abs(PL-PG).gt.dPmax) dPmax=abs(PL-PG)
-                  end if
-               end if
-               ! Bad cell check
-               is_bad=pQ(i,j,k,1).lt.-1.0e-10_WP.or.pQ(i,j,k,2).lt.-1.0e-10_WP.or. &
-               &      pQ(i,j,k,3).lt.-1.0e-10_WP.or.pQ(i,j,k,4).lt.-1.0e-10_WP
-               if (is_bad) then
-                  if (is_finest) then; nbadF=nbadF+1; else; nbad=nbad+1; end if
-                  if (nbad_print.lt.max_bad_print) then
-                     nbad_print=nbad_print+1
-                     print '(A,A,A,I6,A,I2,A,3I5)', '  [',label,'] BAD n=',time%n,' l=',lvl,' ijk=',i,j,k
-                     print '(4(A,ES20.13))', '    Q1=',pQ(i,j,k,1),' Q2=',pQ(i,j,k,2),' Q3=',pQ(i,j,k,3),' Q4=',pQ(i,j,k,4)
-                     print '(4(A,ES20.13))', '    Q5=',pQ(i,j,k,5),' Q6=',pQ(i,j,k,6),' Q7=',pQ(i,j,k,7),' VF=',pVF(i,j,k,1)
-                  end if
-               end if
-            end do; end do; end do
-         end do
-         call fs%amr%mfiter_destroy(mfi)
-      end do
-      ! Reductions for coarse levels
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q1min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q2min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q3min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q4min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmin ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PLmin ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PGmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dPmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nbad  ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nnan  ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      ! Reductions for finest level
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q1minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q2minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q3minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q4minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFminF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PLminF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PGmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dPmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nbadF ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nnanF ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      ! Summary (rank 0 only): F=finest, C=coarse
-      if (fs%amr%amRoot) then
-         print '(A,A,A,I6,A,4(A,ES12.5),2(A,ES20.13),3(A,ES12.5),A,I6,A,I6)', &
-            '[',label,'] n=',time%n,' F', &
-            ' Q1m=',Q1minF,' Q2m=',Q2minF,' Q3m=',Q3minF,' Q4m=',Q4minF, &
-            ' VFm=',VFminF,' VFM=',VFmaxF, &
-            ' PLm=',PLminF,' PGM=',PGmaxF,' dPM=',dPmaxF, &
-            ' bad:',nbadF,' nan:',nnanF
-         print '(A,A,A,I6,A,4(A,ES12.5),2(A,ES20.13),3(A,ES12.5),A,I6,A,I6)', &
-            '[',label,'] n=',time%n,' C', &
-            ' Q1m=',Q1min,' Q2m=',Q2min,' Q3m=',Q3min,' Q4m=',Q4min, &
-            ' VFm=',VFmin,' VFM=',VFmax, &
-            ' PLm=',PLmin,' PGM=',PGmax,' dPM=',dPmax, &
-            ' bad:',nbad,' nan:',nnan
-      end if
-   end subroutine check_Q
 
 end module simulation
