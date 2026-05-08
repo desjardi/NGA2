@@ -705,27 +705,27 @@ contains
       ! Apply face acceleration and momentum update
       call this%apply_face_fluxes(scale,Fx,Fy,Fz)
       ! Add phasic pressure-dilatation: -P*div(U)
-      !do lvl=0,this%amr%clvl()
-      !   dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
-      !   call this%amr%mfiter_build(lvl,mfi)
-      !   do while (mfi%next())
-      !      pQ =>this%Q%mf(lvl)%dataptr(mfi)
-      !      pU =>this%U%mf(lvl)%dataptr(mfi)
-      !      pV =>this%V%mf(lvl)%dataptr(mfi)
-      !      pW =>this%W%mf(lvl)%dataptr(mfi)
-      !      pVF=>this%VF%mf(lvl)%dataptr(mfi)
-      !      pPL=>this%PL%mf(lvl)%dataptr(mfi)
-      !      pPG=>this%PG%mf(lvl)%dataptr(mfi)
-      !      pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
-      !      bx=mfi%tilebox()
-      !      do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-      !         div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
-      !         pQ(i,j,k,3)=pQ(i,j,k,3)-scale*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
-      !         pQ(i,j,k,4)=pQ(i,j,k,4)-scale*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
-      !      end do; end do; end do
-      !   end do
-      !   call this%amr%mfiter_destroy(mfi)
-      !end do
+      do lvl=0,this%amr%clvl()
+         dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pQ =>this%Q%mf(lvl)%dataptr(mfi)
+            pU =>this%U%mf(lvl)%dataptr(mfi)
+            pV =>this%V%mf(lvl)%dataptr(mfi)
+            pW =>this%W%mf(lvl)%dataptr(mfi)
+            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            pPL=>this%PL%mf(lvl)%dataptr(mfi)
+            pPG=>this%PG%mf(lvl)%dataptr(mfi)
+            pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
+               pQ(i,j,k,3)=pQ(i,j,k,3)-scale*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
+               pQ(i,j,k,4)=pQ(i,j,k,4)-scale*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
       ! Destroy temps
       do lvl=0,this%amr%clvl()
          call this%amr%mfab_destroy(Fx(lvl))
@@ -1620,11 +1620,11 @@ contains
          integer :: lvl,i,j,k
          real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,pFx,pFy,pFz,pBand
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVFold  ! Intentional masking
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pVisc,pBeta,pUVW,pPL,pPG,pRHOL,pRHOG
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pVisc,pBeta,pUVW!,pPL,pPG
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVx,pVy,pVz
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pCL,pCG,pCLold,pCGold
          real(WP), dimension(1:3,1:3) :: gradU
-         real(WP) :: div,vol,ZL,ZG,quad_a,quad_b,quad_c,det,dEcomp
+         real(WP) :: div,vol
          real(WP) :: Lvol_old,Lvol_new,Lvol_flux
          real(WP) :: Gvol_old,Gvol_new,Gvol_flux
          real(WP), dimension(3) :: Lbar_old,Lbar_new,Lbar_flux
@@ -1648,10 +1648,8 @@ contains
                pW   =>this%W%mf(lvl)%dataptr(mfi)
                pVF  =>this%VF%mf(lvl)%dataptr(mfi)
                pQ   =>this%Q%mf(lvl)%dataptr(mfi)
-               pPL  =>this%PL%mf(lvl)%dataptr(mfi)
-               pPG  =>this%PG%mf(lvl)%dataptr(mfi)
-               pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
-               pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+               !pPL  =>this%PL%mf(lvl)%dataptr(mfi)
+               !pPG  =>this%PG%mf(lvl)%dataptr(mfi)
                pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
                pVisc=>this%visc%mf(lvl)%dataptr(mfi)
                pBeta=>this%beta%mf(lvl)%dataptr(mfi)
@@ -1670,8 +1668,6 @@ contains
                ! Loop over interior
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  ! Zero compaction energy transfer
-                  dEcomp=0.0_WP
                   ! VF/barycenter update at band cells (finest level only)
                   if (lvl.eq.this%amr%maxlvl) then
                      ! Work on band cells only
@@ -1693,19 +1689,7 @@ contains
                         pVF(i,j,k,1)=Lvol_new/(Lvol_new+Gvol_new)
                         pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                         pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-                        ! New VF including implicit Kapila compaction term
-                        ZL=pRHOL(i,j,k,1)*this%getCL(pRHOL(i,j,k,1),pPL(i,j,k,1))**2
-                        ZG=pRHOG(i,j,k,1)*this%getCG(pRHOG(i,j,k,1),pPG(i,j,k,1))**2
-                        quad_a=(ZG-ZL)*vol
-                        quad_b=ZL*(vol+Lvol_new)-ZG*(vol-Gvol_new)
-                        quad_c=-ZL*Lvol_new
-                        if (quad_a.eq.0.0_WP) then
-                           pVF(i,j,k,1)=-quad_c/quad_b
-                        else
-                           det=max(0.0_WP,quad_b**2-4.0_WP*quad_a*quad_c)
-                           pVF(i,j,k,1)=(-quad_b+sqrt(det))/(2.0_WP*quad_a)
-                        end if
-                        ! Clip and update barycenters and phasic energy transfer
+                        ! Clip and update barycenters
                         if (pVF(i,j,k,1).lt.VFlo) then
                            pVF(i,j,k,1)=0.0_WP
                         else if (pVF(i,j,k,1).gt.VFhi) then
@@ -1714,16 +1698,11 @@ contains
                            ! Update barycenters from moment conservation and project forward
                            if (Lvol_new/(Lvol_new+Gvol_new).gt.vol_eps) then; Lbar_new=(Lbar_old*Lvol_old-Lbar_flux)/Lvol_new; pCL(i,j,k,1:3)=project(Lbar_new,dt); end if
                            if (Gvol_new/(Lvol_new+Gvol_new).gt.vol_eps) then; Gbar_new=(Gbar_old*Gvol_old-Gbar_flux)/Gvol_new; pCG(i,j,k,1:3)=project(Gbar_new,dt); end if
-                           ! Corresponding phasic energy transfer due to compaction
-                           dEcomp=(ZL*pPG(i,j,k,1)+ZG*pPL(i,j,k,1))/(ZL+ZG)*(pVF(i,j,k,1)-Lvol_new/(Lvol_new+Gvol_new))
                         end if
                      end if
                   end if
                   ! Divergence of conserved variable fluxes (7 components)
                   rhs(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
-                  ! Compaction phasic energy transfer
-                  rhs(i,j,k,3)=rhs(i,j,k,3)-dEcomp/dt
-                  rhs(i,j,k,4)=rhs(i,j,k,4)+dEcomp/dt
                   ! Velocity gradients at cell center
                   gradU(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -1736,8 +1715,8 @@ contains
                   gradU(3,3)=0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
                   div=gradU(1,1)+gradU(2,2)+gradU(3,3)
                   ! Pressure dilatation: split by VF between phasic energies - discontinuous
-                  rhs(i,j,k,3)=rhs(i,j,k,3)-(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
-                  rhs(i,j,k,4)=rhs(i,j,k,4)-(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
+                  !rhs(i,j,k,3)=rhs(i,j,k,3)-(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
+                  !rhs(i,j,k,4)=rhs(i,j,k,4)-(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
                   ! Viscous heating: τ:∇U, split by VF between phasic energies
                   rhs(i,j,k,3)=rhs(i,j,k,3)+(       pVF(i,j,k,1))*( &
                   & (2.0_WP*pVisc(i,j,k,1)*gradU(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(1,1) &

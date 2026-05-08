@@ -481,7 +481,7 @@ contains
          call fs%store_old()
 
          ! ======================= RK2 Stage 1: Q*=Q[n]+dt/2*dQdt(t,Q[n]) =======================
-         ! Increment Q without pressure
+         ! Increment Q without pressure gradient
          call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
@@ -505,7 +505,7 @@ contains
          !call fs%apply_relax(time=time%tmid)
          call fs%get_primitive(Q=fs%Q)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
-         ! Increment Q without pressure
+         ! Increment Q without pressure gradient
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
