@@ -120,6 +120,8 @@ contains
       real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
       real(WP), parameter :: RHOGmin=1.0e-2_WP
       real(WP), parameter :: phist=1.0_WP,phi0=0.0_WP   !< Temporal weighting, phist=1 should yield best results
+      ! Skip relaxation for the first few timesteps to allow pressure to stabilize (since IC are not in mechanical equilibrium)
+      if (time%t.lt.5.0e-6_WP) return
       ! Skip if any conserved quantity is non-positive (EOS undefined)
       if (any(Q(1:4).le.0.0_WP)) return
       ! Skip near-pure-liquid cells (gas density too low)
