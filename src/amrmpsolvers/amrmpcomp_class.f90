@@ -102,6 +102,13 @@ module amrmpcomp_class
       procedure :: apply_velbc=>mpcomp_apply_velbc
       procedure :: apply_Qbc=>mpcomp_apply_Qbc
       procedure :: apply_vofbc=>mpcomp_apply_vofbc
+      ! Utilities
+      procedure :: get_face_velocity          !< Update face velocities from cell-centered data
+      procedure :: add_phasic_pressure        !< Add phasic pressure term to face velocities, cell-centered momentum, and phasic internal energies
+      procedure :: prepare_psolver            !< Prepare Helmholtz pressure solver
+      procedure :: add_pressure_correction    !< Add mixture pressure correction to face velocities, cell-centered momentum, and phasic internal energies
+      procedure :: add_surface_tension        !< Add surface tension increment consistently to face velocities and cell-centered momentum
+      procedure, private :: apply_face_fluxes !< Apply pre-built face fluxes to face velocities and cell-centered momentum
       ! Physics methods
       procedure :: get_primitive
       procedure :: get_conserved
@@ -557,6 +564,474 @@ contains
    end subroutine mpcomp_apply_vofbc
 
    ! ============================================================================
+   ! UTILITIES
+   ! ============================================================================
+
+   !> Update face velocity from VF and Q using sub-cell density-weighting (subVF and primitives must be up-to-date)
+   subroutine get_face_velocity(this)
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: fbx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pUVW,pRHOL,pRHOG,pSubVF
+      real(WP) :: rhoLo,rhoHi
+      ! Traverse levels
+      do lvl=0,this%amr%clvl()
+         ! Loop over tiles
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pU   =>this%U%mf(lvl)%dataptr(mfi)
+            pV   =>this%V%mf(lvl)%dataptr(mfi)
+            pW   =>this%W%mf(lvl)%dataptr(mfi)
+            pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
+            ! Get X-face velocity
+            fbx=mfi%nodaltilebox(1)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
+               end if
+               pU(i,j,k,1)=(rhoLo*pUVW(i-1,j,k,1)+rhoHi*pUVW(i,j,k,1))/(rhoLo+rhoHi)
+            end do; end do; end do
+            ! Get Y-face velocity
+            fbx=mfi%nodaltilebox(2)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
+               end if
+               pV(i,j,k,1)=(rhoLo*pUVW(i,j-1,k,2)+rhoHi*pUVW(i,j,k,2))/(rhoLo+rhoHi)
+            end do; end do; end do
+            ! Get Z-face velocity
+            fbx=mfi%nodaltilebox(3)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
+               end if
+               pW(i,j,k,1)=(rhoLo*pUVW(i,j,k-1,3)+rhoHi*pUVW(i,j,k,3))/(rhoLo+rhoHi)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+   end subroutine get_face_velocity
+
+   !> Add explicit phasic pressure gradient to face velocities, cell-centered momentum, and phasic internal energies
+   !> Uses this%PL and this%PG directly
+   subroutine add_phasic_pressure(this,scale)
+      use amrex_amr_module, only: amrex_multifab
+      use amrex_interface,  only: amrmfab_average_down_face
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: scale
+      type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pVF,pSubVF,pUVW
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pRHOL,pRHOG
+      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div
+      integer :: lvl,i,j,k
+      ! Build temp face mfabs to store pressure fluxes
+      allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,Fx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.])
+         call this%amr%mfab_build(lvl,Fy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
+         call this%amr%mfab_build(lvl,Fz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+      end do
+      ! Compute -grad(Pmix)/rho at faces using phasic pressures
+      do lvl=0,this%amr%clvl()
+         dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pVF  =>this%VF%mf(lvl)%dataptr(mfi)
+            pPL  =>this%PL%mf(lvl)%dataptr(mfi)
+            pPG  =>this%PG%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            pFx  =>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+            if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
+            ! X-faces
+            bx=mfi%nodaltilebox(1)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
+               end if
+               pFx(i,j,k,1)=-2.0_WP*((pVF(i  ,j,k,1)*pPL(i  ,j,k,1)+(1.0_WP-pVF(i  ,j,k,1))*pPG(i  ,j,k,1))&
+               &                    -(pVF(i-1,j,k,1)*pPL(i-1,j,k,1)+(1.0_WP-pVF(i-1,j,k,1))*pPG(i-1,j,k,1)))*dxi/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+            ! Y-faces
+            bx=mfi%nodaltilebox(2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
+               end if
+               pFy(i,j,k,1)=-2.0_WP*((pVF(i,j  ,k,1)*pPL(i,j  ,k,1)+(1.0_WP-pVF(i,j  ,k,1))*pPG(i,j  ,k,1))&
+               &                    -(pVF(i,j-1,k,1)*pPL(i,j-1,k,1)+(1.0_WP-pVF(i,j-1,k,1))*pPG(i,j-1,k,1)))*dyi/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+            ! Z-faces
+            bx=mfi%nodaltilebox(3)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
+               end if
+               pFz(i,j,k,1)=-2.0_WP*((pVF(i,j,k  ,1)*pPL(i,j,k  ,1)+(1.0_WP-pVF(i,j,k  ,1))*pPG(i,j,k  ,1))&
+               &                    -(pVF(i,j,k-1,1)*pPL(i,j,k-1,1)+(1.0_WP-pVF(i,j,k-1,1))*pPG(i,j,k-1,1)))*dzi/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Enforce flux consistency between levels
+      do lvl=this%amr%clvl(),1,-1
+         call amrmfab_average_down_face(fmf=Fx(lvl),cmf=Fx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=Fy(lvl),cmf=Fy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+      end do
+      ! Apply face acceleration and momentum update
+      call this%apply_face_fluxes(scale,Fx,Fy,Fz)
+      ! Add phasic pressure-dilatation: -P*div(U)
+      !do lvl=0,this%amr%clvl()
+      !   dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+      !   call this%amr%mfiter_build(lvl,mfi)
+      !   do while (mfi%next())
+      !      pQ =>this%Q%mf(lvl)%dataptr(mfi)
+      !      pU =>this%U%mf(lvl)%dataptr(mfi)
+      !      pV =>this%V%mf(lvl)%dataptr(mfi)
+      !      pW =>this%W%mf(lvl)%dataptr(mfi)
+      !      pVF=>this%VF%mf(lvl)%dataptr(mfi)
+      !      pPL=>this%PL%mf(lvl)%dataptr(mfi)
+      !      pPG=>this%PG%mf(lvl)%dataptr(mfi)
+      !      pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+      !      bx=mfi%tilebox()
+      !      do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      !         div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
+      !         pQ(i,j,k,3)=pQ(i,j,k,3)-scale*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
+      !         pQ(i,j,k,4)=pQ(i,j,k,4)-scale*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
+      !      end do; end do; end do
+      !   end do
+      !   call this%amr%mfiter_destroy(mfi)
+      !end do
+      ! Destroy temps
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(Fx(lvl))
+         call this%amr%mfab_destroy(Fy(lvl))
+         call this%amr%mfab_destroy(Fz(lvl))
+      end do
+      deallocate(Fx,Fy,Fz)
+   end subroutine add_phasic_pressure
+
+   !> Prepare variable-coefficient pressure solver using face densities
+   subroutine prepare_psolver(this,dt)
+      use amrex_amr_module, only: amrex_multifab
+      use amrex_interface,  only: amrmfab_average_down_face
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: dt
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      type(amrex_multifab), dimension(:), allocatable :: AA,BBx,BBy,BBz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pAA,pBBx,pBBy,pBBz,pQ,pC,pSubVF,pRHOL,pRHOG
+      real(WP) :: rhoLo,rhoHi
+      ! Allocate temporary face coefficient mfabs
+      allocate(AA(0:this%amr%clvl()),BBx(0:this%amr%clvl()),BBy(0:this%amr%clvl()),BBz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,AA (lvl),ncomp=1,nover=0,atface=[.false.,.false.,.false.])
+         call this%amr%mfab_build(lvl,BBx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.])
+         call this%amr%mfab_build(lvl,BBy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
+         call this%amr%mfab_build(lvl,BBz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+      end do
+      ! Fill 1/rho_face at all levels
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pC   =>this%C%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            pAA  =>AA(lvl)%dataptr(mfi)
+            pBBx =>BBx(lvl)%dataptr(mfi)
+            pBBy =>BBy(lvl)%dataptr(mfi)
+            pBBz =>BBz(lvl)%dataptr(mfi)
+            if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
+            ! Cell-centered
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pAA(i,j,k,1)=1.0_WP/(max(sum(pQ(i,j,k,1:2)),this%rho_floor)*pC(i,j,k,1)**2)
+            end do; end do; end do
+            ! X-faces
+            bx=mfi%nodaltilebox(1)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i-1,j,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+                  rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
+               end if
+               pBBx(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+            ! Y-faces
+            bx=mfi%nodaltilebox(2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i,j-1,k,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+                  rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
+               end if
+               pBBy(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+            ! Z-faces
+            bx=mfi%nodaltilebox(3)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rhoLo=sum(pQ(i,j,k-1,1:2)); rhoHi=sum(pQ(i,j,k,1:2))
+               if (lvl.eq.this%amr%maxlvl) then
+                  rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+                  rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
+               end if
+               pBBz(i,j,k,1)=2.0_WP/max(rhoLo+rhoHi,this%rho_floor)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Enforce coefficient consistency between levels
+      do lvl=this%amr%clvl(),1,-1
+         call amrmfab_average_down_face(fmf=BBx(lvl),cmf=BBx(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=BBy(lvl),cmf=BBy(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+         call amrmfab_average_down_face(fmf=BBz(lvl),cmf=BBz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
+      end do
+      ! Rebuild operator
+      this%psolver%alpha=-1.0_WP/dt**2
+      this%psolver%beta =-1.0_WP
+      call this%psolver%setup(acoef=AA,bcoef_x=BBx,bcoef_y=BBy,bcoef_z=BBz)
+      ! Destroy temporary mfabs
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(AA (lvl))
+         call this%amr%mfab_destroy(BBx(lvl))
+         call this%amr%mfab_destroy(BBy(lvl))
+         call this%amr%mfab_destroy(BBz(lvl))
+      end do
+      deallocate(AA,BBx,BBy,BBz)
+   end subroutine prepare_psolver
+
+   !> Add pressure correction term to face velocities and cell-centered momentum and phasic internal energies
+   !> Assumes mixture pressure only, uses psolver's internal fluxes
+   !> Optional mask argument is used for IB masking
+   subroutine add_pressure_correction(this,scale,mask)
+      use amrex_amr_module, only: amrex_multifab
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: scale
+      type(amrdata), intent(in), optional :: mask
+      type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pP,pU,pV,pW,pVF,pPL,pPG,pMask
+      real(WP) :: dxi,dyi,dzi,div,coeff,crossterm,Pmix
+      integer :: lvl,i,j,k
+      ! Build temp face mfabs to store pressure fluxes
+      allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,Fx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.])
+         call this%amr%mfab_build(lvl,Fy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.])
+         call this%amr%mfab_build(lvl,Fz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ])
+      end do
+      ! Get face fluxes from MLMG solver
+      call this%psolver%get_fluxes(Fx,Fy,Fz)
+      ! Apply face acceleration and momentum update
+      call this%apply_face_fluxes(scale,Fx,Fy,Fz)
+      ! Add phasic pressure-dilatation from correction
+      do lvl=0,this%amr%clvl()
+         dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pQ =>this%Q%mf(lvl)%dataptr(mfi)
+            pU =>this%U%mf(lvl)%dataptr(mfi)
+            pV =>this%V%mf(lvl)%dataptr(mfi)
+            pW =>this%W%mf(lvl)%dataptr(mfi)
+            pVF=>this%VF%mf(lvl)%dataptr(mfi)
+            pPL=>this%PL%mf(lvl)%dataptr(mfi)
+            pPG=>this%PG%mf(lvl)%dataptr(mfi)
+            pP =>this%psolver%sol%mf(lvl)%dataptr(mfi)
+            pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+            if (present(mask)) pMask=>mask%mf(lvl)%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               coeff=1.0_WP; if (present(mask)) coeff=pMask(i,j,k,1)
+               div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
+               Pmix=pVF(i,j,k,1)*pPL(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)
+               crossterm=-coeff*scale**2*Pmix*(dxi*(pFx(i+1,j,k,1)-pFx(i,j,k,1))+dyi*(pFy(i,j+1,k,1)-pFy(i,j,k,1))+dzi*(pFz(i,j,k+1,1)-pFz(i,j,k,1)))
+               pQ(i,j,k,3)=pQ(i,j,k,3)-(       pVF(i,j,k,1))*(coeff*scale*pP(i,j,k,1)*div-crossterm)
+               pQ(i,j,k,4)=pQ(i,j,k,4)-(1.0_WP-pVF(i,j,k,1))*(coeff*scale*pP(i,j,k,1)*div-crossterm)
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+      ! Destroy temps
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(Fx(lvl))
+         call this%amr%mfab_destroy(Fy(lvl))
+         call this%amr%mfab_destroy(Fz(lvl))
+      end do
+      deallocate(Fx,Fy,Fz)
+   end subroutine add_pressure_correction
+
+   !> Add CSF surface-tension term to face velocities and cell-centered momentum
+   !> Builds face fluxes 1/rho*sigma*kappa*grad(VF) at maxlvl, avg_down, then calls apply_face_fluxes
+   subroutine add_surface_tension(this,scale)
+      use amrex_amr_module, only: amrex_multifab
+      use amrex_interface, only: amrmfab_average_down_face
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: scale
+      type(amrex_multifab), dimension(:), allocatable :: STFx,STFy,STFz
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSTFx,pSTFy,pSTFz,pVF,pQ,pSubVF,pCurv,pSD,pRHOL,pRHOG
+      real(WP) :: dxi,dyi,dzi,mysurf,mycurv,rhoLo,rhoHi
+      integer :: lvl,i,j,k
+      ! Guard: no surface tension or clvl<maxlvl
+      if (this%sigma.eq.0.0_WP.or.this%amr%clvl().lt.this%amr%maxlvl) return
+      ! Build temp face flux mfabs
+      allocate(STFx(0:this%amr%clvl()),STFy(0:this%amr%clvl()),STFz(0:this%amr%clvl()))
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_build(lvl,STFx(lvl),ncomp=1,nover=0,atface=[.true., .false.,.false.]); call STFx(lvl)%setval(0.0_WP)
+         call this%amr%mfab_build(lvl,STFy(lvl),ncomp=1,nover=0,atface=[.false.,.true., .false.]); call STFy(lvl)%setval(0.0_WP)
+         call this%amr%mfab_build(lvl,STFz(lvl),ncomp=1,nover=0,atface=[.false.,.false.,.true. ]); call STFz(lvl)%setval(0.0_WP)
+      end do
+      ! Compute ST face fluxes at finest level
+      lvl=this%amr%maxlvl
+      dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+      call this%amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         pVF   =>this%VF%mf(lvl)%dataptr(mfi)
+         pQ    =>this%Q%mf(lvl)%dataptr(mfi)
+         pSubVF=>this%subVF%dataptr(mfi)
+         pCurv =>this%curv%dataptr(mfi)
+         pSD   =>this%SD%dataptr(mfi)
+         pRHOL =>this%RHOL%mf(lvl)%dataptr(mfi)
+         pRHOG =>this%RHOG%mf(lvl)%dataptr(mfi)
+         pSTFx =>STFx(lvl)%dataptr(mfi)
+         pSTFy =>STFy(lvl)%dataptr(mfi)
+         pSTFz =>STFz(lvl)%dataptr(mfi)
+         ! X-faces
+         bx=mfi%nodaltilebox(1)
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            mycurv=0.0_WP
+            mysurf=sum(pSD(i-1:i,j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/mysurf
+            rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
+            rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
+            pSTFx(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i-1,j,k,1))*dxi/max(rhoLo+rhoHi,this%rho_floor)
+         end do; end do; end do
+         ! Y-faces
+         bx=mfi%nodaltilebox(2)
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            mycurv=0.0_WP
+            mysurf=sum(pSD(i,j-1:j,k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/mysurf
+            rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
+            rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
+            pSTFy(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j-1,k,1))*dyi/max(rhoLo+rhoHi,this%rho_floor)
+         end do; end do; end do
+         ! Z-faces
+         bx=mfi%nodaltilebox(3)
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            mycurv=0.0_WP
+            mysurf=sum(pSD(i,j,k-1:k,1)); if (mysurf.gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/mysurf
+            rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
+            rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
+            pSTFz(i,j,k,1)=2.0_WP*this%sigma*mycurv*(pVF(i,j,k,1)-pVF(i,j,k-1,1))*dzi/max(rhoLo+rhoHi,this%rho_floor)
+         end do; end do; end do
+      end do
+      call this%amr%mfiter_destroy(mfi)
+      ! Average down face fluxes from finest to coarser levels
+      do lvl=this%amr%clvl()-1,0,-1
+         call amrmfab_average_down_face(fmf=STFx(lvl+1),cmf=STFx(lvl),rr=[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
+         call amrmfab_average_down_face(fmf=STFy(lvl+1),cmf=STFy(lvl),rr=[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
+         call amrmfab_average_down_face(fmf=STFz(lvl+1),cmf=STFz(lvl),rr=[this%amr%rrefx(lvl),this%amr%rrefy(lvl),this%amr%rrefz(lvl)],cgeom=this%amr%geom(lvl))
+      end do
+      ! Apply fluxes
+      call this%apply_face_fluxes(scale,STFx,STFy,STFz)
+      ! Destroy temps
+      do lvl=0,this%amr%clvl()
+         call this%amr%mfab_destroy(STFx(lvl))
+         call this%amr%mfab_destroy(STFy(lvl))
+         call this%amr%mfab_destroy(STFz(lvl))
+      end do
+      deallocate(STFx,STFy,STFz)
+   end subroutine add_surface_tension
+
+   !> Apply face-centered acceleration to face velocities and cell-centered momentum
+   subroutine apply_face_fluxes(this,scale,Fx,Fy,Fz)
+      use amrex_amr_module, only: amrex_multifab,amrex_bc_reflect_odd
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: scale
+      type(amrex_multifab), intent(in) :: Fx(0:),Fy(0:),Fz(0:)
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pSubVF,pRHOL,pRHOG
+      real(WP) :: rho,rhoLo,rhoHi
+      integer :: lvl,i,j,k
+      do lvl=0,this%amr%clvl()
+         ! Face velocities: direct saxpy
+         call this%U%mf(lvl)%saxpy(scale,Fx(lvl),1,1,1,0)
+         call this%V%mf(lvl)%saxpy(scale,Fy(lvl),1,1,1,0)
+         call this%W%mf(lvl)%saxpy(scale,Fz(lvl),1,1,1,0)
+         ! Cell-centered momentum: density-weighted average of face accelerations
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
+            if (lvl.eq.this%amr%maxlvl) pSubVF=>this%subVF%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rho=sum(pQ(i,j,k,1:2))
+               ! X-momentum
+               rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,1)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,1))
+               rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,2)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,2))
+               pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*(rhoLo*pFx(i,j,k,1)+rhoHi*pFx(i+1,j,k,1))
+               if (.not.this%amr%xper) then
+                  if (i.eq.this%amr%geom(lvl)%domain%lo(1).and.this%U%lo_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*rhoLo*pFx(i+1,j,k,1)
+                  if (i.eq.this%amr%geom(lvl)%domain%hi(1).and.this%U%hi_bc(1,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,5)=pQ(i,j,k,5)+scale*0.5_WP*rhoHi*pFx(i  ,j,k,1)
+               end if
+               ! Y-momentum
+               rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,3)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,3))
+               rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,4)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,4))
+               pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*(rhoLo*pFy(i,j,k,1)+rhoHi*pFy(i,j+1,k,1))
+               if (.not.this%amr%yper) then
+                  if (j.eq.this%amr%geom(lvl)%domain%lo(2).and.this%V%lo_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*rhoLo*pFy(i,j+1,k,1)
+                  if (j.eq.this%amr%geom(lvl)%domain%hi(2).and.this%V%hi_bc(2,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,6)=pQ(i,j,k,6)+scale*0.5_WP*rhoHi*pFy(i,j  ,k,1)
+               end if
+               ! Z-momentum
+               rhoLo=rho; if (lvl.eq.this%amr%maxlvl) rhoLo=pRHOL(i,j,k,1)*pSubVF(i,j,k,5)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,5))
+               rhoHi=rho; if (lvl.eq.this%amr%maxlvl) rhoHi=pRHOL(i,j,k,1)*pSubVF(i,j,k,6)+pRHOG(i,j,k,1)*(1.0_WP-pSubVF(i,j,k,6))
+               pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*(rhoLo*pFz(i,j,k,1)+rhoHi*pFz(i,j,k+1,1))
+               if (.not.this%amr%zper) then
+                  if (k.eq.this%amr%geom(lvl)%domain%lo(3).and.this%W%lo_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*rhoLo*pFz(i,j,k+1,1)
+                  if (k.eq.this%amr%geom(lvl)%domain%hi(3).and.this%W%hi_bc(3,1).ne.amrex_bc_reflect_odd) pQ(i,j,k,7)=pQ(i,j,k,7)+scale*0.5_WP*rhoHi*pFz(i,j,k  ,1)
+               end if
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+      end do
+   end subroutine apply_face_fluxes
+
+   ! ============================================================================
    ! PHYSICS METHODS
    ! ============================================================================
 
@@ -651,7 +1126,7 @@ contains
       this%wt_prim=this%wt_prim+(MPI_Wtime()-t0)
    end subroutine get_primitive
 
-   !> Calculate conserved variables from primitive variables
+   !> Calculate conserved variables from primitive variables without pressure
    !> Rebuilds Q from VF, phasic densities, phasic energies, and mixture velocity
    subroutine get_conserved(this)
       use amrex_amr_module, only: amrex_mfiter,amrex_box
@@ -698,7 +1173,7 @@ contains
       real(WP), intent(in) :: dt,time
       real(WP) :: t0,t1
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: Fx,Fy,Fz
-      type(amrex_multifab) :: Vx,Vy,Vz,STsrc
+      type(amrex_multifab) :: Vx,Vy,Vz
       type(amrex_multifab) :: band
       ! Shared variables for internal functions
       real(WP) :: dx,dy,dz,dxi,dyi,dzi                              ! Needed for SL transport
@@ -710,85 +1185,9 @@ contains
       ! Start full routine timer
       t0=MPI_Wtime()
 
-      ! First get current primitive variables
-      call this%get_primitive(Q=this%Q)
-
       ! Build transport band at finest level to localize SL computation
       call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=band,ncomp=1,nover=1)
       call this%build_band(lvl=this%amr%clvl(),VF=this%VFold%mf(this%amr%clvl()),band=band,nband=2)
-
-      ! Prepare face velocities
-      get_face_vel: block
-         integer :: lvl,i,j,k
-         type(amrex_mfiter) :: mfi
-         type(amrex_box) :: fbx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pQ,pU,pV,pW,pUVW,pVF,pPL,pPG
-         real(WP) :: irho_f
-         real(WP), dimension(-2:+1) :: Pmix
-         logical :: in_band
-         ! Compute pressure-corrected face velocities
-         do lvl=0,this%amr%clvl()
-            dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
-            call this%amr%mfiter_build(lvl,mfi)
-            do while (mfi%next())
-               pQ  =>this%Q%mf(lvl)%dataptr(mfi)
-               pU  =>this%U%mf(lvl)%dataptr(mfi)
-               pV  =>this%V%mf(lvl)%dataptr(mfi)
-               pW  =>this%W%mf(lvl)%dataptr(mfi)
-               pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
-               pVF =>this%VF%mf(lvl)%dataptr(mfi)
-               pPL =>this%PL%mf(lvl)%dataptr(mfi)
-               pPG =>this%PG%mf(lvl)%dataptr(mfi)
-               if (lvl.eq.this%amr%clvl()) pBand=>band%dataptr(mfi)
-               ! X-faces
-               fbx=mfi%nodaltilebox(1)
-               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-                  ! Check if in band
-                  if (lvl.eq.this%amr%clvl()) then; in_band=maxval(pBand(i-1:i,j,k,1)).gt.0.0_WP; else; in_band=.false.; end if
-                  ! Get face velocity with or without RC correction
-                  if (in_band) then
-                     pU(i,j,k,1)=0.5_WP*sum(pUVW(i-1:i,j,k,1))
-                  else
-                     irho_f=2.0_WP/max(sum(pQ(i-1:i,j,k,1:2)),this%rho_floor)
-                     Pmix=pVF(i-2:i+1,j,k,1)*pPL(i-2:i+1,j,k,1)+(1.0_WP-pVF(i-2:i+1,j,k,1))*pPG(i-2:i+1,j,k,1)
-                     pU(i,j,k,1)=0.5_WP*sum(pUVW(i-1:i,j,k,1))+0.25_WP*dt*dxi*irho_f*(Pmix(1)-3.0_WP*Pmix(0)+3.0_WP*Pmix(-1)-Pmix(-2))
-                  end if
-               end do; end do; end do
-               ! Y-faces
-               fbx=mfi%nodaltilebox(2)
-               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-                  ! Check if in band
-                  if (lvl.eq.this%amr%clvl()) then; in_band=maxval(pBand(i,j-1:j,k,1)).gt.0.0_WP; else; in_band=.false.; end if
-                  ! Get face velocity with or without RC correction
-                  if (in_band) then
-                     pV(i,j,k,1)=0.5_WP*sum(pUVW(i,j-1:j,k,2))
-                  else
-                     irho_f=2.0_WP/max(sum(pQ(i,j-1:j,k,1:2)),this%rho_floor)
-                     Pmix=pVF(i,j-2:j+1,k,1)*pPL(i,j-2:j+1,k,1)+(1.0_WP-pVF(i,j-2:j+1,k,1))*pPG(i,j-2:j+1,k,1)
-                     pV(i,j,k,1)=0.5_WP*sum(pUVW(i,j-1:j,k,2))+0.25_WP*dt*dyi*irho_f*(Pmix(1)-3.0_WP*Pmix(0)+3.0_WP*Pmix(-1)-Pmix(-2)) 
-                  end if
-               end do; end do; end do
-               ! Z-faces
-               fbx=mfi%nodaltilebox(3)
-               do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
-                  ! Check if in band
-                  if (lvl.eq.this%amr%clvl()) then; in_band=maxval(pBand(i,j,k-1:k,1)).gt.0.0_WP; else; in_band=.false.; end if
-                  ! Get face velocity with or without RC correction
-                  if (in_band) then
-                     pW(i,j,k,1)=0.5_WP*sum(pUVW(i,j,k-1:k,3))
-                  else
-                     irho_f=2.0_WP/max(sum(pQ(i,j,k-1:k,1:2)),this%rho_floor)
-                     Pmix=pVF(i,j,k-2:k+1,1)*pPL(i,j,k-2:k+1,1)+(1.0_WP-pVF(i,j,k-2:k+1,1))*pPG(i,j,k-2:k+1,1)
-                     pW(i,j,k,1)=0.5_WP*sum(pUVW(i,j,k-1:k,3))+0.25_WP*dt*dzi*irho_f*(Pmix(1)-3.0_WP*Pmix(0)+3.0_WP*Pmix(-1)-Pmix(-2))
-                  end if
-               end do; end do; end do
-            end do
-            call this%amr%mfiter_destroy(mfi)
-         end do
-         ! Average down and fill
-         call this%average_down_velocity()
-         call this%fill_velocity(time=time)
-      end block get_face_vel
 
       ! Allocate all fluxes
       define_fluxes: block
@@ -803,8 +1202,6 @@ contains
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vx,ncomp=8,nover=0,atface=[.true. ,.false.,.false.]); call Vx%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vy,ncomp=8,nover=0,atface=[.false.,.true. ,.false.]); call Vy%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vz,ncomp=8,nover=0,atface=[.false.,.false.,.true. ]); call Vz%setval(0.0_WP)
-         ! Also define ST source at finest level
-         call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=STsrc,ncomp=3,nover=0); call STsrc%setval(0.0_WP)
       end block define_fluxes
 
       ! Phase 1a: Semi-Lagrangian fluxes at finest level
@@ -984,7 +1381,7 @@ contains
       t1=MPI_Wtime()
       finitevolume_fluxes: block
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pFx,pFy,pFz,pBand
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pPL,pPG,pTL,pTG,pIL,pIG,pVF,pUVW
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pTL,pTG,pIL,pIG,pVF,pUVW!,pPL,pPG
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc,pBeta,pDiff
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW ! Intentional masking
          real(WP), dimension(-2: 0) :: wenop
@@ -1011,8 +1408,8 @@ contains
                pW   =>this%W%mf(lvl)%dataptr(mfi)
                pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
                pVF  =>this%VF%mf(lvl)%dataptr(mfi)
-               pPL  =>this%PL%mf(lvl)%dataptr(mfi)
-               pPG  =>this%PG%mf(lvl)%dataptr(mfi)
+               !pPL  =>this%PL%mf(lvl)%dataptr(mfi)
+               !pPG  =>this%PG%mf(lvl)%dataptr(mfi)
                pTL  =>this%TL%mf(lvl)%dataptr(mfi)
                pTG  =>this%TG%mf(lvl)%dataptr(mfi)
                pIL  =>this%IL%mf(lvl)%dataptr(mfi)
@@ -1059,7 +1456,7 @@ contains
                      pFx(i,j,k,7)=sum(pFx(i,j,k,1:2))*0.5_WP*sum(pUVW(i-1:i,j,k,3))
                   end if
                   ! Add pressure stress
-                  pFx(i,j,k,5)=pFx(i,j,k,5)-0.5_WP*sum(pVF(i-1:i,j,k,1)*pPL(i-1:i,j,k,1)+(1.0_WP-pVF(i-1:i,j,k,1))*pPG(i-1:i,j,k,1))
+                  !pFx(i,j,k,5)=pFx(i,j,k,5)-0.5_WP*sum(pVF(i-1:i,j,k,1)*pPL(i-1:i,j,k,1)+(1.0_WP-pVF(i-1:i,j,k,1))*pPG(i-1:i,j,k,1))
                   ! Velocity gradients at x-face
                   gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -1117,7 +1514,7 @@ contains
                      pFy(i,j,k,7)=sum(pFy(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j-1:j,k,3))
                   end if
                   ! Add pressure stress
-                  pFy(i,j,k,6)=pFy(i,j,k,6)-0.5_WP*sum(pVF(i,j-1:j,k,1)*pPL(i,j-1:j,k,1)+(1.0_WP-pVF(i,j-1:j,k,1))*pPG(i,j-1:j,k,1))
+                  !pFy(i,j,k,6)=pFy(i,j,k,6)-0.5_WP*sum(pVF(i,j-1:j,k,1)*pPL(i,j-1:j,k,1)+(1.0_WP-pVF(i,j-1:j,k,1))*pPG(i,j-1:j,k,1))
                   ! Velocity gradients at y-face
                   gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
@@ -1175,7 +1572,7 @@ contains
                      pFz(i,j,k,7)=sum(pFz(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j,k-1:k,3))
                   end if
                   ! Add pressure stress
-                  pFz(i,j,k,7)=pFz(i,j,k,7)-0.5_WP*sum(pVF(i,j,k-1:k,1)*pPL(i,j,k-1:k,1)+(1.0_WP-pVF(i,j,k-1:k,1))*pPG(i,j,k-1:k,1))
+                  !pFz(i,j,k,7)=pFz(i,j,k,7)-0.5_WP*sum(pVF(i,j,k-1:k,1)*pPL(i,j,k-1:k,1)+(1.0_WP-pVF(i,j,k-1:k,1))*pPG(i,j,k-1:k,1))
                   ! Velocity gradients at z-face
                   gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -1214,49 +1611,6 @@ contains
             call amrmfab_average_down_face(fmf=Fz(lvl),cmf=Fz(lvl-1),rr=[this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)],cgeom=this%amr%geom(lvl-1))
          end do
       end block c_f_consistency
-      
-      ! Surface tension cell body force (computed BEFORE divergence_and_sources to start-of-stage VF)
-      surface_tension: block
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCurv,pSD,pSTsrc
-         real(WP) :: mycurv
-         type(amrex_mfiter) :: mfi
-         type(amrex_box) :: bx
-         integer :: lvl,i,j,k
-         ! Skip if clvl < maxlvlfinest, or if sigma=0
-         if (this%sigma.eq.0.0_WP.or.this%amr%clvl().lt.this%amr%maxlvl) exit surface_tension
-         ! Get finest level info
-         lvl=this%amr%maxlvl
-         dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
-         ! Loop over finest level tiles
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            ! Get data pointers
-            pVF   =>this%VF%mf(lvl)%dataptr(mfi)
-            pCurv =>this%curv%dataptr(mfi)
-            pSD   =>this%SD%dataptr(mfi)
-            pSTsrc=>STsrc%dataptr(mfi)
-            ! Loop over tile interior
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! X-direction
-               mycurv=0.0_WP; if (sum(pSD(i-1:i,j,k,1)).gt.0.0_WP) mycurv=sum(pSD(i-1:i,j,k,1)*pCurv(i-1:i,j,k,1))/sum(pSD(i-1:i,j,k,1))
-               pSTsrc(i,j,k,1)=                0.5_WP*this%sigma*mycurv*(pVF(i  ,j,k,1)-pVF(i-1,j,k,1))*dxi
-               mycurv=0.0_WP; if (sum(pSD(i:i+1,j,k,1)).gt.0.0_WP) mycurv=sum(pSD(i:i+1,j,k,1)*pCurv(i:i+1,j,k,1))/sum(pSD(i:i+1,j,k,1))
-               pSTsrc(i,j,k,1)=pSTsrc(i,j,k,1)+0.5_WP*this%sigma*mycurv*(pVF(i+1,j,k,1)-pVF(i  ,j,k,1))*dxi
-               ! Y-direction
-               mycurv=0.0_WP; if (sum(pSD(i,j-1:j,k,1)).gt.0.0_WP) mycurv=sum(pSD(i,j-1:j,k,1)*pCurv(i,j-1:j,k,1))/sum(pSD(i,j-1:j,k,1))
-               pSTsrc(i,j,k,2)=                0.5_WP*this%sigma*mycurv*(pVF(i,j  ,k,1)-pVF(i,j-1,k,1))*dyi
-               mycurv=0.0_WP; if (sum(pSD(i,j:j+1,k,1)).gt.0.0_WP) mycurv=sum(pSD(i,j:j+1,k,1)*pCurv(i,j:j+1,k,1))/sum(pSD(i,j:j+1,k,1))
-               pSTsrc(i,j,k,2)=pSTsrc(i,j,k,2)+0.5_WP*this%sigma*mycurv*(pVF(i,j+1,k,1)-pVF(i,j  ,k,1))*dyi
-               ! Z-direction
-               mycurv=0.0_WP; if (sum(pSD(i,j,k-1:k,1)).gt.0.0_WP) mycurv=sum(pSD(i,j,k-1:k,1)*pCurv(i,j,k-1:k,1))/sum(pSD(i,j,k-1:k,1))
-               pSTsrc(i,j,k,3)=                0.5_WP*this%sigma*mycurv*(pVF(i,j,k  ,1)-pVF(i,j,k-1,1))*dzi
-               mycurv=0.0_WP; if (sum(pSD(i,j,k:k+1,1)).gt.0.0_WP) mycurv=sum(pSD(i,j,k:k+1,1)*pCurv(i,j,k:k+1,1))/sum(pSD(i,j,k:k+1,1))
-               pSTsrc(i,j,k,3)=pSTsrc(i,j,k,3)+0.5_WP*this%sigma*mycurv*(pVF(i,j,k+1,1)-pVF(i,j,k  ,1))*dzi
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-      end block surface_tension
 
       ! Phase 3: Compute divergence and source terms for all levels, update VF/bary at band
       t1=MPI_Wtime()
@@ -1266,11 +1620,11 @@ contains
          integer :: lvl,i,j,k
          real(WP), dimension(:,:,:,:), contiguous, pointer :: rhs,pFx,pFy,pFz,pBand
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVFold  ! Intentional masking
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pVisc,pBeta,pUVW,pPL,pPG
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVx,pVy,pVz,pSTsrc
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pVisc,pBeta,pUVW,pPL,pPG,pRHOL,pRHOG
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVx,pVy,pVz
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pCL,pCG,pCLold,pCGold
          real(WP), dimension(1:3,1:3) :: gradU
-         real(WP) :: div,vol
+         real(WP) :: div,vol,ZL,ZG,quad_a,quad_b,quad_c,det,dEcomp
          real(WP) :: Lvol_old,Lvol_new,Lvol_flux
          real(WP) :: Gvol_old,Gvol_new,Gvol_flux
          real(WP), dimension(3) :: Lbar_old,Lbar_new,Lbar_flux
@@ -1296,25 +1650,28 @@ contains
                pQ   =>this%Q%mf(lvl)%dataptr(mfi)
                pPL  =>this%PL%mf(lvl)%dataptr(mfi)
                pPG  =>this%PG%mf(lvl)%dataptr(mfi)
+               pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+               pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
                pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
                pVisc=>this%visc%mf(lvl)%dataptr(mfi)
                pBeta=>this%beta%mf(lvl)%dataptr(mfi)
                ! Extra pointers at finest level
                if (lvl.eq.this%amr%maxlvl) then
-                  pBand   =>band%dataptr(mfi)
-                  pVx     =>Vx%dataptr(mfi)
-                  pVy     =>Vy%dataptr(mfi)
-                  pVz     =>Vz%dataptr(mfi)
-                  pVFold  =>this%VFold%mf(lvl)%dataptr(mfi)
-                  pCL     =>this%CL%dataptr(mfi)
-                  pCG     =>this%CG%dataptr(mfi)
-                  pCLold  =>this%CLold%dataptr(mfi)
-                  pCGold  =>this%CGold%dataptr(mfi)
-                  pSTsrc  =>STsrc%dataptr(mfi)
+                  pBand =>band%dataptr(mfi)
+                  pVx   =>Vx%dataptr(mfi)
+                  pVy   =>Vy%dataptr(mfi)
+                  pVz   =>Vz%dataptr(mfi)
+                  pVFold=>this%VFold%mf(lvl)%dataptr(mfi)
+                  pCL   =>this%CL%dataptr(mfi)
+                  pCG   =>this%CG%dataptr(mfi)
+                  pCLold=>this%CLold%dataptr(mfi)
+                  pCGold=>this%CGold%dataptr(mfi)
                end if
                ! Loop over interior
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Zero compaction energy transfer
+                  dEcomp=0.0_WP
                   ! VF/barycenter update at band cells (finest level only)
                   if (lvl.eq.this%amr%maxlvl) then
                      ! Work on band cells only
@@ -1336,7 +1693,19 @@ contains
                         pVF(i,j,k,1)=Lvol_new/(Lvol_new+Gvol_new)
                         pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
                         pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-                        ! Clip and update barycenters
+                        ! New VF including implicit Kapila compaction term
+                        ZL=pRHOL(i,j,k,1)*this%getCL(pRHOL(i,j,k,1),pPL(i,j,k,1))**2
+                        ZG=pRHOG(i,j,k,1)*this%getCG(pRHOG(i,j,k,1),pPG(i,j,k,1))**2
+                        quad_a=(ZG-ZL)*vol
+                        quad_b=ZL*(vol+Lvol_new)-ZG*(vol-Gvol_new)
+                        quad_c=-ZL*Lvol_new
+                        if (quad_a.eq.0.0_WP) then
+                           pVF(i,j,k,1)=-quad_c/quad_b
+                        else
+                           det=max(0.0_WP,quad_b**2-4.0_WP*quad_a*quad_c)
+                           pVF(i,j,k,1)=(-quad_b+sqrt(det))/(2.0_WP*quad_a)
+                        end if
+                        ! Clip and update barycenters and phasic energy transfer
                         if (pVF(i,j,k,1).lt.VFlo) then
                            pVF(i,j,k,1)=0.0_WP
                         else if (pVF(i,j,k,1).gt.VFhi) then
@@ -1345,17 +1714,16 @@ contains
                            ! Update barycenters from moment conservation and project forward
                            if (Lvol_new/(Lvol_new+Gvol_new).gt.vol_eps) then; Lbar_new=(Lbar_old*Lvol_old-Lbar_flux)/Lvol_new; pCL(i,j,k,1:3)=project(Lbar_new,dt); end if
                            if (Gvol_new/(Lvol_new+Gvol_new).gt.vol_eps) then; Gbar_new=(Gbar_old*Gvol_old-Gbar_flux)/Gvol_new; pCG(i,j,k,1:3)=project(Gbar_new,dt); end if
+                           ! Corresponding phasic energy transfer due to compaction
+                           dEcomp=(ZL*pPG(i,j,k,1)+ZG*pPL(i,j,k,1))/(ZL+ZG)*(pVF(i,j,k,1)-Lvol_new/(Lvol_new+Gvol_new))
                         end if
                      end if
                   end if
                   ! Divergence of conserved variable fluxes (7 components)
                   rhs(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
-                  ! Add surface tension at the finest level
-                  if (lvl.eq.this%amr%maxlvl) then
-                     rhs(i,j,k,5)=rhs(i,j,k,5)+pSTsrc(i,j,k,1)
-                     rhs(i,j,k,6)=rhs(i,j,k,6)+pSTsrc(i,j,k,2)
-                     rhs(i,j,k,7)=rhs(i,j,k,7)+pSTsrc(i,j,k,3)
-                  end if
+                  ! Compaction phasic energy transfer
+                  rhs(i,j,k,3)=rhs(i,j,k,3)-dEcomp/dt
+                  rhs(i,j,k,4)=rhs(i,j,k,4)+dEcomp/dt
                   ! Velocity gradients at cell center
                   gradU(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -1399,7 +1767,6 @@ contains
          call this%amr%mfab_destroy(Vx)
          call this%amr%mfab_destroy(Vy)
          call this%amr%mfab_destroy(Vz)
-         call this%amr%mfab_destroy(STsrc)
          do lvl=0,this%amr%clvl()
             call this%amr%mfab_destroy(Fx(lvl))
             call this%amr%mfab_destroy(Fy(lvl))

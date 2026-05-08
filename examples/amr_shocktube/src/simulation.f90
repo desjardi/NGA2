@@ -335,8 +335,12 @@ contains
          call amr%init_from_scratch(time=time%t)
          ! Build PLIC
          call fs%build_plic(time%t)
+         call fs%build_subVF()
          ! Initialize primitive variables
          call fs%get_primitive(Q=fs%Q)
+         ! Initialize face velocities
+         call fs%get_face_velocity()
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          ! Set viscosities to zero
          call get_viscosities()
          ! Add artificial viscosity only
@@ -477,24 +481,52 @@ contains
          call fs%store_old()
 
          ! ======================= RK2 Stage 1: Q*=Q[n]+dt/2*dQdt(t,Q[n]) =======================
-         ! Increment Q
+         ! Increment Q without pressure
          call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          ! Rebuild PLIC
-         call fs%build_plic(time=time%tmid)
-         ! Apply relaxation
+         call fs%build_plic(time=time%t)
+         ! Get most up-to-date pressure
          call fs%apply_relax(time=time%tmid)
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
+         call fs%build_subVF()
+         ! Compute face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=0.5_WP*time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
+         ! Get primitive variables
+         !call fs%apply_relax(time=time%tmid)
+         call fs%get_primitive(Q=fs%Q)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
-         ! Increment Q
+         ! Increment Q without pressure
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
          call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
-         ! Apply relaxation
+         ! Get most up-to-date pressure
          call fs%apply_relax(time=time%t)
-         ! Update primitive variables
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
+         call fs%build_subVF()
+         ! Compute face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+         ! Get primitive variables
+         !call fs%apply_relax(time=time%t)
          call fs%get_primitive(Q=fs%Q)
          ! ======================================================================================
 
