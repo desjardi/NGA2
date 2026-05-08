@@ -504,7 +504,6 @@ contains
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
          ! Get primitive variables
-         !call fs%apply_relax(time=time%tmid)
          call fs%get_primitive(Q=fs%Q)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
          ! Increment Q without pressure gradient
@@ -528,7 +527,6 @@ contains
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          ! Get primitive variables
-         !call fs%apply_relax(time=time%t)
          call fs%get_primitive(Q=fs%Q)
          ! ======================================================================================
 
