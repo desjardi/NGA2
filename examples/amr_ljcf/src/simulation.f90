@@ -329,7 +329,7 @@ contains
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
          amr%xlo= 00.0_WP; amr%xhi=+20.0_WP
-         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
+         amr%ylo=-05.0_WP; amr%yhi=+15.0_WP
          amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
          amr%xper=.false.; amr%yper=.false.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
