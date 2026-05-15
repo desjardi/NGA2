@@ -46,6 +46,7 @@ module simulation
    real(WP) :: restart_time
 
    ! Physical parameters
+   real(WP) :: Ujet
    real(WP) :: viscL_mol,viscG_mol
 
 contains
@@ -112,6 +113,7 @@ contains
       real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
       real(WP) :: lapU,lapV,lapW,u_sgs,Re
       integer :: i,j,k
+      logical :: near_wall
       tags=tags_ptr
       ! Get mesh spacing
       dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
@@ -124,6 +126,9 @@ contains
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            ! Prevent maximum Re-driven refinement near wall
+            near_wall=(solver%amr%xlo+(real(i,WP)+0.5_WP)*dx.lt.solver%amr%xlo+2.0_WP*dx)
+            if (near_wall.and.lvl.ge.solver%amr%maxlvl-1) cycle
             ! Laplacian of velocity Q=UVW
             lapU=(pQ(i+1,j,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i-1,j,k,1))*dxi2+(pQ(i,j+1,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j-1,k,1))*dyi2+(pQ(i,j,k+1,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j,k-1,1))*dzi2
             lapV=(pQ(i+1,j,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i-1,j,k,2))*dxi2+(pQ(i,j+1,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j-1,k,2))*dyi2+(pQ(i,j,k+1,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j,k-1,2))*dzi2
@@ -137,9 +142,10 @@ contains
       call solver%amr%mfiter_destroy(mfi)
    end subroutine my_tagger
 
-   !> Dirichlet BC: uniform inflow at 1 at xlo/xhi for U, 0 for V/W
+   !> Dirichlet BC: velocity inflow at xlo for U and ylo for V
    subroutine dirichlet_velocity(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
+      use mathtools, only: twoPi
       class(amrmpinc), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -152,12 +158,12 @@ contains
       select case (face)
        case (1)  ! Inflow in X-
          select case (comp)
-          case ('U')  ! Staggered U = 1
+          case ('U')  ! Staggered U=Ujet
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
                if (rad.lt.0.5_WP) then
-                  p(i,j,k,1)=1.0_WP
+                  p(i,j,k,1)=Ujet
                else
                   p(i,j,k,1)=0.0_WP
                end if
@@ -166,16 +172,33 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,1)=0.0_WP
             end do; end do; end do
-          case ('Q')  ! Cell-centered: U=1, V=0, W=0
+          case ('Q')  ! Cell-centered: U=Ujet, V=0, W=0
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
                if (rad.lt.0.5_WP) then
-                  p(i,j,k,1)=1.0_WP
+                  p(i,j,k,1)=Ujet
                else
                   p(i,j,k,1)=0.0_WP
                end if
                p(i,j,k,2)=0.0_WP
+               p(i,j,k,3)=0.0_WP
+            end do; end do; end do
+         end select
+       case (3)  ! Inflow in Y-
+         select case (comp)
+          case ('V')  ! Staggered V=1
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=1.0_WP
+            end do; end do; end do
+          case ('U','W')  ! Staggered U,W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered: U=0, V=1, W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+               p(i,j,k,2)=1.0_WP
                p(i,j,k,3)=0.0_WP
             end do; end do; end do
          end select
@@ -241,7 +264,7 @@ contains
       type(amrex_distromap), intent(in) :: dm
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pU,pQ
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pV,pQ
       real(WP), dimension(3) :: BL,BG  ! Dummy barycenters
       real(WP) :: dx,dy,dz,VF
       integer :: i,j,k
@@ -254,7 +277,7 @@ contains
          ! Get pointers to data
          pVF=>solver%VF%mf(lvl)%dataptr(mfi)
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
-         pU=>solver%U%mf(lvl)%dataptr(mfi)
+         pV=>solver%V%mf(lvl)%dataptr(mfi)
          if (lvl.eq.solver%amr%maxlvl) then
             pCL=>solver%CL%dataptr(mfi)
             pCG=>solver%CG%dataptr(mfi)
@@ -262,16 +285,32 @@ contains
          ! Loop over grown tilebox
          bx=mfi%growntilebox(solver%nover)
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Compute VF and barycenters from levelset
-            call initialize_volume_moments(lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz], &
-            &                              hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=VF,BL=BL,BG=BG)
-            ! Store volume fraction
-            pVF(i,j,k,1)=VF
-            ! Store barycenters
-            if (lvl.eq.solver%amr%maxlvl) then
-               pCL(i,j,k,:)=BL
-               pCG(i,j,k,:)=BG
+            ! Set initial crossflow
+            pV(i,j,k,1)=1.0_WP
+            pQ(i,j,k,2)=1.0_WP
+            if (i.lt.solver%amr%geom(lvl)%domain%lo(1)) then
+               pV(i,j,k,1)=0.0_WP
+               pQ(i,j,k,2)=0.0_WP
+            end if
+            ! Set interface
+            if (i.lt.solver%amr%geom(lvl)%domain%lo(1)) then
+               ! Compute VF and barycenters from levelset
+               call initialize_volume_moments(lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz], &
+               &                              hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz], &
+               &                              levelset=cylinder_levelset,time=time,level=nref,VFlo=VFlo,VF=VF,BL=BL,BG=BG)
+               ! Store volume fraction
+               pVF(i,j,k,1)=VF
+               ! Store barycenters
+               if (lvl.eq.solver%amr%maxlvl) then
+                  pCL(i,j,k,:)=BL
+                  pCG(i,j,k,:)=BG
+               end if
+            else
+               pVF(i,j,k,1)=0.0_WP
+               if (lvl.eq.solver%amr%maxlvl) then
+                  pCL(i,j,k,:)=[solver%amr%xlo+(real(i,WP)+0.5_WP)*dx,solver%amr%ylo+(real(j,WP)+0.5_WP)*dy,solver%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,:)=[solver%amr%xlo+(real(i,WP)+0.5_WP)*dx,solver%amr%ylo+(real(j,WP)+0.5_WP)*dy,solver%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+               end if
             end if
          end do; end do; end do
       end do
@@ -292,7 +331,7 @@ contains
          amr%xlo= 00.0_WP; amr%xhi=+20.0_WP
          amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
          amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
-         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
+         amr%xper=.false.; amr%yper=.false.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
          ! Handle 2D case
          if (amr%nz.eq.1) then
@@ -343,6 +382,8 @@ contains
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set densities
          fs%rhoG=1.0_WP; call param_read('Density ratio',fs%rhoL)
+         ! Read in momentum flux ratio and set liquid velocity
+         call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
          ! Set surface tension coefficient
          call param_read('Weber number',fs%sigma); fs%sigma=1.0_WP/fs%sigma
          ! Set molecular viscosities
@@ -351,20 +392,20 @@ contains
          ! Set pressure convergence
          fs%psolver%outer_solver=amrmg_outer_pcg_mlmg
          fs%psolver%tol_rel=1.0e-5_WP
-         ! Dirichlet conditions for VOF at inlet
-         fs%lo_bc(1)=BC_USER
+         ! Dirichlet conditions for VOF at x- inlet and pure gas at y- inlet
+         fs%lo_bc(1:2)=[BC_USER,BC_GAS]
          fs%user_vofbc=>dirichlet_VF
-         ! Dirichlet conditions for velocities at inlet
-         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-         fs%U%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%V%lo_bc(1,1)=amrex_bc_ext_dir
-         fs%W%lo_bc(1,1)=amrex_bc_ext_dir
+         ! Dirichlet conditions for velocities at x-/y- inlet
+         fs%Q%lo_bc(1:2,:)=amrex_bc_ext_dir
+         fs%U%lo_bc(1:2,1)=amrex_bc_ext_dir
+         fs%V%lo_bc(1:2,1)=amrex_bc_ext_dir
+         fs%W%lo_bc(1:2,1)=amrex_bc_ext_dir
          fs%user_bc=>dirichlet_velocity
-         ! Neumann conditions for velocities at outlet
-         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-         fs%U%hi_bc(1,1)=amrex_bc_foextrap
-         fs%V%hi_bc(1,1)=amrex_bc_foextrap
-         fs%W%hi_bc(1,1)=amrex_bc_foextrap
+         ! Neumann conditions for velocities at x+/y+ outlets
+         fs%Q%hi_bc(1:2,:)=amrex_bc_foextrap
+         fs%U%hi_bc(1:2,1)=amrex_bc_foextrap
+         fs%V%hi_bc(1:2,1)=amrex_bc_foextrap
+         fs%W%hi_bc(1:2,1)=amrex_bc_foextrap
       end block create_flow_solver
 
       ! Create workspace array

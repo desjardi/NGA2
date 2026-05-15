@@ -2,16 +2,17 @@
 Base nx:   16
 Base ny:   16
 Base nz:   16
-Max level: 4
+Max level: 5
 
 # Regridding parameters
 Regrid nsteps:    10
 Tagging Reynolds: 10
 
 # Flow parameters
-Density ratio:   1e3
-Weber number:    10
-Reynolds number: 5e3
+Density ratio:   800
+Mom flux ratio:  50
+Weber number:    100
+Reynolds number: 1e4
 Viscosity ratio: 50
 
 # Time integration
