@@ -1,0 +1,49 @@
+# Parallelization
+Partition :	8 1 1
+I/O partition : 1 1 1
+
+# Mesh definition
+X ljcf : 0.108 # 2D
+Lx : 0.432  # 8D
+Ly : 0.432  # 8D for testing - should be 0.864  # 16D
+Lz : 0.216  # 4D
+nx : 128    # 8 cells/D 
+ny : 128  # Reduced for 8D for testing - should be 128 
+nz : 64 
+
+# Injector geometry
+Injector radius 1 :    0.027 # m
+Injector radius 2 :    0.025 # m
+Injector height 1 :    0.05  # m 
+Injector height 2 :    0.07  # m
+
+# Flow conditions
+Jet diameter :         0.054  # m
+End Injection Time :   0.267  # s  sqrt(2*H/g) = sqrt(2*0.35 m / 9.81 m/s^2) = 0.267 s
+Jet location :         0
+Liquid density :       1000 # kg/m^3
+Gas density :          1.2 # kg/m^3
+Liquid viscosity :     1e-3 # Pa-s
+Gas viscosity :        1.8e-5 # Pa-s
+Surface tension :      0.072 # N/m
+Gravitational acceleration : 9.81 # m/s^2
+Air velocity :         11 # m/s
+Target Re_lambda :     45
+Turbulence intensity : 0.05
+
+# Time integration
+Max timestep size : 2e-4 # s
+Max cfl number :    1.0
+Max time :          0.4 # s
+
+# Pressure solver
+Pressure tolerance : 1e-4
+Pressure iteration : 100
+
+# Data output
+Ensight output period : 2.5e-3 # s
+Restart output period : 0.05 # s
+
+# Data restart
+#Restart from : 1.00000E+01
+#HIT restart :  hit_1.00000E+01
