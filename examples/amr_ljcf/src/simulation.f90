@@ -48,6 +48,7 @@ module simulation
    ! Physical parameters
    real(WP) :: Ujet
    real(WP) :: viscL_mol,viscG_mol
+   real(WP), dimension(3) :: gravity
 
 contains
 
@@ -389,6 +390,8 @@ contains
          ! Set molecular viscosities
          call param_read('Reynolds number',viscG_mol); viscG_mol=1.0_WP/viscG_mol
          call param_read('Viscosity ratio',viscL_mol); viscL_mol=viscG_mol*viscL_mol
+         ! Set gravity
+         gravity=0.0_WP; call param_read('Froude number',gravity(1),default=1.0e30_WP); gravity(1)=1.0_WP/gravity(1)**2
          ! Set pressure convergence
          fs%psolver%outer_solver=amrmg_outer_pcg_mlmg
          fs%psolver%tol_rel=1.0e-5_WP
@@ -564,7 +567,7 @@ contains
             call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%add_pressure(scale=time%dt,phi=fs%P)
+            call fs%add_pressure(scale=time%dt,phi=fs%P,gravity=gravity)
 
             ! Add surface tension to both velocities
             call fs%add_surface_tension(scale=time%dt)

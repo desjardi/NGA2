@@ -627,12 +627,14 @@ contains
 
    !> Add explicit phasic pressure gradient to face velocities, cell-centered momentum, and phasic internal energies
    !> Uses this%PL and this%PG directly
-   subroutine add_phasic_pressure(this,scale)
+   !> Optional gravity(1:3) adds a constant face acceleration alongside -grad(Pmix)/rho
+   subroutine add_phasic_pressure(this,scale,gravity)
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrmpcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
+      real(WP), dimension(3), intent(in), optional :: gravity
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
@@ -670,6 +672,7 @@ contains
                end if
                pFx(i,j,k,1)=-2.0_WP*((pVF(i  ,j,k,1)*pPL(i  ,j,k,1)+(1.0_WP-pVF(i  ,j,k,1))*pPG(i  ,j,k,1))&
                &                    -(pVF(i-1,j,k,1)*pPL(i-1,j,k,1)+(1.0_WP-pVF(i-1,j,k,1))*pPG(i-1,j,k,1)))*dxi/max(rhoLo+rhoHi,this%rho_floor)
+               if (present(gravity)) pFx(i,j,k,1)=pFx(i,j,k,1)+gravity(1)
             end do; end do; end do
             ! Y-faces
             bx=mfi%nodaltilebox(2)
@@ -681,6 +684,7 @@ contains
                end if
                pFy(i,j,k,1)=-2.0_WP*((pVF(i,j  ,k,1)*pPL(i,j  ,k,1)+(1.0_WP-pVF(i,j  ,k,1))*pPG(i,j  ,k,1))&
                &                    -(pVF(i,j-1,k,1)*pPL(i,j-1,k,1)+(1.0_WP-pVF(i,j-1,k,1))*pPG(i,j-1,k,1)))*dyi/max(rhoLo+rhoHi,this%rho_floor)
+               if (present(gravity)) pFy(i,j,k,1)=pFy(i,j,k,1)+gravity(2)
             end do; end do; end do
             ! Z-faces
             bx=mfi%nodaltilebox(3)
@@ -692,6 +696,7 @@ contains
                end if
                pFz(i,j,k,1)=-2.0_WP*((pVF(i,j,k  ,1)*pPL(i,j,k  ,1)+(1.0_WP-pVF(i,j,k  ,1))*pPG(i,j,k  ,1))&
                &                    -(pVF(i,j,k-1,1)*pPL(i,j,k-1,1)+(1.0_WP-pVF(i,j,k-1,1))*pPG(i,j,k-1,1)))*dzi/max(rhoLo+rhoHi,this%rho_floor)
+               if (present(gravity)) pFz(i,j,k,1)=pFz(i,j,k,1)+gravity(3)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)

@@ -366,7 +366,7 @@ contains
             call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%add_pressure(scale=time%dt/fs%rho,phi=fs%P)
+            call fs%add_pressure(scale=time%dt,phi=fs%P)
 
             ! Apply IB direct forcing
             call apply_ib_forcing()
@@ -383,7 +383,7 @@ contains
             call fs%psolver%solve(rhs=fs%div)
 
             ! Correct both velocities with new pressure increment
-            call fs%add_pressure(scale=time%dt/fs%rho)
+            call fs%add_pressure(scale=time%dt)
 
             ! Add pressure increment
             call fs%P%add(src=fs%psolver%sol)

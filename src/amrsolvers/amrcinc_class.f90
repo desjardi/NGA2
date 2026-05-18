@@ -406,12 +406,15 @@ contains
    !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
-   subroutine add_pressure(this,scale,phi)
+   !> Optional gravity(1:3) adds a constant face acceleration alongside -grad(p) if phi is present
+   subroutine add_pressure(this,scale,phi,gravity)
       use amrex_amr_module, only: amrex_multifab,amrex_bc_reflect_odd
       use amrex_interface,  only: amrmfab_average_down_face
+      implicit none
       class(amrcinc), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
+      real(WP), dimension(3), intent(in), optional :: gravity
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
@@ -436,15 +439,18 @@ contains
                pFx=>Fx(lvl)%dataptr(mfi); pFy=>Fy(lvl)%dataptr(mfi); pFz=>Fz(lvl)%dataptr(mfi)
                bx=mfi%nodaltilebox(1)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFx(i,j,k,1)=-(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi
+                  pFx(i,j,k,1)=-(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi/this%rho
+                  if (present(gravity)) pFx(i,j,k,1)=pFx(i,j,k,1)+gravity(1)
                end do; end do; end do
                bx=mfi%nodaltilebox(2)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFy(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi
+                  pFy(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi/this%rho
+                  if (present(gravity)) pFy(i,j,k,1)=pFy(i,j,k,1)+gravity(2)
                end do; end do; end do
                bx=mfi%nodaltilebox(3)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  pFz(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi
+                  pFz(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi/this%rho
+                  if (present(gravity)) pFz(i,j,k,1)=pFz(i,j,k,1)+gravity(3)
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
@@ -458,6 +464,12 @@ contains
       else
          ! Use psolver's solution and its internal ghosts
          call this%psolver%get_fluxes(Fx,Fy,Fz)
+         ! Divide by rho
+         do lvl=0,this%amr%clvl()
+            call Fx(lvl)%mult(1.0_WP/this%rho,1,1,0)
+            call Fy(lvl)%mult(1.0_WP/this%rho,1,1,0)
+            call Fz(lvl)%mult(1.0_WP/this%rho,1,1,0)
+         end do
       end if
       ! Apply to face velocities and cell-centered in one pass
       do lvl=0,this%amr%clvl()

@@ -542,12 +542,14 @@ contains
    !>   phi present -> direct path: use explicit stencil that reads phi ghost cells directly (for predictor with fs%P)
    !>   phi absent  -> MLMG path:   use psolver internal fluxes (for projection with dP)
    !> Cell-center correction averages the face gradients back to cell center
-   subroutine add_pressure(this,scale,phi)
+   !> Optional gravity(1:3) adds a constant face acceleration alongside -grad(p)/rho if phi is present
+   subroutine add_pressure(this,scale,phi,gravity)
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface,  only: amrmfab_average_down_face
       class(amrmpinc), intent(inout) :: this
       real(WP), intent(in) :: scale
       type(amrdata), intent(in), optional :: phi
+      real(WP), dimension(3), intent(in), optional :: gravity
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
@@ -576,16 +578,19 @@ contains
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   VF_f=0.5_WP*(pVF(i-1,j,k,1)+pVF(i,j,k,1)); if (lvl.eq.this%amr%maxlvl) VF_f=0.5_WP*(pSubVF(i-1,j,k,2)+pSubVF(i,j,k,1))
                   pFx(i,j,k,1)=-(pP(i,j,k,1)-pP(i-1,j,k,1))*dxi/(this%rhoL*VF_f+this%rhoG*(1.0_WP-VF_f))
+                  if (present(gravity)) pFx(i,j,k,1)=pFx(i,j,k,1)+gravity(1)
                end do; end do; end do
                bx=mfi%nodaltilebox(2)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   VF_f=0.5_WP*(pVF(i,j-1,k,1)+pVF(i,j,k,1)); if (lvl.eq.this%amr%maxlvl) VF_f=0.5_WP*(pSubVF(i,j-1,k,4)+pSubVF(i,j,k,3))
                   pFy(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j-1,k,1))*dyi/(this%rhoL*VF_f+this%rhoG*(1.0_WP-VF_f))
+                  if (present(gravity)) pFy(i,j,k,1)=pFy(i,j,k,1)+gravity(2)
                end do; end do; end do
                bx=mfi%nodaltilebox(3)
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   VF_f=0.5_WP*(pVF(i,j,k-1,1)+pVF(i,j,k,1)); if (lvl.eq.this%amr%maxlvl) VF_f=0.5_WP*(pSubVF(i,j,k-1,6)+pSubVF(i,j,k,5))
                   pFz(i,j,k,1)=-(pP(i,j,k,1)-pP(i,j,k-1,1))*dzi/(this%rhoL*VF_f+this%rhoG*(1.0_WP-VF_f))
+                  if (present(gravity)) pFz(i,j,k,1)=pFz(i,j,k,1)+gravity(3)
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
