@@ -160,6 +160,7 @@ contains
        case (1)  ! Inflow in X-
          select case (comp)
           case ('U')  ! Staggered U=Ujet
+            Ujet = gravity(1)*time
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
@@ -384,7 +385,7 @@ contains
          ! Set densities
          fs%rhoG=1.0_WP; call param_read('Density ratio',fs%rhoL)
          ! Read in momentum flux ratio and set liquid velocity
-         call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
+         ! call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
          ! Set surface tension coefficient
          call param_read('Weber number',fs%sigma); fs%sigma=1.0_WP/fs%sigma
          ! Set molecular viscosities
