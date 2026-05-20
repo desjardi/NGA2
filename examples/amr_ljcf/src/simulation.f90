@@ -326,13 +326,18 @@ contains
 
       ! Create amrgrid
       create_amrgrid: block
+         real(WP) :: Lx,Ly,Lz,Ly_offset
          amr%name='LJCF'
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
-         amr%xlo= 00.0_WP; amr%xhi=+20.0_WP
-         amr%ylo=-05.0_WP; amr%yhi=+15.0_WP
-         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         call param_read("Lx",Lx)
+         call param_read("Ly",Ly)
+         call param_read("Lz",Lz)
+         call param_read("Ly offset",Ly_offset)
+         amr%xlo= 00.0_WP; amr%xhi=+Lx
+         amr%ylo=-Ly_offset; amr%yhi=Ly-Ly_offset
+         amr%zlo=-Lz/2.0_WP; amr%zhi=+Lz/2.0_WP
          amr%xper=.false.; amr%yper=.false.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
          ! Handle 2D case

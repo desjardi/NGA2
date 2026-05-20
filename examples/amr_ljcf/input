@@ -1,25 +1,31 @@
 # Mesh parameters
-Base nx:   16
+Base nx:   32
 Base ny:   16
-Base nz:   16
-Max level: 6
+Base nz:   8
+Max level: 4
+
+# Domain
+Lx: 16 ! Jet injection direction
+Ly:  8 ! Crossflow
+Lz:  4 ! Spanwise
+Ly offset: 2 ! Distance from edge of domain to jet
 
 # Regridding parameters
 Regrid nsteps:    10
 Tagging Reynolds: 20
 
 # Flow parameters
-Density ratio:   800
-Mom flux ratio:  50
-Weber number:    100
-Reynolds number: 4e4
-Viscosity ratio: 50
-Froude number:   15
+Density ratio:   833.3
+#Mom flux ratio:  50
+Weber number:    108.9
+Reynolds number: 39600 !4e4
+Viscosity ratio: 55.5
+Froude number:   15.12
 
 # Time integration
 Max time: 100
 Max dt:   2.5e-3
-Max CFL:  0.7
+Max CFL:  0.5
 
 # Output
 Output period:     0.5
