@@ -50,6 +50,10 @@ module simulation
    real(WP) :: viscL_mol,viscG_mol
    real(WP), dimension(3) :: gravity
 
+   ! Sponge layer parameters for outflow damping
+   real(WP) :: y_spg_start
+   real(WP) :: L_spg
+   real(WP) :: max_cfl_spg
 contains
 
    !> Levelset function for sphere
@@ -78,6 +82,10 @@ contains
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pVisc
       real(WP), parameter :: myeps=1.0e-15_WP
+      real(WP) :: blend,mu_spg,y_loc,nu_spg
+      ! Compute maximum allowable kinematic viscosity in the sponge at finest level
+      ! This ensures viscous terms satisfy CFL: dt <= CFL*dx^2/(4*nu) => nu <= CFL*dx^2/(4*dt)
+      nu_spg=max_cfl_spg*amr%min_meshsize(amr%clvl())**2/(4.0_WP*time%dt)
       ! Loop over levels
       do lvl=0,amr%clvl()
          ! Loop over domain
@@ -91,11 +99,52 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Use harmonic averaging
                pVisc(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(viscL_mol,myeps)+(1.0_WP-pVF(i,j,k,1))/max(viscG_mol,myeps))
+               ! Apply sponge layer viscosity damping in outflow region (y+ boundary)
+               y_loc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+               if (y_loc.gt.y_spg_start) then
+                  ! Smooth quadratic blend: 0 at y_spg_start, 1 at y_spg_start+L_spg
+                  blend=min((y_loc-y_spg_start)/L_spg,1.0_WP)**2
+                  ! Compute sponge viscosity (convert kinematic to dynamic)
+                  mu_spg=nu_spg/(pVF(i,j,k,1)/max(1.0_WP,myeps)+(1.0_WP-pVF(i,j,k,1))/max(1.0_WP,myeps))
+                  ! Only increase viscosity if beneficial
+                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_spg)
+               end if
             end do; end do; end do
          end do
          call amr%mfiter_destroy(mfi)
       end do
    end subroutine get_viscosity
+
+   !> Clip VOF near outflow to prevent unphysical values and instabilities
+   subroutine clip_vof_outflow()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      real(WP), parameter :: VF_min=1.0e-6_WP,VF_max=1.0_WP-1.0e-6_WP
+      real(WP) :: dy_loc
+      ! Loop over levels
+      do lvl=0,amr%clvl()
+         ! Loop over domain
+         call amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pVF=>fs%VF%mf(lvl)%dataptr(mfi)
+            ! Get tilebox (grow for safety, clip only at boundaries)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               ! Check if in sponge layer outflow region (y+ boundary)
+               dy_loc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+               ! Clip VOF in sponge region to prevent ringing/overshoot
+               if (dy_loc.gt.y_spg_start) then
+                  pVF(i,j,k,1)=max(min(pVF(i,j,k,1),VF_max),VF_min)
+               end if
+            end do; end do; end do
+         end do
+         call amr%mfiter_destroy(mfi)
+      end do
+   end subroutine clip_vof_outflow
 
    !> Tagger for this case based on velocity gradient magnitude
    subroutine my_tagger(solver,lvl,time,tags_ptr)
@@ -398,6 +447,10 @@ contains
          call param_read('Viscosity ratio',viscL_mol); viscL_mol=viscG_mol*viscL_mol
          ! Set gravity
          gravity=0.0_WP; call param_read('Froude number',gravity(1),default=1.0e30_WP); gravity(1)=1.0_WP/gravity(1)**2
+         ! Set sponge layer parameters (optional for outflow damping at y+ boundary)
+         call param_read('Sponge y-start',y_spg_start,default=4.0_WP)
+         call param_read('Sponge thickness',L_spg,default=4.0_WP)
+         call param_read('Sponge max CFL',max_cfl_spg,default=0.5_WP)
          ! Set pressure convergence
          fs%psolver%outer_solver=amrmg_outer_pcg_mlmg
          fs%psolver%tol_rel=1.0e-5_WP
@@ -568,6 +621,9 @@ contains
             ! Rebuild PLIC and sub-cell VF
             call fs%build_plic(time%t)
             call fs%build_subVF()
+
+            ! Clip VOF in outflow region to prevent instabilities
+            call clip_vof_outflow()
 
             ! Interpolate velocity to the faces
             call fs%get_face_velocity()
