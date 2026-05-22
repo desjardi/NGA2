@@ -122,7 +122,6 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
-      real(WP), parameter :: VF_min=1.0e-6_WP,VF_max=1.0_WP-1.0e-6_WP
       real(WP) :: dy_loc
       ! Loop over levels
       do lvl=0,amr%clvl()
@@ -136,9 +135,9 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Check if in sponge layer outflow region (y+ boundary)
                dy_loc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
-               ! Clip VOF in sponge region to prevent ringing/overshoot
+               ! Remove liquid in sponge region to prevent outflow instabilities
                if (dy_loc.gt.y_spg_start) then
-                  pVF(i,j,k,1)=max(min(pVF(i,j,k,1),VF_max),VF_min)
+                  pVF(i,j,k,1)=0.0_WP
                end if
             end do; end do; end do
          end do
@@ -179,6 +178,8 @@ contains
             ! Prevent maximum Re-driven refinement near wall
             near_wall=(solver%amr%xlo+(real(i,WP)+0.5_WP)*dx.lt.solver%amr%xlo+2.0_WP*dx)
             if (near_wall.and.lvl.ge.solver%amr%maxlvl-1) cycle
+            ! Prevent refinement in outflow sponge region
+            if (solver%amr%ylo+(real(j,WP)+0.5_WP)*dy.gt.y_spg_start) cycle
             ! Laplacian of velocity Q=UVW
             lapU=(pQ(i+1,j,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i-1,j,k,1))*dxi2+(pQ(i,j+1,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j-1,k,1))*dyi2+(pQ(i,j,k+1,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j,k-1,1))*dzi2
             lapV=(pQ(i+1,j,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i-1,j,k,2))*dxi2+(pQ(i,j+1,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j-1,k,2))*dyi2+(pQ(i,j,k+1,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j,k-1,2))*dzi2
@@ -448,7 +449,7 @@ contains
          ! Set gravity
          gravity=0.0_WP; call param_read('Froude number',gravity(1),default=1.0e30_WP); gravity(1)=1.0_WP/gravity(1)**2
          ! Set sponge layer parameters (optional for outflow damping at y+ boundary)
-         call param_read('Sponge y-start',y_spg_start,default=4.0_WP)
+         call param_read('Sponge y-start',y_spg_start,default=12.0_WP)
          call param_read('Sponge thickness',L_spg,default=4.0_WP)
          call param_read('Sponge max CFL',max_cfl_spg,default=0.5_WP)
          ! Set pressure convergence
@@ -623,7 +624,7 @@ contains
             call fs%build_subVF()
 
             ! Clip VOF in outflow region to prevent instabilities
-            call clip_vof_outflow()
+            ! call clip_vof_outflow()
 
             ! Interpolate velocity to the faces
             call fs%get_face_velocity()
