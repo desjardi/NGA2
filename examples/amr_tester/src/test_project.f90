@@ -183,7 +183,7 @@ contains
          call log("Pressure solver residual = "//trim(rtoa(fs%psolver%res)))
 
          ! 3. Correct velocity
-         call fs%correct_velocity(scale=1.0_WP)
+         call fs%add_pressure(scale=1.0_WP)
 
          ! 4. Average down for C/F consistency
          call fs%average_down_velocity()

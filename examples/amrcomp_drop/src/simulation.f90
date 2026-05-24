@@ -54,6 +54,7 @@ module simulation
    real(WP) :: ML                     !< Liquid Mach number
    real(WP) :: Reynolds,visc_ratio    !< Viscosity 
    real(WP) :: Prandtl ,diff_ratio    !< Heat diffusivity
+   real(WP) :: Weber                  !< Weber number
    
    !> Sutherland viscosity parameters: mu_g = (1+Suth_T)*T^Suth_n / (Re*(T+Suth_T))
    real(WP) :: Suth_n=1.5_WP          !< Sutherland exponent (1.0 for constant)
@@ -134,78 +135,55 @@ contains
       get_IG=(P+GammaG*PinfG)/(RHO*(GammaG-1.0_WP))
    end function get_IG
 
-   !> Implicit mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL=PG=Peq,
-   !> then computes adjustments to VF and internal energies via p*dV work exchange.
-   !> Conserves: phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   ! subroutine P_relax_implicit(VF,Q,Peq,dVF,dQ)
-   !    use amrmpcomp_class, only: VFlo,VFhi
-   !    implicit none
-   !    real(WP),               intent(in) :: VF
-   !    real(WP), dimension(:), intent(in) :: Q
-   !    real(WP), intent(inout) :: Peq
-   !    real(WP), intent(out), optional :: dVF
-   !    real(WP), dimension(:), intent(out), optional :: dQ
-   !    real(WP) :: invG1G,invG1L,d0,d1,facG,facL,a,b,d
-   !    ! Skip if any conserved quantity is non-positive (EOS undefined)
-   !    if (any(Q(1:4).le.0.0_WP)) return
-   !    ! Precompute EOS constants
-   !    invG1L=1.0_WP/(GammaL-1.0_WP); d0=GammaL*PinfL*invG1L; d1=1.0_WP+invG1L
-   !    ! Switch behavior depending on how the subroutine is called
-   !    if (.not.present(dVF)) then
-   !       ! First mode: return Peq by solving a*Peq^2 + b*Peq + d = 0
-   !       invG1G=1.0_WP/(GammaG-1.0_WP); facG=GammaG*PinfG*invG1G; facL=invG1G+VF
-   !       a=d1*facL-VF*(invG1G+1.0_WP)
-   !       b=d1*(facG-Q(4))-VF*facG+d0*facL-Q(3)*(invG1G+1.0_WP)
-   !       d=d0*(facG-Q(4))-Q(3)*facG
-   !       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
-   !       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-   !    else
-   !       ! Second mode: use provided Peq to compute dVF and dQ
-   !       dVF=(VF*Peq+Q(3))/(d1*Peq+d0)-VF
-   !       dQ=0.0_WP; dQ(3)=-Peq*dVF; dQ(4)=+Peq*dVF
-   !    end if
-   ! end subroutine P_relax_implicit
-
-   !> Implicit mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL=PG=Peq,
+   !> Generalized mechanical relaxation for stiffened gas EOS pair
+   !> Solves quadratic for equilibrium pressure Peq where PL+Pjump=PG=Peq,
    !> then adjusts VF and internal energies via p*dV work exchange.
-   !> Conserves: phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   subroutine P_relax_implicit(VF,Q)
+   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
+   !> Enforces pressure jump provided in Pjump
+   subroutine P_relax_generalized(VF,Q,Pjump)
       use amrmpcomp_class, only: VFlo,VFhi
       implicit none
-      real(WP),               intent(inout) :: VF
+      real(WP), intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
-      real(WP) :: a,b,d,Peq,VFeq
-      real(WP) :: invG1G,invG1L,d0,d1,facG,facL
+      real(WP), intent(in) :: Pjump
+      real(WP) :: PG,PL,ZG,ZL,Pint,cJ
+      real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
       real(WP), parameter :: RHOGmin=1.0e-2_WP
+      real(WP), parameter :: phist=1.0_WP,phi0=0.0_WP   !< Temporal weighting, phist=1 should yield best results
       ! Skip if any conserved quantity is non-positive (EOS undefined)
       if (any(Q(1:4).le.0.0_WP)) return
       ! Skip near-pure-liquid cells (gas density too low)
       if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-      ! Precompute EOS constants
-      invG1G=1.0_WP/(GammaG-1.0_WP)
-      invG1L=1.0_WP/(GammaL-1.0_WP)
-      d0=GammaL*PinfL*invG1L
-      d1=1.0_WP+invG1L
-      facG=GammaG*PinfG*invG1G
-      facL=invG1G+VF
-      ! Quadratic coefficients: a*Peq^2 + b*Peq + d = 0
-      a=d1*facL-VF*(invG1G+1.0_WP)
-      b=d1*(facG-Q(4))-VF*facG+d0*facL-Q(3)*(invG1G+1.0_WP)
-      d=d0*(facG-Q(4))-Q(3)*facG
-      ! Solve for equilibrium pressure (positive root)
+      ! Get phasic pressures
+      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
+      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+      ! Get phasic impedances
+      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
+      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+      cJ=ZL/(ZG+ZL)
+      ! Calculate model interface pressure
+      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
+      ! Setup quadratic problem
+      n1=VF*phist
+      n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3) 
+      d1=phist+1.0_WP/(GammaL-1.0_WP)
+      d0=phi0*Pint-phist*cJ*pjump+GammaL/(GammaL-1.0_WP)*PinfL
+      a=d1*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n1*(-1.0_WP/(GammaG-1.0_WP)-phist)
+      b=d1*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n0*(-1.0_WP/(GammaG-1.0_WP)-phist)
+      d=d0*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)
+      ! Get equilibrium pressure
       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-      ! Bail if pressure is unphysical
-      if (Peq.le.max(-PinfG,-PinfL)) return
-      ! Equilibrium volume fraction from liquid energy constraint
-      VFeq=(VF*Peq+Q(3))/(d1*Peq+d0)
-      ! Update internal energies via p*dV work exchange
-      Q(3)=Q(3)-Peq*(VFeq-VF)
-      Q(4)=Q(4)+Peq*(VFeq-VF)
+      ! Check if pressure is sound
+      if (Peq.le.-PinfL.or.Peq-Pjump.le.-PinfG) return
+      ! Get equilibrium volume fraction
+      VFeq=(n1*Peq+n0)/(d1*Peq+d0)
+      if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
+      ! Adjust conserved quantities
+      Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
+      Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
       VF=VFeq
-   end subroutine P_relax_implicit
+   end subroutine P_relax_generalized
 
    !> Compute viscosity: Sutherland for gas, VF-weighted blend with liquid
    subroutine get_viscosities()
@@ -337,26 +315,38 @@ contains
    end subroutine shockdrop_init
 
    !> Apply inflow BC at low-x (face=1)
-   subroutine shock_dirichlet(solver,lvl,time,face,bx,pQ)
+   subroutine shock_dirichlet(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
       class(amrmpcomp), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
       integer, intent(in) :: face
       type(amrex_box), intent(in) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
+      character(len=1), intent(in) :: comp
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
       select case (face)
        case (1)  ! X-LOW: Dirichlet inflow with post-shock (gas only, no liquid)
-         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            pQ(i,j,k,1)=0.0_WP                  ! No liquid
-            pQ(i,j,k,2)=rhoG2                   ! Gas density
-            pQ(i,j,k,3)=0.0_WP                  ! No liquid energy
-            pQ(i,j,k,4)=rhoG2*get_IG(rhoG2,pG2) ! Gas internal energy
-            pQ(i,j,k,5)=rhoG2*u2                ! X-momentum
-            pQ(i,j,k,6)=0.0_WP
-            pQ(i,j,k,7)=0.0_WP
-         end do; end do; end do
+         select case (comp)
+          case ('U')  ! Staggered U=u2
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=u2
+            end do; end do; end do
+          case ('V','W')  ! Staggered V,W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered Q=(rho2,rho2*u2,0,0,rho2*I2)
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP                  ! No liquid
+               p(i,j,k,2)=rhoG2                   ! Gas density
+               p(i,j,k,3)=0.0_WP                  ! No liquid energy
+               p(i,j,k,4)=rhoG2*get_IG(rhoG2,pG2) ! Gas internal energy
+               p(i,j,k,5)=rhoG2*u2                ! X-momentum
+               p(i,j,k,6)=0.0_WP
+               p(i,j,k,7)=0.0_WP
+            end do; end do; end do
+         end select
       end select
    end subroutine shock_dirichlet
 
@@ -428,7 +418,32 @@ contains
    subroutine simulation_init
       use param, only: param_read
       implicit none
-      
+
+      ! Initialize AMR grid
+      create_amrgrid: block
+         ! Set name
+         amr%name='amrcomp_drop'
+         ! Read in base grid size
+         call param_read('Base nx',amr%nx)
+         call param_read('Base ny',amr%ny)
+         call param_read('Base nz',amr%nz)
+         ! Set domain
+         amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
+         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
+         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         ! Set periodicity
+         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
+         ! Read in max level
+         call param_read('Max level',amr%maxlvl)
+         ! Enable quasi-2D
+         if (amr%nz.eq.1) then
+            amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+            amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
+         end if
+         ! Initialize
+         call amr%initialize()
+      end block create_amrgrid
+
       ! Read EoS and flow parameters
       init_eos_and_flow: block
          use messager, only: log,die
@@ -463,13 +478,16 @@ contains
          u1=0.0_WP
          ! CvG from T2=1
          CvG=pG2/(rhoG2*(GammaG-1.0_WP))
+         ! Surface tension
+         call param_read('Weber number',Weber)
          ! Liquid state from density ratio and liquid Mach number
          call param_read('Density ratio',density_ratio)
          call param_read('Liquid Mach number',ML)
          rhoL1=density_ratio
-         PinfL=rhoL1/(GammaL*ML**2)-pG1
-         pL1=pG1                                                        ! Force pressure equilibrium
-         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*get_TG(rhoG1,pG1))      ! Force thermal equilibrium
+         pL1=pG1+4.0_WP/Weber                   ! Force pressure equilibrium, accounting for 3D Laplace pressure
+         if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! Force pressure equilibrium, accounting for 2D Laplace pressure
+         PinfL=rhoL1/(GammaL*ML**2)-pL1
+         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*get_TG(rhoG1,pG1)) ! Force thermal equilibrium
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -486,32 +504,8 @@ contains
          write(message,'("[Liquid] GammaL=",es12.5," PinfL=",es12.5," CvL=",es12.5)') GammaL,PinfL,CvL; call log(message)
          write(message,'("[Gas]    GammaG=",es12.5," PinfG=",es12.5," CvG=",es12.5)') GammaG,PinfG,CvG; call log(message)
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
+         write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
       end block init_eos_and_flow
-      
-      ! Initialize AMR grid
-      create_amrgrid: block
-         ! Set name
-         amr%name='amrcomp_drop'
-         ! Read in base grid size
-         call param_read('Base nx',amr%nx)
-         call param_read('Base ny',amr%ny)
-         call param_read('Base nz',amr%nz)
-         ! Set domain
-         amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
-         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
-         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
-         ! Set periodicity
-         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
-         ! Read in max level
-         call param_read('Max level',amr%maxlvl)
-         ! Enable quasi-2D
-         if (amr%nz.eq.1) then
-            amr%zlo=-0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
-            amr%zhi=+0.5_WP*(amr%yhi-amr%ylo)/real(amr%ny*2**amr%maxlvl,WP)
-         end if
-         ! Initialize
-         call amr%initialize()
-      end block create_amrgrid
 
       ! Handle restart/saves here
       handle_restart: block
@@ -542,30 +536,37 @@ contains
       create_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrmpcomp_class,  only: BC_GAS
+         use amrdata_class,    only: interp_face_lin
          ! Create flow solver
          call fs%initialize(amr=amr,name='drop')
+         ! Set surface tension coefficient
+         fs%sigma=1.0_WP/Weber
+         ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
+         if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide thermodynamic model (6 EOS pointers)
          fs%getPL=>get_PL; fs%getCL=>get_CL; fs%getTL=>get_TL
          fs%getPG=>get_PG; fs%getCG=>get_CG; fs%getTG=>get_TG
          ! Provide pressure relaxation model
-         fs%relax=>P_relax_implicit
+         fs%relax=>P_relax_generalized
          ! Set initial conditions
-         fs%user_mpcomp_init=>shockdrop_init
+         fs%user_init=>shockdrop_init
          ! Set BCs
          if (.not.amr%xper) then
             fs%lo_bc(1)=BC_GAS
-            fs%Q%lo_bc(1,:)=amrex_bc_ext_dir
-            fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-            fs%user_mpcomp_bc=>shock_dirichlet
+            fs%Q%lo_bc(1,:)=amrex_bc_ext_dir; fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+            fs%U%lo_bc(1,:)=amrex_bc_ext_dir; fs%U%hi_bc(1,:)=amrex_bc_foextrap
+            fs%V%lo_bc(1,:)=amrex_bc_ext_dir; fs%V%hi_bc(1,:)=amrex_bc_foextrap
+            fs%W%lo_bc(1,:)=amrex_bc_ext_dir; fs%W%hi_bc(1,:)=amrex_bc_foextrap
+            fs%user_bc=>shock_dirichlet
          end if
       end block create_solver
       
       ! Initialize workspaces
       create_workspace: block
-         use amrdata_class, only: amrex_interp_none
-         call dQdt%initialize(amr,name='dQdt',ncomp=7,ng=0,interp=amrex_interp_none); call dQdt%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=amrex_interp_none); call Umag%register()
-         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=amrex_interp_none); call Mach%register()
+         use amrdata_class, only: interp_none
+         call dQdt%initialize(amr,name='dQdt',ncomp=7,ng=0,interp=interp_none); call dQdt%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
+         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=interp_none); call Mach%register()
       end block create_workspace
 
       ! Initialize regridding
@@ -576,7 +577,7 @@ contains
          regrid_evt=event(time=time,name='Regrid')
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
-         fs%user_mpcomp_tagging=>my_tagger
+         fs%user_tagging=>my_tagger
          call param_read('Tagging Re',Re_tag)
          call param_read('Tagging Rho',Rho_tag)
          ! Build the grid
@@ -590,6 +591,12 @@ contains
             call amr%init_from_scratch(time=time%t)
             ! Build PLIC
             call fs%build_plic(time%t)
+            call fs%build_subVF()
+            ! Initialize primitive variables
+            call fs%get_primitive(Q=fs%Q)
+            ! Initialize face velocities
+            call fs%get_face_velocity()
+            call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          end if
          ! Compute viscosities
          call get_viscosities()
@@ -597,7 +604,7 @@ contains
          call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
       end block init_regridding
 
@@ -621,9 +628,9 @@ contains
          call viz%add_scalar(fs%RHOG,1,'RHOG')
          call viz%add_scalar(fs%PL,1,'PL')
          call viz%add_scalar(fs%PG,1,'PG')
-         call viz%add_scalar(fs%U,1,'U')
-         call viz%add_scalar(fs%V,1,'V')
-         call viz%add_scalar(fs%W,1,'W')
+         call viz%add_scalar(fs%UVW,1,'U')
+         call viz%add_scalar(fs%UVW,2,'V')
+         call viz%add_scalar(fs%UVW,3,'W')
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(Mach,1,'Mach')
          call viz%add_surfmesh(fs%smesh,'plic')
@@ -675,6 +682,7 @@ contains
          call cflfile%add_column(fs%CFLv_x,'CFLv_x')
          call cflfile%add_column(fs%CFLv_y,'CFLv_y')
          call cflfile%add_column(fs%CFLv_z,'CFLv_z')
+         call cflfile%add_column(fs%CFLst ,'CFLst' )
          call cflfile%write()
          ! Create conservation monitor
          consfile=monitor(amRoot=amr%amRoot,name='conservation')
@@ -745,29 +753,53 @@ contains
          ! Remember old state
          call fs%store_old()
          
-         ! ===== RK2 Stage 1: dQdt = f(t, Q) =====
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,dt=0.5_WP*time%dt,time=time%t)
-         
-         ! ===== RK2 Stage 2: Q* = Qold + dt/2*dQdt, dQdt* = f(t+dt/2, Q*) =====
-         call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=0.5_WP*time%dt,src=dQdt)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t+0.5_WP*time%dt)
-         call check_Q('RK1   ')
-         call fs%apply_relax(time=time%t+0.5_WP*time%dt)
-         call check_Q('RELAX1')
-         call fs%get_dQdt(Q=fs%Q,dQdt=dQdt,dt=time%dt,time=time%t+0.5_WP*time%dt)
-
-         ! ===== RK2 Final: Q = Qold + dt*dQdt* =====
-         call fs%Q%copy(src=fs%Qold); call fs%Q%saxpy(a=time%dt,src=dQdt)
-         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
-         call check_Q('RK2   ')
-         call fs%apply_relax(time=time%t)
-         call check_Q('RELAX2')
-
+         ! ======================= RK2 Stage 1: Q*=Q[n]+dt/2*dQdt(t,Q[n]) =======================
+         ! Increment Q without pressure gradient
+         call fs%get_dQdt(dQdt=dQdt,dt=0.5_WP*time%dt,time=time%tmid)
+         call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=0.5_WP*time%dt,src2=dQdt)
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          ! Rebuild PLIC
-         call fs%build_plic(time%t)
-
-         ! Recompute primitive variables
-         call fs%get_primitive(fs%Q)
+         call fs%build_plic(time=time%t)
+         ! Get most up-to-date pressure
+         call fs%apply_relax(time=time%tmid)
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
+         call fs%build_subVF()
+         ! Compute face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=0.5_WP*time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
+         ! Get primitive variables
+         call fs%get_primitive(Q=fs%Q)
+         ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
+         ! Increment Q without pressure gradient
+         call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
+         call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         ! Rebuild PLIC
+         call fs%build_plic(time=time%t)
+         ! Get most up-to-date pressure
+         call fs%apply_relax(time=time%t)
+         call fs%get_primitive(Q=fs%Q)
+         ! Rebuild sub-cell VF
+         call fs%build_subVF()
+         ! Compute face velocities
+         call fs%get_face_velocity()
+         ! Add pressure term
+         call fs%add_phasic_pressure(scale=time%dt)
+         ! Add surface tension term
+         call fs%add_surface_tension(scale=time%dt)
+         ! Average down and fill ghosts
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
+         ! Get primitive variables
+         call fs%get_primitive(Q=fs%Q)
+         ! ======================================================================================
 
          ! Regrid if event triggers
          if (regrid_evt%occurs()) then
@@ -783,11 +815,11 @@ contains
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
-         call Umag%get_magnitude(fs%U,fs%V,fs%W)
+         call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
 
          ! Visualization output
-         if (viz_evt%occurs()) call viz%write(time%t)
+         if (viz_evt%occurs()) call viz%write(time=time%t)
 
          ! Checkpoint save
          if (save_evt%occurs()) then
@@ -834,167 +866,5 @@ contains
       call gridfile%finalize()
       call tfile%finalize()
    end subroutine simulation_final
-   
-   !> Diagnostic: scan Q/primitives for extreme values
-   subroutine check_Q(label)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
-      use amrmpcomp_class,  only: VFlo,VFhi
-      use ieee_arithmetic,  only: ieee_is_nan
-      use mpi_f08,          only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM,MPI_MAX,MPI_MIN,MPI_INTEGER
-      use parallel,         only: MPI_REAL_WP
-      implicit none
-      character(len=*), intent(in) :: label
-      integer :: lvl,i,j,k,nbad,nnan,nnan_print,nbad_print,ierr,flvl
-      integer :: nbadF,nnanF
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF
-      real(WP) :: IL,IG,PG,PL
-      real(WP) :: Q1min,Q2min,Q3min,Q4min,VFmin,VFmax,dPmax,PGmax,PLmin
-      real(WP) :: Q1minF,Q2minF,Q3minF,Q4minF,VFminF,VFmaxF,dPmaxF,PGmaxF,PLminF
-      logical  :: is_bad,has_nan,is_finest
-      integer, parameter :: max_nan_print=10,max_bad_print=5
-      flvl=fs%amr%clvl()
-      ! Initialize coarse-level counters
-      nbad=0; nnan=0; nnan_print=0; nbad_print=0
-      Q1min=huge(1.0_WP); Q2min=huge(1.0_WP); Q3min=huge(1.0_WP); Q4min=huge(1.0_WP)
-      VFmin=huge(1.0_WP); VFmax=-huge(1.0_WP)
-      dPmax=0.0_WP; PGmax=-huge(1.0_WP); PLmin=huge(1.0_WP)
-      ! Initialize finest-level counters
-      nbadF=0; nnanF=0
-      Q1minF=huge(1.0_WP); Q2minF=huge(1.0_WP); Q3minF=huge(1.0_WP); Q4minF=huge(1.0_WP)
-      VFminF=huge(1.0_WP); VFmaxF=-huge(1.0_WP)
-      dPmaxF=0.0_WP; PGmaxF=-huge(1.0_WP); PLminF=huge(1.0_WP)
-      ! Loop over ALL levels
-      do lvl=0,flvl
-         is_finest=(lvl.eq.flvl)
-         call fs%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            pQ =>fs%Q%mf(lvl)%dataptr(mfi)
-            pVF=>fs%VF%mf(lvl)%dataptr(mfi)
-            bx=mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               ! NaN check
-               has_nan=ieee_is_nan(pQ(i,j,k,1)).or.ieee_is_nan(pQ(i,j,k,2)).or. &
-               &       ieee_is_nan(pQ(i,j,k,3)).or.ieee_is_nan(pQ(i,j,k,4)).or. &
-               &       ieee_is_nan(pQ(i,j,k,5)).or.ieee_is_nan(pQ(i,j,k,6)).or. &
-               &       ieee_is_nan(pQ(i,j,k,7)).or.ieee_is_nan(pVF(i,j,k,1))
-               if (has_nan) then
-                  if (is_finest) then; nnanF=nnanF+1; else; nnan=nnan+1; end if
-                  if (nnan_print.lt.max_nan_print) then
-                     nnan_print=nnan_print+1
-                     print '(A,A,A,I6,A,I2,A,3I5)', '  [',label,'] NaN n=',time%n,' l=',lvl,' ijk=',i,j,k
-                     print '(4(A,ES20.13))', '    Q1=',pQ(i,j,k,1),' Q2=',pQ(i,j,k,2),' Q3=',pQ(i,j,k,3),' Q4=',pQ(i,j,k,4)
-                     print '(4(A,ES20.13))', '    Q5=',pQ(i,j,k,5),' Q6=',pQ(i,j,k,6),' Q7=',pQ(i,j,k,7),' VF=',pVF(i,j,k,1)
-                  end if
-                  cycle
-               end if
-               ! Track Q1/Q3 min (liquid present)
-               if (pVF(i,j,k,1).ge.VFlo) then
-                  if (is_finest) then
-                     if (pQ(i,j,k,1).lt.Q1minF) Q1minF=pQ(i,j,k,1)
-                     if (pQ(i,j,k,3).lt.Q3minF) Q3minF=pQ(i,j,k,3)
-                  else
-                     if (pQ(i,j,k,1).lt.Q1min) Q1min=pQ(i,j,k,1)
-                     if (pQ(i,j,k,3).lt.Q3min) Q3min=pQ(i,j,k,3)
-                  end if
-               end if
-               ! Track Q2/Q4 min (gas present)
-               if (pVF(i,j,k,1).le.VFhi) then
-                  if (is_finest) then
-                     if (pQ(i,j,k,2).lt.Q2minF) Q2minF=pQ(i,j,k,2)
-                     if (pQ(i,j,k,4).lt.Q4minF) Q4minF=pQ(i,j,k,4)
-                  else
-                     if (pQ(i,j,k,2).lt.Q2min) Q2min=pQ(i,j,k,2)
-                     if (pQ(i,j,k,4).lt.Q4min) Q4min=pQ(i,j,k,4)
-                  end if
-               end if
-               ! Track VF extrema
-               if (is_finest) then
-                  if (pVF(i,j,k,1).lt.VFminF) VFminF=pVF(i,j,k,1)
-                  if (pVF(i,j,k,1).gt.VFmaxF) VFmaxF=pVF(i,j,k,1)
-               else
-                  if (pVF(i,j,k,1).lt.VFmin) VFmin=pVF(i,j,k,1)
-                  if (pVF(i,j,k,1).gt.VFmax) VFmax=pVF(i,j,k,1)
-               end if
-               ! Compute phasic pressures
-               PG=0.0_WP; PL=0.0_WP
-               if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP) then
-                  IG=pQ(i,j,k,4)/pQ(i,j,k,2)
-                  PG=(GammaG-1.0_WP)*pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))*IG-GammaG*PinfG
-               end if
-               if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP) then
-                  IL=pQ(i,j,k,3)/pQ(i,j,k,1)
-                  PL=(GammaL-1.0_WP)*pQ(i,j,k,1)/pVF(i,j,k,1)*IL-GammaL*PinfL
-               end if
-               if (is_finest) then
-                  if (PG.gt.PGmaxF) PGmaxF=PG
-                  if (PL.lt.PLminF.and.pVF(i,j,k,1).ge.VFlo) PLminF=PL
-                  if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
-                     if (abs(PL-PG).gt.dPmaxF) dPmaxF=abs(PL-PG)
-                  end if
-               else
-                  if (PG.gt.PGmax) PGmax=PG
-                  if (PL.lt.PLmin.and.pVF(i,j,k,1).ge.VFlo) PLmin=PL
-                  if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
-                     if (abs(PL-PG).gt.dPmax) dPmax=abs(PL-PG)
-                  end if
-               end if
-               ! Bad cell check
-               is_bad=pQ(i,j,k,1).lt.-1.0e-10_WP.or.pQ(i,j,k,2).lt.-1.0e-10_WP.or. &
-               &      pQ(i,j,k,3).lt.-1.0e-10_WP.or.pQ(i,j,k,4).lt.-1.0e-10_WP
-               if (is_bad) then
-                  if (is_finest) then; nbadF=nbadF+1; else; nbad=nbad+1; end if
-                  if (nbad_print.lt.max_bad_print) then
-                     nbad_print=nbad_print+1
-                     print '(A,A,A,I6,A,I2,A,3I5)', '  [',label,'] BAD n=',time%n,' l=',lvl,' ijk=',i,j,k
-                     print '(4(A,ES20.13))', '    Q1=',pQ(i,j,k,1),' Q2=',pQ(i,j,k,2),' Q3=',pQ(i,j,k,3),' Q4=',pQ(i,j,k,4)
-                     print '(4(A,ES20.13))', '    Q5=',pQ(i,j,k,5),' Q6=',pQ(i,j,k,6),' Q7=',pQ(i,j,k,7),' VF=',pVF(i,j,k,1)
-                  end if
-               end if
-            end do; end do; end do
-         end do
-         call fs%amr%mfiter_destroy(mfi)
-      end do
-      ! Reductions for coarse levels
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q1min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q2min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q3min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q4min ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmin ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PLmin ,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PGmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dPmax ,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nbad  ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nnan  ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      ! Reductions for finest level
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q1minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q2minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q3minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,Q4minF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFminF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,VFmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PLminF,1,MPI_REAL_WP,MPI_MIN,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,PGmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,dPmaxF,1,MPI_REAL_WP,MPI_MAX,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nbadF ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,nnanF ,1,MPI_INTEGER,MPI_SUM,fs%amr%comm,ierr)
-      ! Summary (rank 0 only): F=finest, C=coarse
-      if (fs%amr%amRoot) then
-         print '(A,A,A,I6,A,4(A,ES12.5),2(A,ES20.13),3(A,ES12.5),A,I6,A,I6)', &
-            '[',label,'] n=',time%n,' F', &
-            ' Q1m=',Q1minF,' Q2m=',Q2minF,' Q3m=',Q3minF,' Q4m=',Q4minF, &
-            ' VFm=',VFminF,' VFM=',VFmaxF, &
-            ' PLm=',PLminF,' PGM=',PGmaxF,' dPM=',dPmaxF, &
-            ' bad:',nbadF,' nan:',nnanF
-         print '(A,A,A,I6,A,4(A,ES12.5),2(A,ES20.13),3(A,ES12.5),A,I6,A,I6)', &
-            '[',label,'] n=',time%n,' C', &
-            ' Q1m=',Q1min,' Q2m=',Q2min,' Q3m=',Q3min,' Q4m=',Q4min, &
-            ' VFm=',VFmin,' VFM=',VFmax, &
-            ' PLm=',PLmin,' PGM=',PGmax,' dPM=',dPmax, &
-            ' bad:',nbad,' nan:',nnan
-      end if
-   end subroutine check_Q
 
 end module simulation

@@ -1,0 +1,27 @@
+# Mesh parameters
+Base nx:   16
+Base ny:   16
+Base nz:   16
+Max level: 6
+
+# Regridding parameters
+Regrid nsteps:    10
+Tagging Reynolds: 20
+
+# Flow parameters
+Density ratio:   800
+Mom flux ratio:  50
+Weber number:    100
+Reynolds number: 4e4
+Viscosity ratio: 50
+Froude number:   15
+
+# Time integration
+Max time: 100
+Max dt:   2.5e-3
+Max CFL:  0.7
+
+# Output
+Output period:     0.5
+Checkpoint period: 5.0
+Restart from:      !restart/jet_3.00024E+01

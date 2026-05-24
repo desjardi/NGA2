@@ -1,5 +1,5 @@
 f90EXE_sources += amrex_interface.f90 amrgrid_class.f90 amrdata_class.f90 amrflux_class.f90 amrviz_class.f90 amrio_class.f90
-f90EXE_sources += amrsolver_class.f90 amrmg_class.f90
+f90EXE_sources += amrsolver_class.f90 amrmg_class.f90 amrsgs.f90
 CEXE_sources   += amrex_wrapper.cpp
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/amrbase

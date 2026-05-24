@@ -1,5 +1,5 @@
 # AMR multiphase solvers
-f90EXE_sources += amrvof_class.f90 amrvof_geometry.f90 amrmpcomp_class.f90 amrmpinc_class.f90
+f90EXE_sources += amrvof_class.f90 amrvof_geometry.f90 amrmpflow_class.f90 amrmpcomp_class.f90 amrmpinc_class.f90
 
 # PLICnet for interface normal reconstruction (from two_phase)
 f90EXE_sources += plicnet.f90

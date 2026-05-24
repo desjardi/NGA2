@@ -579,7 +579,7 @@ contains
 
    !> Initialize amrlpt solver
    subroutine initialize(this,amr,name)
-      use amrdata_class, only: amrex_bc_foextrap
+      use amrex_amr_module, only: amrex_bc_foextrap
       implicit none
       class(amrlpt), intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr

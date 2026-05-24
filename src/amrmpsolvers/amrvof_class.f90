@@ -104,6 +104,7 @@ module amrvof_class
       ! Utilities
       procedure :: store_old              !< Copy current state to old state
       procedure :: fill                   !< Fill VF/CL/CG/PLIC ghosts+BCs
+      procedure :: apply_vofbc            !< VOF BC hook
       ! VOF-PLIC methods
       procedure :: build_plic             !< Reconstruct PLIC from VF and barycenters
       procedure :: build_plicnet          !< PLICnet reconstruction
@@ -155,7 +156,7 @@ module amrvof_class
          real(WP), intent(in) :: time
          integer, intent(in) :: face                 !< 1=xlo,2=xhi,3=ylo,4=yhi,5=zlo,6=zhi
          type(amrex_box), intent(in) :: bx           !< Ghost region to fill
-         real(WP), dimension(:,:,:,:), contiguous, pointer, intent(inout) :: pVF,pCL,pCG,pPLIC
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
       end subroutine vof_bc_iface
    end interface
 
@@ -257,7 +258,7 @@ contains
 
    !> Initialize the VOF solver
    subroutine initialize(this,amr,name)
-      use amrdata_class, only: amrex_interp_pc
+      use amrdata_class, only: interp_const
       implicit none
       class(amrvof), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
@@ -271,8 +272,8 @@ contains
       ! Store amrgrid pointer
       this%amr=>amr
       ! Initialize VF/VFold as amrdata (all levels, used for tagging + average-down)
-      call this%VF%initialize   (amr,name='VF'   ,ncomp=1,ng=this%nover,interp=amrex_interp_pc); this%VF%parent   =>this
-      call this%VFold%initialize(amr,name='VFold',ncomp=1,ng=this%nover,interp=amrex_interp_pc); this%VFold%parent=>this
+      call this%VF%initialize   (amr,name='VF'   ,ncomp=1,ng=this%nover,interp=interp_const); this%VF%parent   =>this
+      call this%VFold%initialize(amr,name='VFold',ncomp=1,ng=this%nover,interp=interp_const); this%VFold%parent=>this
       ! Initialize surface mesh for visualization
       if (this%calculate_curv) then
          this%smesh=surfmesh(nvar=1,name=trim(this%name)//'_plic')
@@ -348,6 +349,10 @@ contains
          call mfab_rebuild(this%CLold  ,ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%CGold  ,ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
+         if (this%calculate_curv) then
+            call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
+            call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
+         end if
       end if
    end subroutine on_init
 
@@ -372,6 +377,10 @@ contains
          call mfab_rebuild(this%CLold,  ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%CGold,  ba,dm,nc=3,ng=this%nover)
          call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
+         if (this%calculate_curv) then
+            call mfab_rebuild(this%curv,ba,dm,nc=1,ng=this%nover)
+            call mfab_rebuild(this%SD  ,ba,dm,nc=1,ng=this%nover)
+         end if
          ! Set to trivial values
          trivialize: block
             use amrex_amr_module, only: amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
@@ -418,7 +427,7 @@ contains
          remake_finest: block
             use amrex_amr_module, only: amrex_multifab_build,amrex_multifab_destroy, &
             &                           amrex_mfiter,amrex_mfiter_build,amrex_mfiter_destroy
-            type(amrex_multifab) :: CL_new,CG_new,PLIC_new
+            type(amrex_multifab) :: CL_new,CG_new,PLIC_new,curv_new,SD_new
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
@@ -451,10 +460,19 @@ contains
             call CG_new%parallel_copy(this%CG,this%amr%geom(lvl))
             call PLIC_new%parallel_copy(this%PLIC,this%amr%geom(lvl))
             ! Destroy old, assign new
-            call amrex_multifab_destroy(this%CL  ); call this%CL%move(CL_new)
-            call amrex_multifab_destroy(this%CG  ); call this%CG%move(CG_new)
-            call amrex_multifab_destroy(this%PLIC); call this%PLIC%move(PLIC_new)
-            ! Rebuild old multifabs
+            call this%CL%move(CL_new)
+            call this%CG%move(CG_new)
+            call this%PLIC%move(PLIC_new)
+            ! Rebuild curv/SD with parallel_copy of surviving data
+            if (this%calculate_curv) then
+               call amrex_multifab_build(curv_new,ba,dm,nc=1,ng=this%nover); call curv_new%setval(0.0_WP)
+               call amrex_multifab_build(SD_new  ,ba,dm,nc=1,ng=this%nover); call SD_new  %setval(0.0_WP)
+               call curv_new%parallel_copy(this%curv,this%amr%geom(lvl))
+               call SD_new  %parallel_copy(this%SD  ,this%amr%geom(lvl))
+               call this%curv%move(curv_new)
+               call this%SD  %move(SD_new)
+            end if
+            ! Rebuild empty old multifabs
             call mfab_rebuild(this%CLold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild(this%CGold,  ba,dm,nc=3,ng=this%nover)
             call mfab_rebuild(this%PLICold,ba,dm,nc=4,ng=this%nover)
@@ -477,6 +495,10 @@ contains
          call amrex_multifab_destroy(this%CLold)
          call amrex_multifab_destroy(this%CGold)
          call amrex_multifab_destroy(this%PLICold)
+         if (this%calculate_curv) then
+            call amrex_multifab_destroy(this%curv)
+            call amrex_multifab_destroy(this%SD)
+         end if
       end if
    end subroutine on_clear
 
@@ -768,11 +790,9 @@ contains
                      end if
                   end do; end do; end do
                 case(BC_USER)
-                  if (associated(this%user_vof_bc)) then
-                     bc_bx=amrex_box([i1,j1,k1],[i2,j2,k2])
-                     face=2*dir-1+(1+side)/2
-                     call this%user_vof_bc(lvl=lvl,time=time,face=face,bx=bc_bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
-                  end if
+                  bc_bx=amrex_box([i1,j1,k1],[i2,j2,k2])
+                  face=2*dir-1+(1+side)/2
+                  call this%apply_vofbc(lvl=lvl,time=time,face=face,bx=bc_bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
                end select
             end do; end do
             ! Trivialize pure-cell ghosts at finest
@@ -792,6 +812,19 @@ contains
          call amrex_mfiter_destroy(mfi)
       end subroutine fill_lvl
    end subroutine fill
+
+   !> Default VOF BC hook: forwards to user_vof_bc pointer if set
+   !> Children can override to use their own typed callback instead
+   subroutine apply_vofbc(this,lvl,time,face,bx,pVF,pCL,pCG,pPLIC)
+      implicit none
+      class(amrvof), intent(inout) :: this
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      integer, intent(in) :: face
+      type(amrex_box), intent(in) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
+      if (associated(this%user_vof_bc)) call this%user_vof_bc(lvl=lvl,time=time,face=face,bx=bx,pVF=pVF,pCL=pCL,pCG=pCG,pPLIC=pPLIC)
+   end subroutine apply_vofbc
 
    ! ============================================================================
    ! VOF-PLIC METHODS
@@ -993,8 +1026,6 @@ contains
       t0=MPI_Wtime()
       ! Reset polygon and curvature storage
       call this%smesh%reset()
-      call amrex_multifab_destroy(this%curv)
-      call amrex_multifab_destroy(this%SD)
       ! Return if clvl<maxlvl
       if (this%amr%clvl().lt.this%amr%maxlvl) return
       ! Get level and cell size
@@ -1003,8 +1034,8 @@ contains
       maxcurv=1.0_WP/this%amr%min_meshsize(lvl)
       ! Create new curv and SD mfabs
       if (this%calculate_curv) then
-         call mfab_rebuild(this%curv,this%amr%get_boxarray(lvl),this%amr%get_distromap(lvl),nc=1,ng=this%nover)
-         call mfab_rebuild(this%SD  ,this%amr%get_boxarray(lvl),this%amr%get_distromap(lvl),nc=1,ng=this%nover)
+         call this%curv%setval(0.0_WP)
+         call this%SD  %setval(0.0_WP)
       end if
       ! Compute new polygons
       call this%amr%mfiter_build(lvl,mfi,tiling=.false.)

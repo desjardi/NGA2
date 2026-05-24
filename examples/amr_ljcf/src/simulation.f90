@@ -1,4 +1,4 @@
-!> AMR Drop - Incompressible flow over a drop
+!> AMR LJCF - Incompressible cross-flow over a round liquid jet
 !> Inflow/outflow in X, periodic in Y/Z
 module simulation
    use precision,         only: WP
@@ -46,7 +46,9 @@ module simulation
    real(WP) :: restart_time
 
    ! Physical parameters
+   real(WP) :: Ujet
    real(WP) :: viscL_mol,viscG_mol
+   real(WP), dimension(3) :: gravity
 
 contains
 
@@ -58,6 +60,15 @@ contains
       G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)
       if (amr%nz.eq.1) G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2) ! Enable 2D case
    end function sphere_levelset
+
+   !> Levelset function for cylinder
+   function cylinder_levelset(xyz,t) result(G)
+      real(WP), dimension(3), intent(in) :: xyz
+      real(WP), intent(in) :: t
+      real(WP) :: G
+      G=0.5_WP-sqrt(xyz(2)**2+xyz(3)**2)
+      if (amr%nz.eq.1) G=0.5_WP-abs(xyz(2)) ! Enable 2D case
+   end function cylinder_levelset
 
    !> Compute viscosity
    subroutine get_viscosity()
@@ -103,6 +114,7 @@ contains
       real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
       real(WP) :: lapU,lapV,lapW,u_sgs,Re
       integer :: i,j,k
+      logical :: near_wall
       tags=tags_ptr
       ! Get mesh spacing
       dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
@@ -115,6 +127,9 @@ contains
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            ! Prevent maximum Re-driven refinement near wall
+            near_wall=(solver%amr%xlo+(real(i,WP)+0.5_WP)*dx.lt.solver%amr%xlo+2.0_WP*dx)
+            if (near_wall.and.lvl.ge.solver%amr%maxlvl-1) cycle
             ! Laplacian of velocity Q=UVW
             lapU=(pQ(i+1,j,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i-1,j,k,1))*dxi2+(pQ(i,j+1,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j-1,k,1))*dyi2+(pQ(i,j,k+1,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j,k-1,1))*dzi2
             lapV=(pQ(i+1,j,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i-1,j,k,2))*dxi2+(pQ(i,j+1,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j-1,k,2))*dyi2+(pQ(i,j,k+1,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j,k-1,2))*dzi2
@@ -128,9 +143,10 @@ contains
       call solver%amr%mfiter_destroy(mfi)
    end subroutine my_tagger
 
-   !> Dirichlet BC: uniform inflow at 1 at xlo/xhi for U, 0 for V/W
+   !> Dirichlet BC: velocity inflow at xlo for U and ylo for V
    subroutine dirichlet_velocity(solver,lvl,time,face,bx,comp,p)
       use amrex_amr_module, only: amrex_box
+      use mathtools, only: twoPi
       class(amrmpinc), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -139,29 +155,106 @@ contains
       character(len=1), intent(in) :: comp
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
+      real(WP) :: rad
       select case (face)
        case (1)  ! Inflow in X-
          select case (comp)
-          case ('U')  ! Staggered U = 1
+          case ('U')  ! Staggered U=Ujet
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               p(i,j,k,1)=1.0_WP
+               rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
+               if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
+               if (rad.lt.0.5_WP) then
+                  p(i,j,k,1)=Ujet
+               else
+                  p(i,j,k,1)=0.0_WP
+               end if
             end do; end do; end do
           case ('V','W')  ! Staggered V,W = 0
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,1)=0.0_WP
             end do; end do; end do
-          case ('Q')  ! Cell-centered: U=1, V=0, W=0
+          case ('Q')  ! Cell-centered: U=Ujet, V=0, W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
+               if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
+               if (rad.lt.0.5_WP) then
+                  p(i,j,k,1)=Ujet
+               else
+                  p(i,j,k,1)=0.0_WP
+               end if
+               p(i,j,k,2)=0.0_WP
+               p(i,j,k,3)=0.0_WP
+            end do; end do; end do
+         end select
+       case (3)  ! Inflow in Y-
+         select case (comp)
+          case ('V')  ! Staggered V=1
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,1)=1.0_WP
-               p(i,j,k,2)=0.0_WP
+            end do; end do; end do
+          case ('U','W')  ! Staggered U,W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+            end do; end do; end do
+          case ('Q')  ! Cell-centered: U=0, V=1, W=0
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               p(i,j,k,1)=0.0_WP
+               p(i,j,k,2)=1.0_WP
                p(i,j,k,3)=0.0_WP
             end do; end do; end do
          end select
       end select
    end subroutine dirichlet_velocity
 
-   !> User-provided initialization for drop
-   subroutine drop_init(solver,lvl,time,ba,dm)
+   !> User-defined VF BC - sets inlet ghost cells based on cylinder
+   subroutine dirichlet_VF(solver,lvl,time,face,bx,pVF,pCL,pCG,pPLIC)
+      use amrex_amr_module, only: amrex_box
+      use mms_geom, only: initialize_volume_moments
+      use amrmpinc_class,   only: VFlo,VFhi
+      use amrvof_geometry,  only: get_plane_dist
+      use mathtools,        only: normalize
+      implicit none
+      class(amrmpinc),  intent(inout) :: solver
+      integer,          intent(in) :: lvl
+      real(WP),         intent(in) :: time
+      integer,          intent(in) :: face
+      type(amrex_box),  intent(in) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
+      real(WP), dimension(3) :: BL,BG,lo,hi,nrm
+      real(WP) :: dx,dy,dz,VF
+      integer :: i,j,k
+      integer, parameter :: nref=3
+      ! Only handle the xlo inflow
+      if (face.ne.1) return
+      ! Get mesh size
+      dx=solver%amr%dx(lvl); dy=solver%amr%dy(lvl); dz=solver%amr%dz(lvl)
+      ! Loop over provided ghost box
+      do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+         ! Cell bounds
+         lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz]
+         hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz]
+         ! Compute VF and barycenters from the jet column levelset
+         call initialize_volume_moments(lo=lo,hi=hi,levelset=cylinder_levelset,time=time,level=nref,VFlo=VFlo,VF=VF,BL=BL,BG=BG)
+         ! Store volume fraction at all levels
+         pVF(i,j,k,1)=VF
+         ! Store barycenters and PLIC at finest level only
+         if (associated(pCL)) pCL(i,j,k,:)=BL
+         if (associated(pCG)) pCG(i,j,k,:)=BG
+         if (associated(pPLIC)) then
+            if (VF.lt.VFlo.or.VF.gt.VFhi) then
+               ! Pure cell: trivial plane
+               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,sign(1.0e10_WP,VF-0.5_WP)]
+            else
+               ! Mixed cell: normal points liquid->gas, distance from S&Z
+               nrm=normalize(BG-BL)
+               pPLIC(i,j,k,:)=[nrm(1),nrm(2),nrm(3),get_plane_dist(nrm,lo,hi,VF)]
+            end if
+         end if
+      end do; end do; end do
+   end subroutine dirichlet_VF
+
+   !> User-provided initialization for jet
+   subroutine jet_init(solver,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
       use mms_geom, only: initialize_volume_moments
       use amrmpinc_class, only: VFlo
@@ -172,7 +265,7 @@ contains
       type(amrex_distromap), intent(in) :: dm
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pU,pQ
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pV,pQ
       real(WP), dimension(3) :: BL,BG  ! Dummy barycenters
       real(WP) :: dx,dy,dz,VF
       integer :: i,j,k
@@ -185,7 +278,7 @@ contains
          ! Get pointers to data
          pVF=>solver%VF%mf(lvl)%dataptr(mfi)
          pQ=>solver%Q%mf(lvl)%dataptr(mfi)
-         pU=>solver%U%mf(lvl)%dataptr(mfi)
+         pV=>solver%V%mf(lvl)%dataptr(mfi)
          if (lvl.eq.solver%amr%maxlvl) then
             pCL=>solver%CL%dataptr(mfi)
             pCG=>solver%CG%dataptr(mfi)
@@ -193,37 +286,53 @@ contains
          ! Loop over grown tilebox
          bx=mfi%growntilebox(solver%nover)
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Compute VF and barycenters from levelset
-            call initialize_volume_moments(lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz], &
-            &                              hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=sphere_levelset,time=time,level=nref,VFlo=VFlo,VF=VF,BL=BL,BG=BG)
-            ! Store volume fraction
-            pVF(i,j,k,1)=VF
-            ! Store barycenters
-            if (lvl.eq.solver%amr%maxlvl) then
-               pCL(i,j,k,:)=BL
-               pCG(i,j,k,:)=BG
+            ! Set initial crossflow
+            pV(i,j,k,1)=1.0_WP
+            pQ(i,j,k,2)=1.0_WP
+            if (i.lt.solver%amr%geom(lvl)%domain%lo(1)) then
+               pV(i,j,k,1)=0.0_WP
+               pQ(i,j,k,2)=0.0_WP
+            end if
+            ! Set interface
+            if (i.lt.solver%amr%geom(lvl)%domain%lo(1)) then
+               ! Compute VF and barycenters from levelset
+               call initialize_volume_moments(lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz], &
+               &                              hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz], &
+               &                              levelset=cylinder_levelset,time=time,level=nref,VFlo=VFlo,VF=VF,BL=BL,BG=BG)
+               ! Store volume fraction
+               pVF(i,j,k,1)=VF
+               ! Store barycenters
+               if (lvl.eq.solver%amr%maxlvl) then
+                  pCL(i,j,k,:)=BL
+                  pCG(i,j,k,:)=BG
+               end if
+            else
+               pVF(i,j,k,1)=0.0_WP
+               if (lvl.eq.solver%amr%maxlvl) then
+                  pCL(i,j,k,:)=[solver%amr%xlo+(real(i,WP)+0.5_WP)*dx,solver%amr%ylo+(real(j,WP)+0.5_WP)*dy,solver%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,:)=[solver%amr%xlo+(real(i,WP)+0.5_WP)*dx,solver%amr%ylo+(real(j,WP)+0.5_WP)*dy,solver%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+               end if
             end if
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
-   end subroutine drop_init
+   end subroutine jet_init
 
    !> Initialization hook
    subroutine simulation_init()
       use param, only: param_read
       implicit none
-      
+
       ! Create amrgrid
       create_amrgrid: block
-         amr%name='amrsphere'
+         amr%name='LJCF'
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
-         amr%xlo=-05.0_WP; amr%xhi=+15.0_WP
-         amr%ylo=-10.0_WP; amr%yhi=+10.0_WP
+         amr%xlo= 00.0_WP; amr%xhi=+20.0_WP
+         amr%ylo=-05.0_WP; amr%yhi=+15.0_WP
          amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
-         amr%xper=.false.; amr%yper=.true.; amr%zper=.true.
+         amr%xper=.false.; amr%yper=.false.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
          ! Handle 2D case
          if (amr%nz.eq.1) then
@@ -259,36 +368,47 @@ contains
             time%t=restart_time
          end if
       end block initialize_time
-      
+
       ! Create flow solver
       create_flow_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrdata_class,    only: interp_face_lin
-         use amrmpinc_class,   only: BC_GAS
+         use amrmpinc_class,   only: BC_GAS,BC_USER
          use amrmg_class,      only: amrmg_outer_pcg_mlmg
          ! Create flow solver
-         call fs%initialize(amr,name='drop')
+         call fs%initialize(amr,name='jet')
          ! Set initial conditions
-         fs%user_init=>drop_init
+         fs%user_init=>jet_init
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set densities
          fs%rhoG=1.0_WP; call param_read('Density ratio',fs%rhoL)
+         ! Read in momentum flux ratio and set liquid velocity
+         call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
          ! Set surface tension coefficient
          call param_read('Weber number',fs%sigma); fs%sigma=1.0_WP/fs%sigma
          ! Set molecular viscosities
          call param_read('Reynolds number',viscG_mol); viscG_mol=1.0_WP/viscG_mol
          call param_read('Viscosity ratio',viscL_mol); viscL_mol=viscG_mol*viscL_mol
+         ! Set gravity
+         gravity=0.0_WP; call param_read('Froude number',gravity(1),default=1.0e30_WP); gravity(1)=1.0_WP/gravity(1)**2
          ! Set pressure convergence
          fs%psolver%outer_solver=amrmg_outer_pcg_mlmg
          fs%psolver%tol_rel=1.0e-5_WP
-         ! Set boundary conditions
-         fs%lo_bc(1)=BC_GAS
-         fs%Q%lo_bc(1,:)=amrex_bc_ext_dir; fs%Q%hi_bc(1,:)=amrex_bc_foextrap
-         fs%U%lo_bc(1,1)=amrex_bc_ext_dir; fs%U%hi_bc(1,1)=amrex_bc_foextrap
-         fs%V%lo_bc(1,1)=amrex_bc_ext_dir; fs%V%hi_bc(1,1)=amrex_bc_foextrap
-         fs%W%lo_bc(1,1)=amrex_bc_ext_dir; fs%W%hi_bc(1,1)=amrex_bc_foextrap
+         ! Dirichlet conditions for VOF at x- inlet and pure gas at y- inlet
+         fs%lo_bc(1:2)=[BC_USER,BC_GAS]
+         fs%user_vofbc=>dirichlet_VF
+         ! Dirichlet conditions for velocities at x-/y- inlet
+         fs%Q%lo_bc(1:2,:)=amrex_bc_ext_dir
+         fs%U%lo_bc(1:2,1)=amrex_bc_ext_dir
+         fs%V%lo_bc(1:2,1)=amrex_bc_ext_dir
+         fs%W%lo_bc(1:2,1)=amrex_bc_ext_dir
          fs%user_bc=>dirichlet_velocity
+         ! Neumann conditions for velocities at x+/y+ outlets
+         fs%Q%hi_bc(1:2,:)=amrex_bc_foextrap
+         fs%U%hi_bc(1:2,1)=amrex_bc_foextrap
+         fs%V%hi_bc(1:2,1)=amrex_bc_foextrap
+         fs%W%hi_bc(1:2,1)=amrex_bc_foextrap
       end block create_flow_solver
 
       ! Create workspace array
@@ -343,7 +463,7 @@ contains
       ! Initialize visualization
       create_visualization: block
          ! Create visualization object
-         call viz%initialize(amr,'amrdrop',use_hdf5=.false.)
+         call viz%initialize(amr,'jet',use_hdf5=.false.)
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(fs%Q,1,'U')
          call viz%add_scalar(fs%Q,2,'V')
@@ -447,7 +567,7 @@ contains
             call fs%get_face_velocity()
 
             ! Increment both velocities with current pressure term
-            call fs%add_pressure(scale=time%dt,phi=fs%P)
+            call fs%add_pressure(scale=time%dt,phi=fs%P,gravity=gravity)
 
             ! Add surface tension to both velocities
             call fs%add_surface_tension(scale=time%dt)
@@ -504,7 +624,7 @@ contains
          if (save_evt%occurs()) then
             save_checkpoint: block
                use string, only: rtoa
-               call io%write(dirname='restart/drop_'//trim(adjustl(rtoa(time%t))),time=time%t,step=time%n)
+               call io%write(dirname='restart/jet_'//trim(adjustl(rtoa(time%t))),time=time%t,step=time%n)
             end block save_checkpoint
          end if
          

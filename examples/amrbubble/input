@@ -29,4 +29,4 @@ Max CFL:  0.9
 # Output
 Output period:     1e-1
 Checkpoint period: 1.0
-Restart from:      restart/bubble_1.20000E+01
+Restart from:      !restart/bubble_1.20000E+01

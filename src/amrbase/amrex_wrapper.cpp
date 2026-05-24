@@ -344,7 +344,8 @@ void amrmfab_fillpatch_single(void *mf_ptr, double time_old, void *mf_old_ptr,
                               double time_new, void *mf_new_ptr, void *geom_ptr,
                               void *solver_ctx,
                               nga2::FillPatchBCDispatcher bc_dispatch,
-                              double time, int scomp, int dcomp, int ncomp) {
+                              double time, int scomp, int dcomp, int ncomp,
+                              int nghost) {
   auto *mf = static_cast<amrex::MultiFab *>(mf_ptr);
   auto *mf_old = static_cast<amrex::MultiFab *>(mf_old_ptr);
   auto *mf_new = static_cast<amrex::MultiFab *>(mf_new_ptr);
@@ -356,7 +357,9 @@ void amrmfab_fillpatch_single(void *mf_ptr, double time_old, void *mf_old_ptr,
   nga2::NGA2BCFunctor bc_functor(solver_ctx, bc_dispatch, geom);
 
   // Convert from 1-indexed (Fortran) to 0-indexed (C++)
-  amrex::FillPatchSingleLevel(*mf, time, smf, stime, scomp - 1, dcomp - 1,
+  // Use explicit nghost if non-negative, otherwise use mf.nGrowVect()
+  amrex::IntVect ng = (nghost >= 0) ? amrex::IntVect(nghost) : mf->nGrowVect();
+  amrex::FillPatchSingleLevel(*mf, ng, time, smf, stime, scomp - 1, dcomp - 1,
                               ncomp, *geom, bc_functor, 0);
 }
 //-----------------------------------------------------------------------------
@@ -372,7 +375,8 @@ void amrmfab_fillpatch_two(void *mf_ptr, double time_old_c, void *mf_old_c_ptr,
                            void *solver_ctx,
                            nga2::FillPatchBCDispatcher bc_dispatch, double time,
                            int scomp, int dcomp, int ncomp, int *ref_ratio,
-                           int interp_type, int *lo_bc, int *hi_bc, int nbc) {
+                           int interp_type, int *lo_bc, int *hi_bc, int nbc,
+                           int nghost) {
   auto *mf = static_cast<amrex::MultiFab *>(mf_ptr);
   auto *mf_old_c = static_cast<amrex::MultiFab *>(mf_old_c_ptr);
   auto *mf_new_c = static_cast<amrex::MultiFab *>(mf_new_c_ptr);
@@ -446,7 +450,9 @@ void amrmfab_fillpatch_two(void *mf_ptr, double time_old_c, void *mf_old_c_ptr,
   amrex::IntVect ratio(AMREX_D_DECL(ref_ratio[0], ref_ratio[1], ref_ratio[2]));
 
   // Convert from 1-indexed (Fortran) to 0-indexed (C++)
-  amrex::FillPatchTwoLevels(*mf, time, cmf, ctime, fmf, ftime, scomp - 1,
+  // Use explicit nghost if non-negative, otherwise use mf.nGrowVect()
+  amrex::IntVect ng = (nghost >= 0) ? amrex::IntVect(nghost) : mf->nGrowVect();
+  amrex::FillPatchTwoLevels(*mf, ng, time, cmf, ctime, fmf, ftime, scomp - 1,
                             dcomp - 1, ncomp, *geom_c, *geom_f, bc_functor_c, 0,
                             bc_functor_f, 0, ratio, interp, bcs, 0);
 }
@@ -928,8 +934,10 @@ void amrmfab_average_down_face(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 
@@ -953,8 +961,10 @@ void amrmfab_average_down_edge(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 
@@ -978,8 +988,10 @@ void amrmfab_average_down_node(void *fine_mf, void *crse_mf, void *crse_geom,
     auto *cg = static_cast<amrex::Geometry *>(crse_geom);
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse, cg->periodicity());
     cmf->FillBoundary(cg->periodicity());
+    cmf->OverrideSync(cg->periodicity());
   } else {
     cmf->ParallelCopy(ctmp, 0, 0, ncomp, ngcrse, ngcrse);
+    cmf->OverrideSync();
   }
 }
 
@@ -1063,6 +1075,10 @@ void amrmfab_fillcoarsepatch_faces(
     amrex::InterpFromCoarseLevel(mf_arr, time, cmf_arr, scomp - 1, dcomp - 1,
                                  ncomp, *geom_c, *geom_f, cbc, 0, fbc, 0, ratio,
                                  &amrex::face_linear_interp, bcs, 0);
+  } else if (interp_type == 10) {
+    amrex::InterpFromCoarseLevel(mf_arr, time, cmf_arr, scomp - 1, dcomp - 1,
+                                 ncomp, *geom_c, *geom_f, cbc, 0, fbc, 0, ratio,
+                                 &amrex::face_cons_linear_interp, bcs, 0);
   } else {
     amrex::Abort("amrmfab_fillcoarsepatch_faces: unsupported interp_type");
   }
@@ -1085,7 +1101,7 @@ void amrmfab_fillpatch_two_faces(
     void *ctx_u, void *ctx_v, void *ctx_w, nga2::FillPatchBCDispatcher bc_u,
     nga2::FillPatchBCDispatcher bc_v, nga2::FillPatchBCDispatcher bc_w,
     int scomp, int dcomp, int ncomp, int *ref_ratio, int interp_type, int *lo_bc,
-    int *hi_bc) {
+    int *hi_bc, int nghost) {
   auto *u = static_cast<amrex::MultiFab *>(mf_u);
   auto *v = static_cast<amrex::MultiFab *>(mf_v);
   auto *w = static_cast<amrex::MultiFab *>(mf_w);
@@ -1140,16 +1156,26 @@ void amrmfab_fillpatch_two_faces(
 
   amrex::IntVect ratio(AMREX_D_DECL(ref_ratio[0], ref_ratio[1], ref_ratio[2]));
 
+  // Use explicit nghost if non-negative, otherwise use mf[0]->nGrowVect()
+  amrex::IntVect ng = (nghost >= 0) ? amrex::IntVect(nghost) : u->nGrowVect();
+
   // Call with appropriate interpolator based on type
   // Convert from 1-indexed (Fortran) to 0-indexed (C++)
   if (interp_type == 8) {
-    amrex::FillPatchTwoLevels(mf_arr, time, cmf, ctime, fmf, ftime, scomp - 1,
-                              dcomp - 1, ncomp, *geom_c, *geom_f, cbc, 0, fbc,
-                              0, ratio, &amrex::face_divfree_interp, bcs, 0);
+    amrex::FillPatchTwoLevels(mf_arr, ng, time, cmf, ctime, fmf, ftime,
+                              scomp - 1, dcomp - 1, ncomp, *geom_c, *geom_f,
+                              cbc, 0, fbc, 0, ratio,
+                              &amrex::face_divfree_interp, bcs, 0);
   } else if (interp_type == 9) {
-    amrex::FillPatchTwoLevels(mf_arr, time, cmf, ctime, fmf, ftime, scomp - 1,
-                              dcomp - 1, ncomp, *geom_c, *geom_f, cbc, 0, fbc,
-                              0, ratio, &amrex::face_linear_interp, bcs, 0);
+    amrex::FillPatchTwoLevels(mf_arr, ng, time, cmf, ctime, fmf, ftime,
+                              scomp - 1, dcomp - 1, ncomp, *geom_c, *geom_f,
+                              cbc, 0, fbc, 0, ratio,
+                              &amrex::face_linear_interp, bcs, 0);
+  } else if (interp_type == 10) {
+    amrex::FillPatchTwoLevels(mf_arr, ng, time, cmf, ctime, fmf, ftime,
+                              scomp - 1, dcomp - 1, ncomp, *geom_c, *geom_f,
+                              cbc, 0, fbc, 0, ratio,
+                              &amrex::face_cons_linear_interp, bcs, 0);
   } else {
     amrex::Abort("amrmfab_fillpatch_two_faces: unsupported interp_type");
   }

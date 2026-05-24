@@ -4,20 +4,32 @@ module amrdata_class
    use precision,        only: WP
    use string,           only: str_medium
    use amrgrid_class,    only: amrgrid
-   use amrex_amr_module, only: amrex_multifab,amrex_boxarray,amrex_distromap,&
-   &                           amrex_geometry,amrex_interp_pc,amrex_bc_foextrap,&
-   &                           amrex_interp_cell_cons,amrex_interp_face_linear,amrex_interp_node_bilinear
+   use amrex_amr_module, only: amrex_multifab,amrex_boxarray,amrex_distromap,amrex_geometry
+   use amrex_amr_module, only: amrex_interp_pc,amrex_interp_node_bilinear,amrex_interp_cell_bilinear,amrex_interp_quadratic, &
+   &                           amrex_interp_lincc,amrex_interp_cell_cons,amrex_interp_protected,amrex_interp_quartic,        &
+   &                           amrex_interp_face_divfree,amrex_interp_face_linear
    implicit none
    private
 
-   public :: amrdata
-   public :: amrdata_on_init,amrdata_on_coarse,amrdata_on_remake,amrdata_on_clear,amrdata_fillbc
-   public :: amrex_interp_pc,amrex_bc_foextrap,amrex_interp_cell_cons,amrex_interp_face_linear,amrex_interp_node_bilinear
-   public :: default_fillbc
+   public :: amrdata,amrdata_fillbc,default_fillbc
 
-   ! Special interpolation modes for amrdata
-   integer, parameter, public :: amrex_interp_none   = -1  !< Workspace: allocate but don't fill
-   integer, parameter, public :: amrex_interp_reinit = -2  !< Reinit: always call user_init on regrid
+   ! Generic interpolation modes
+   integer, parameter, public :: interp_none      =-1                         !< Workspace: allocate but don't fill
+   integer, parameter, public :: interp_reinit    =-2                         !< Reinit: always call user_init on regrid
+   ! Cell-centered interpolation modes
+   integer, parameter, public :: interp_const     =amrex_interp_pc            !< Piecewise constant (amrex_interp_pc) - conservative and bounded
+   integer, parameter, public :: interp_bilin     =amrex_interp_cell_bilinear !< Bilinear (amrex_interp_cell_bilinear) - non-conservative and unbounded
+   integer, parameter, public :: interp_quad      =amrex_interp_quadratic     !< Quadratic (amrex_interp_quadratic) - non-conservative and unbounded
+   integer, parameter, public :: interp_blin      =amrex_interp_lincc         !< Linear limited (amrex_interp_lincc) - conservative and bounded
+   integer, parameter, public :: interp_ublin     =amrex_interp_cell_cons     !< Linear unlimited (amrex_interp_cell_cons) - conservative and unbounded
+   integer, parameter, public :: interp_pplin     =amrex_interp_protected     !< Non-negative linear limited (amrex_interp_protected) - conservative and bounded and non-negative
+   integer, parameter, public :: interp_quart     =amrex_interp_quartic       !< Quartic (amrex_interp_quartic) - conservative and unbounded
+   ! Face-centered interpolation modes
+   integer, parameter, public :: interp_face_div  =amrex_interp_face_divfree  !< Divergence-preserving - conservative but couples all components
+   integer, parameter, public :: interp_face_lin  =amrex_interp_face_linear   !< Piecewise constant tangent, linear normal - conservative
+   integer, parameter, public :: interp_face_bilin=10                         !< Linear tangent, linear normal - conservative
+   ! Node/edge-centered interpolation mode
+   integer, parameter, public :: interp_node_bilin=amrex_interp_node_bilinear !< Bilinear (amrex_interp_node_bilinear)
 
    ! Forward declaration for interfaces
    type :: amrdata
@@ -32,7 +44,7 @@ module amrdata_class
       integer :: ncomp=1                                   !< Number of components (default=1)
       integer :: ng=0                                      !< Number of ghost cells (default=0)
       logical :: nodal(3) = [.false., .false., .false.]    !< false=cell, true=vertex in that direction
-      integer :: interp=amrex_interp_cell_cons             !< Interpolation method
+      integer :: interp=interp_ublin                       !< Interpolation method
       integer, dimension(:,:), allocatable :: lo_bc,hi_bc  !< Boundary conditions: lo_bc(3,ncomp), hi_bc(3,ncomp)
       ! Cache level index for fillbc callback
       integer :: fill_lvl_cache=-1
@@ -51,6 +63,7 @@ module amrdata_class
       procedure :: register         !< Register regrid callbacks with amrgrid
       ! Level management
       procedure :: reset_level      !< Regenerates mfab at level
+      procedure :: reset            !< Regenerates mfabs on all levels
       procedure :: clear_level      !< Clears mfab at level
       ! Fill operations
       procedure :: fill_from_coarse !< Interpolate from coarse level only (single level)
@@ -157,7 +170,6 @@ contains
    !> This sets the amr pointer, allocates mf array, and configures BCs
    subroutine initialize(this, amr, name, ncomp, ng, nodal, interp)
       use amrex_amr_module, only: amrex_bc_int_dir
-      use amrex_amr_module, only: amrex_interp_face_linear,amrex_interp_node_bilinear
       implicit none
       class(amrdata), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
@@ -179,9 +191,9 @@ contains
          this%interp = interp
       else if (any(this%nodal)) then
          if (all(this%nodal)) then
-            this%interp = amrex_interp_node_bilinear  ! Node-centered
+            this%interp = interp_node_bilin  ! Node-centered
          else
-            this%interp = amrex_interp_face_linear    ! Face-centered
+            this%interp = interp_face_lin    ! Face-centered
          end if
       end if
       ! Allocate mf array
@@ -228,7 +240,7 @@ contains
       this%ncomp = 1
       this%ng = 0
       this%nodal = [.false., .false., .false.]
-      this%interp = amrex_interp_cell_cons
+      this%interp = interp_ublin
    end subroutine finalize
 
    !> Register regrid callbacks with amrgrid
@@ -256,6 +268,17 @@ contains
       call amrex_multifab_destroy(this%mf(lvl))
       call amrex_multifab_build(this%mf(lvl),ba,dm,this%ncomp,this%ng,this%nodal)
    end subroutine reset_level
+
+   !> Build multifabs on all current levels using the grid's existing layout
+   !> Useful for creating temporary scratch amrdata without registering lifecycle callbacks
+   subroutine reset(this)
+      implicit none
+      class(amrdata), intent(inout) :: this
+      integer :: lvl
+      do lvl=0,this%amr%clvl()
+         call this%reset_level(lvl,this%amr%ba(lvl),this%amr%dm(lvl))
+      end do
+   end subroutine reset
 
    !> Destroy mfab on a level
    subroutine clear_level(this,lvl)
@@ -316,7 +339,7 @@ contains
       call this%reset_level(lvl, ba, dm)
       ! Handle different modes
       select case (this%interp)
-       case (amrex_interp_none)
+       case (interp_none)
          ! Workspace mode: just allocate, don't fill
        case default
          ! Standard or reinit mode: zero out, then call user_init
@@ -337,9 +360,9 @@ contains
       call this%reset_level(lvl, ba, dm)
       ! Handle different modes
       select case (this%interp)
-       case (amrex_interp_none)
+       case (interp_none)
          ! Workspace mode: just allocate, don't fill
-       case (amrex_interp_reinit)
+       case (interp_reinit)
          ! Reinit mode: call user_init instead of interpolating
          if (associated(this%user_init)) call this%user_init(lvl, time, ba, dm)
        case default
@@ -359,24 +382,21 @@ contains
       type(amrex_multifab) :: mf_tmp
       ! Handle different modes
       select case (this%interp)
-       case (amrex_interp_none)
+       case (interp_none)
          ! Workspace mode: just reallocate
          call this%reset_level(lvl, ba, dm)
-       case (amrex_interp_reinit)
+       case (interp_reinit)
          ! Reinit mode: reallocate and call user_init
          call this%reset_level(lvl, ba, dm)
          if (associated(this%user_init)) call this%user_init(lvl, time, ba, dm)
        case default
          ! Standard interpolation: FillPatch old data into new layout
-         ! Build temp MultiFab with new layout (0 ghost cells for FillPatch)
-         call amrex_multifab_build(mf_tmp, ba, dm, this%ncomp, 0, this%nodal)
-         ! Fill temp from old data via FillPatch
-         call this%fill_mfab(mf_tmp, lvl, time)
-         ! Reset level and copy from temp
-         call this%reset_level(lvl, ba, dm)
-         call this%mf(lvl)%copy(mf_tmp, 1, 1, this%ncomp, 0)
-         ! Destroy temp
-         call amrex_multifab_destroy(mf_tmp)
+         ! Build temp MultiFab with new layout
+         call amrex_multifab_build(mf_tmp, ba, dm, this%ncomp, this%ng, this%nodal)
+         ! Fill temp from old data via FillPatch (valid cells only)
+         call this%fill_mfab(mf_tmp, lvl, time, ng=0)
+         ! Transfer ownership via pointer swap
+         call this%mf(lvl)%move(mf_tmp)
       end select
    end subroutine default_on_remake
 
@@ -533,7 +553,11 @@ contains
    end subroutine fill
 
    !> Fill into a target MultiFab from this amrdata (for regrid callbacks)
-   subroutine fill_mfab(this,dest,lvl,time)
+   !> Optional ng controls how many ghost cells FillPatch fills:
+   !>   - omitted or ng<0: fills all ghosts (dest.nGrowVect()) + BCs
+   !>   - ng=0: fills only valid cells, no ghost fill, no BC callbacks
+   !>   - ng>0: fills exactly ng ghost cells
+   subroutine fill_mfab(this,dest,lvl,time,ng)
       use iso_c_binding, only: c_loc, c_funloc, c_funptr, c_ptr
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface, only: amrmfab_fillpatch_single, amrmfab_fillpatch_two
@@ -542,6 +566,7 @@ contains
       type(amrex_multifab), intent(inout) :: dest
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
+      integer, intent(in), optional :: ng
       real(WP) :: t_old, t_new
       type(c_ptr) :: data_ctx
       type(c_funptr) :: bc_dispatch_ptr
@@ -558,13 +583,13 @@ contains
       if (lvl .eq. 0) then
          call amrmfab_fillpatch_single(dest, t_old, this%mf(0), &
          &   t_new, this%mf(0), this%amr%geom(0), data_ctx, bc_dispatch_ptr, &
-         &   time, 1, 1, this%ncomp)
+         &   time, 1, 1, this%ncomp, nghost=ng)
       else
          call amrmfab_fillpatch_two(dest, t_old, this%mf(lvl-1), &
          &   t_new, this%mf(lvl-1), this%amr%geom(lvl-1), &
          &   t_old, this%mf(lvl), t_new, this%mf(lvl), this%amr%geom(lvl), &
          &   data_ctx, bc_dispatch_ptr, time, 1, 1, this%ncomp, &
-         &   [this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)], this%interp, this%lo_bc, this%hi_bc, this%ncomp)
+         &   [this%amr%rrefx(lvl-1),this%amr%rrefy(lvl-1),this%amr%rrefz(lvl-1)], this%interp, this%lo_bc, this%hi_bc, this%ncomp, nghost=ng)
       end if
       ! For nodal/face data: reconcile shared valid faces
       if (any(this%nodal)) call dest%override_sync(this%amr%geom(lvl))

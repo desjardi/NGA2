@@ -74,8 +74,8 @@ def main():
     exp_input = input("  Sutherland exponent (default=1.5): ").strip()
     Suth_n = float(exp_input) if exp_input else 1.5
 
-    temp_input = input("  Sutherland temperature (default=0.4042): ").strip()
-    Suth_T = float(temp_input) if temp_input else 0.4042
+    temp_input = input("  Sutherland temperature (default=0.07286): ").strip()
+    Suth_T = float(temp_input) if temp_input else 0.07286
 
     # --- Replicate Rankine-Hugoniot from simulation.f90 ---
     rhoG2 = 1.0
