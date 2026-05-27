@@ -1,13 +1,13 @@
 # Mesh parameters
-Base nx:   32
+Base nx:   16
 Base ny:   16
-Base nz:   8
-Max level: 4
+Base nz:    8
+Max level:  3
 
 # Domain
 Lx: 16 ! Jet injection direction
-Ly:  8 ! Crossflow
-Lz:  4 ! Spanwise
+Ly: 16 ! Crossflow
+Lz:  8 ! Spanwise
 Ly offset: 2 ! Distance from edge of domain to jet
 
 # Regridding parameters
@@ -30,4 +30,4 @@ Max CFL:  0.5
 # Output
 Output period:     0.5
 Checkpoint period: 5.0
-Restart from:      !restart/jet_3.00024E+01
+Restart from:      !restart/jet_4.50006E+01
