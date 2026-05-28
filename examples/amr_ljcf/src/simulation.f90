@@ -50,6 +50,10 @@ module simulation
    real(WP) :: viscL_mol,viscG_mol
    real(WP), dimension(3) :: gravity
 
+   ! Sponge layer parameters for outflow damping
+   real(WP) :: y_spg_start
+   real(WP) :: L_spg
+   real(WP) :: max_cfl_spg
 contains
 
    !> Levelset function for sphere
@@ -78,6 +82,10 @@ contains
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pVisc
       real(WP), parameter :: myeps=1.0e-15_WP
+      real(WP) :: blend,mu_spg,y_loc,nu_spg
+      ! Compute maximum allowable kinematic viscosity in the sponge at finest level
+      ! This ensures viscous terms satisfy CFL: dt <= CFL*dx^2/(4*nu) => nu <= CFL*dx^2/(4*dt)
+      nu_spg=max_cfl_spg*amr%min_meshsize(amr%clvl())**2/(4.0_WP*time%dt)
       ! Loop over levels
       do lvl=0,amr%clvl()
          ! Loop over domain
@@ -91,11 +99,51 @@ contains
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Use harmonic averaging
                pVisc(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(viscL_mol,myeps)+(1.0_WP-pVF(i,j,k,1))/max(viscG_mol,myeps))
+               ! Apply sponge layer viscosity damping in outflow region (y+ boundary)
+               y_loc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+               if (y_loc.gt.y_spg_start) then
+                  ! Smooth quadratic blend: 0 at y_spg_start, 1 at y_spg_start+L_spg
+                  blend=min((y_loc-y_spg_start)/L_spg,1.0_WP)**2
+                  ! Compute sponge viscosity (convert kinematic to dynamic)
+                  mu_spg=nu_spg/(pVF(i,j,k,1)/max(1.0_WP,myeps)+(1.0_WP-pVF(i,j,k,1))/max(1.0_WP,myeps))
+                  ! Only increase viscosity if beneficial
+                  pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_spg)
+               end if
             end do; end do; end do
          end do
          call amr%mfiter_destroy(mfi)
       end do
    end subroutine get_viscosity
+
+   !> Clip VOF near outflow to prevent unphysical values and instabilities
+   subroutine clip_vof_outflow()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      integer :: lvl,i,j,k
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      real(WP) :: dy_loc
+      ! Loop over levels
+      do lvl=0,amr%clvl()
+         ! Loop over domain
+         call amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data
+            pVF=>fs%VF%mf(lvl)%dataptr(mfi)
+            ! Get tilebox (grow for safety, clip only at boundaries)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               ! Check if in sponge layer outflow region (y+ boundary)
+               dy_loc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+               ! Remove liquid in sponge region to prevent outflow instabilities
+               if (dy_loc.gt.y_spg_start) then
+                  pVF(i,j,k,1)=0.0_WP
+               end if
+            end do; end do; end do
+         end do
+         call amr%mfiter_destroy(mfi)
+      end do
+   end subroutine clip_vof_outflow
 
    !> Tagger for this case based on velocity gradient magnitude
    subroutine my_tagger(solver,lvl,time,tags_ptr)
@@ -130,6 +178,8 @@ contains
             ! Prevent maximum Re-driven refinement near wall
             near_wall=(solver%amr%xlo+(real(i,WP)+0.5_WP)*dx.lt.solver%amr%xlo+2.0_WP*dx)
             if (near_wall.and.lvl.ge.solver%amr%maxlvl-1) cycle
+            ! Prevent refinement in outflow sponge region
+            if (solver%amr%ylo+(real(j,WP)+0.5_WP)*dy.gt.y_spg_start) cycle
             ! Laplacian of velocity Q=UVW
             lapU=(pQ(i+1,j,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i-1,j,k,1))*dxi2+(pQ(i,j+1,k,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j-1,k,1))*dyi2+(pQ(i,j,k+1,1)-2.0_WP*pQ(i,j,k,1)+pQ(i,j,k-1,1))*dzi2
             lapV=(pQ(i+1,j,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i-1,j,k,2))*dxi2+(pQ(i,j+1,k,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j-1,k,2))*dyi2+(pQ(i,j,k+1,2)-2.0_WP*pQ(i,j,k,2)+pQ(i,j,k-1,2))*dzi2
@@ -160,6 +210,7 @@ contains
        case (1)  ! Inflow in X-
          select case (comp)
           case ('U')  ! Staggered U=Ujet
+            Ujet = gravity(1)*time
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) rad=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2)
@@ -325,13 +376,18 @@ contains
 
       ! Create amrgrid
       create_amrgrid: block
+         real(WP) :: Lx,Ly,Lz,Ly_offset
          amr%name='LJCF'
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
-         amr%xlo= 00.0_WP; amr%xhi=+20.0_WP
-         amr%ylo=-05.0_WP; amr%yhi=+15.0_WP
-         amr%zlo=-10.0_WP; amr%zhi=+10.0_WP
+         call param_read("Lx",Lx)
+         call param_read("Ly",Ly)
+         call param_read("Lz",Lz)
+         call param_read("Ly offset",Ly_offset)
+         amr%xlo= 00.0_WP; amr%xhi=+Lx
+         amr%ylo=-Ly_offset; amr%yhi=Ly-Ly_offset
+         amr%zlo=-Lz/2.0_WP; amr%zhi=+Lz/2.0_WP
          amr%xper=.false.; amr%yper=.false.; amr%zper=.true.
          call param_read('Max level',amr%maxlvl)
          ! Handle 2D case
@@ -384,7 +440,7 @@ contains
          ! Set densities
          fs%rhoG=1.0_WP; call param_read('Density ratio',fs%rhoL)
          ! Read in momentum flux ratio and set liquid velocity
-         call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
+         ! call param_read('Mom flux ratio',Ujet); Ujet=sqrt(Ujet/fs%rhoL)
          ! Set surface tension coefficient
          call param_read('Weber number',fs%sigma); fs%sigma=1.0_WP/fs%sigma
          ! Set molecular viscosities
@@ -392,6 +448,10 @@ contains
          call param_read('Viscosity ratio',viscL_mol); viscL_mol=viscG_mol*viscL_mol
          ! Set gravity
          gravity=0.0_WP; call param_read('Froude number',gravity(1),default=1.0e30_WP); gravity(1)=1.0_WP/gravity(1)**2
+         ! Set sponge layer parameters (optional for outflow damping at y+ boundary)
+         call param_read('Sponge y-start',y_spg_start,default=12.0_WP)
+         call param_read('Sponge thickness',L_spg,default=4.0_WP)
+         call param_read('Sponge max CFL',max_cfl_spg,default=0.5_WP)
          ! Set pressure convergence
          fs%psolver%outer_solver=amrmg_outer_pcg_mlmg
          fs%psolver%tol_rel=1.0e-5_WP
@@ -562,6 +622,9 @@ contains
             ! Rebuild PLIC and sub-cell VF
             call fs%build_plic(time%t)
             call fs%build_subVF()
+
+            ! Clip VOF in outflow region to prevent instabilities
+            ! call clip_vof_outflow()
 
             ! Interpolate velocity to the faces
             call fs%get_face_velocity()
