@@ -1,26 +1,26 @@
 # Parallelization
-Partition : 1 1 8
+Partition : 8 1 1
 
 # Mesh definition
 nx : 64
 ny : 64
-nz : 64
+nz : 1
 
 # Fluid definition
-GammaL :    1.4
-PinfL :     100
-RHOL :      1000
-GammaG :    1.4
-PinfG :     0
-RHOG :      1
+GammaL : 1.4
+PinfL :  0
+RHOL :   1
+GammaG : 1.4
+PinfG :  0
+RHOG :   1
 
 # Flow definition
-Mach :     0.2
+Mach :   0.8
 
 # Time integration
-Max timestep size : 0.02
+Max timestep size : 0.005
 Max cfl number :    10.0
 Max time :          1000
 
 # Ensight output
-Ensight output period : 1e-1
+Ensight output period : 0.1

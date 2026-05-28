@@ -19,6 +19,7 @@ module event_class
       real(WP) :: tper                                      !< Period in elapsed time
    contains
       procedure :: occurs                                   !< Check if event is occuring
+      procedure :: finalize                                 !< Finalize an event object
    end type event
    
    
@@ -61,6 +62,17 @@ contains
          if (mod(this%time%t+dtsafe*this%time%dt,this%tper).lt.this%time%dt*(1.0_WP-dtsafe)) occurs=.true.
       end if
    end function occurs
+   
+   
+   !> Finalize event
+   subroutine finalize(this)
+      implicit none
+      class(event), intent(inout) :: this
+      nullify(this%time)
+      this%name='UNNAMED_EVENT'
+      this%nper=0
+      this%tper=0.0_WP
+   end subroutine finalize
    
    
 end module event_class

@@ -1,0 +1,33 @@
+# AMR grid (1D: 400 cells in x, 1 cell in y and z)
+Base nx:   400   # 400
+Base ny:   1
+Base nz:   1
+Max level: 0
+
+# Gammas and EOS
+GammaG: 1.4
+GammaL: 6.12
+PinfL:  3.43e8
+
+# Specific heats [J/(kg·K)]
+CvG: 718.0
+CvL: 4184.0
+
+# Gas state (right side, x >= 0.8)
+Gas density:   20.0
+Gas pressure:  1.0e5
+
+# Liquid state (left side, x < 0.8)
+Liquid density:  1000.0
+Liquid pressure: 1.0e9
+
+# Interface location
+Interface location: 0.8
+
+# Time integration
+Max dt:   1.25e-6
+Max CFL:  0.8
+Max time: 3e-4
+
+# Output
+Output period: 1.0e-5

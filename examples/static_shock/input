@@ -7,23 +7,12 @@ nx : 1000
 
 # Flow parameters
 Gamma : 1.4
-Mach :  10
-Prandtl : 1e8!0.7
-Bulk to shear ratio : 0!0.6
-
-# Do we use SGS modeling
-Use SGS model : .false.
+Mach :  5
 
 # Time integration
-Max timestep size : 2.5e-1
+Max timestep size : 1e-1
 Max cfl number :    0.9
-Max time :          200
-Subiterations :     50
-Relaxation coeff:   0.6
-
-# Pressure solver
-Pressure tolerance : 1e-6
-Pressure iteration : 100
+Max time :          80
 
 # Ensight output
 Ensight output period : 1

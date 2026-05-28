@@ -105,11 +105,13 @@ contains
       this%wcpl=coupler(src_grp=this%pg%group,dst_grp=iogrp,name='write')
       call this%wcpl%set_src(this%pg); if (this%ingrp_io) call this%wcpl%set_dst(this%pg_io)
       call this%wcpl%initialize()
+      this%wcpl%reuse_buffers=.false.
       
       ! Prepare coupler for reading
       this%rcpl=coupler(src_grp=iogrp,dst_grp=this%pg%group,name='read')
       if (this%ingrp_io) call this%rcpl%set_src(this%pg_io); call this%rcpl%set_dst(this%pg)
       call this%rcpl%initialize()
+      this%rcpl%reuse_buffers=.false.
       
    end subroutine prep_iomap
    
@@ -199,10 +201,10 @@ contains
          if (this%ingrp_io) then
             temp(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_)=this%df%var(:,:,:,n)
             call this%df%pg%sync(temp)
-            call this%rcpl%push(temp)
+            call this%rcpl%push(temp,loc='c')
          end if
          call this%rcpl%transfer()
-         call this%rcpl%pull(this%var(:,:,:,n))
+         call this%rcpl%pull(this%var(:,:,:,n),loc='c')
          call MPI_BARRIER(this%pg%comm,ierr)
       end do
       
@@ -233,10 +235,10 @@ contains
       
       ! Transfer parallel data using the wcpl
       do n=1,this%nvar
-         call this%wcpl%push(this%var(:,:,:,n))
+         call this%wcpl%push(this%var(:,:,:,n),loc='c')
          call this%wcpl%transfer()
          if (this%ingrp_io) then
-            call this%wcpl%pull(temp)
+            call this%wcpl%pull(temp,loc='c')
             this%df%var(:,:,:,n)=temp(this%df%pg%imin_:this%df%pg%imax_,this%df%pg%jmin_:this%df%pg%jmax_,this%df%pg%kmin_:this%df%pg%kmax_)
          end if
          call MPI_BARRIER(this%pg%comm,ierr)

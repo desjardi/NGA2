@@ -1,0 +1,35 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.3072
+Ly :	0.0358
+Lz :	0.0768
+nx :	240
+ny :	28
+nz :	60
+
+# Fluid properties and velocity
+Dynamic viscosity :   1e-3
+Density :             1000
+Ubulk : 0.301724137931034
+Wbulk : 0
+Perturbation : 0
+Gravity : 0 -4.2326016 0
+
+# Particle parameters
+Number of particles : 5000
+Particle density :  2500
+Particle diameter : 1e-3
+Particle timestep size : 5e-5
+Collision timescale : 7.5e-4
+Coefficient of restitution : 0.3
+Friction coefficient : 0.4
+
+# Time integration
+Max timestep size : 1e-4
+Max cfl number :    0.9
+
+# Ensight output
+Ensight output period :  100e-4
+Postproc output period : 100

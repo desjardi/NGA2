@@ -1,0 +1,26 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.45
+Ly :	0.1518
+Lz :	0.2250
+nx :	128
+ny :	46
+nz :	64
+
+Hill height : 0.05
+
+# Fluid properties and velocity
+Dynamic viscosity :   8.53e-4
+Density :             996.57
+Uh : 4.79e-2
+Perturbation : 0.1
+
+# Time integration
+Max timestep size : 2e-2
+Max cfl number :    0.9
+
+# Ensight output
+Ensight output period :  200e-2
+Postproc output period : 10

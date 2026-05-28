@@ -1,0 +1,27 @@
+# Select which test to run
+Test: amrincomp
+
+# Mesh parameters
+Base nx: 64
+Base ny: 64
+Base nz: 64
+Max level: 1
+
+# Regridding parameters
+Regrid nsteps: 10
+Regrid start: 1.0
+Tagging threshold: 35.0
+
+# Flow parameters
+Density: 1.0
+Viscosity: 5e-4
+Target TKE: 0.2
+Forcing timescale: 0.1
+
+# Time integration
+Max time: 20.0
+Max dt: 5e-3
+Max CFL: 0.9
+
+# Output
+Output period: 0.1

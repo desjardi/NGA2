@@ -139,6 +139,8 @@ contains
          end do
          close(iunit)
       end if
+      ! Deallocate dvol
+      deallocate(dvol)
    end subroutine analyze_drops
    
    
@@ -472,7 +474,7 @@ contains
       
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         this%time=timetracker(amRoot=this%cfg%amRoot)
+         this%time=timetracker(amRoot=this%cfg%amRoot,name='Jet')
          call param_read('[Jet] Max timestep size',this%time%dtmax)
          call param_read('[Jet] Max cfl number',this%time%cflmax)
          call param_read('[Jet] Max time',this%time%tmax)
@@ -959,20 +961,13 @@ contains
          this%resV=-2.0_WP*this%fs%rho_V*this%fs%V+(this%fs%rho_Vold+this%fs%rho_V)*this%fs%Vold+this%time%dt*this%resV
          this%resW=-2.0_WP*this%fs%rho_W*this%fs%W+(this%fs%rho_Wold+this%fs%rho_W)*this%fs%Wold+this%time%dt*this%resW   
          
-         ! Use implicit solver or not
-         if (this%use_implicit) then
-            ! Form implicit residuals
-            call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
-            ! Apply these residuals
-            this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
-            this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
-            this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
-         else
-            ! Apply these residuals
-            this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU/this%fs%rho_U
-            this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV/this%fs%rho_V
-            this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW/this%fs%rho_W
-         end if
+         ! Form implicit residuals
+         call this%fs%solve_implicit(this%time%dt,this%resU,this%resV,this%resW)
+         
+         ! Apply these residuals
+         this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
+         this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
+         this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
          
          ! Apply other boundary conditions on the resulting fields
          call this%fs%apply_bcond(this%time%t,this%time%dt)

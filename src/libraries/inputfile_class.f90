@@ -3,34 +3,35 @@ module inputfile_class
    use string, only: str_medium,str_long
    implicit none
    private
-   
+
    !> Type for storing input file parameters
    type :: param_type
       character(str_medium) :: tag !< Tag name for field
       character(str_long)   :: val !< Associated value
    end type param_type
-   
+
    ! Expose type/constructor
    public :: inputfile
-   
+
    !> inputfile object definition
    type :: inputfile
-      
+
       !< We need to know who's the boss
       logical :: amRoot
-      
+
       !> Name of file to parse
       character(len=str_medium) :: filename
-      
+
       !> Array of parameters
       type(param_type), dimension(:), allocatable :: params
       integer :: nparams
-      
+
    contains
       procedure, private :: add_param        !< Add a parameter
       procedure, private :: param_exists     !< Check if parameter exists
       procedure, private :: param_index      !< Return index of parameter
       procedure, private :: readlogical      !< Read in a logical
+      procedure, private :: readlogicalarray !< Read in a logical array
       procedure, private :: readint          !< Read in an integer
       procedure, private :: readintarray     !< Read in an integer array
       procedure, private :: readfloat        !< Read in a float
@@ -38,21 +39,21 @@ module inputfile_class
       procedure, private :: readfloatarray2D !< Read in a float 2D array
       procedure, private :: readchar         !< Read in a string
       procedure, private :: readchararray    !< Read in a string array
-      generic :: read=>readlogical,readint,readintarray,readfloat,readfloatarray,readfloatarray2D,readchar,readchararray !< Generic routine to read a parameter
+      generic :: read=>readlogical,readlogicalarray,readint,readintarray,readfloat,readfloatarray,readfloatarray2D,readchar,readchararray !< Generic routine to read a parameter
       procedure :: print                     !< Print out all parameters
       procedure :: log=>inputlog             !< Log all parameters
    end type inputfile
-   
-   
+
+
    !> Declare inputfile constructor
    interface inputfile
       procedure constructor
    end interface inputfile
-   
+
 
 contains
-   
-   
+
+
    !> Constructor of inputfile object
    function constructor(amRoot,filename) result(this)
       use messager, only: die
@@ -66,11 +67,11 @@ contains
       character(len=str_long), dimension(:), allocatable :: file
       character(len=str_long) :: val
       character(len=str_medium) :: tag
-      
+
       ! Store the root and file name
       this%amRoot=amRoot
       this%filename=trim(adjustl(filename))
-      
+
       ! Empty object
       this%nparams=0
 
@@ -86,7 +87,7 @@ contains
          nlines=nlines+1
       end do
       rewind(iunit)
-      
+
       ! Allocate to the right size
       allocate(file(nlines+1),limit(nlines+1),line(nlines+1))
 
@@ -142,13 +143,13 @@ contains
 
       ! Deallocate
       deallocate(file,limit,line)
-      
+
       ! Log this info
       call this%log()
 
    end function constructor
-   
-   
+
+
    !> Add a new parameter:
    !>   - if param has been found already, replace it
    !>   - if param has not been found yet, add it
@@ -180,8 +181,8 @@ contains
          end do
       end if
    end subroutine add_param
-   
-   
+
+
    !> Check if a parameter already exists in params array
    function param_exists(this,tag) result(found)
       implicit none
@@ -196,8 +197,8 @@ contains
          if (this%params(i)%tag.eq.tag) found=.true.
       end do
    end function param_exists
-   
-   
+
+
    !> Return parameter index for tag
    function param_index(this,tag) result(ind)
       implicit none
@@ -211,8 +212,8 @@ contains
          if (this%params(i)%tag.eq.tag) ind=i
       end do
    end function param_index
-   
-   
+
+
    !> Get size of the parameter value for reading arrays
    function param_getsize(this,tag) result(count)
       use messager, only: die
@@ -235,8 +236,8 @@ contains
       ! Still here: we failed to find a size
       call die('[inputfile param_getsize] Did not find parameter: '//trim(tag))
    end function param_getsize
-   
-   
+
+
    !> Read integer value associated with parameter tag
    subroutine readint(this,tag,val,default)
       use messager, only: die
@@ -264,8 +265,8 @@ contains
          call die('[inputfile read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine readint
-   
-   
+
+
    !> Read logical value associated with parameter tag
    subroutine readlogical(this,tag,val,default)
       use messager, only: die
@@ -293,8 +294,32 @@ contains
          call die('[inputfile read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine readlogical
-   
-   
+
+
+   !> Read logical array value associated with parameter tag
+   subroutine readlogicalarray(this,tag,val)
+      use messager, only: die
+      implicit none
+      class(inputfile), intent(inout) :: this
+      character(len=*), intent(in)       :: tag
+      logical, dimension(:), intent(out) :: val
+      integer :: ind
+      ! Get the parameter index
+      ind=this%param_index(tag)
+      ! Read as appropriate
+      if (ind.gt.0) then
+         ! Parameter is defined
+         if (len_trim(this%params(ind)%val).gt.0) then
+            ! Value exists, so read it and return
+            read(this%params(ind)%val,*) val
+            return
+         end if
+      end if
+      ! If still here, we have not found a value to read
+      call die('[inputfile readlogicalarray] Did not find required parameter: '//trim(tag))
+   end subroutine readlogicalarray
+
+
    !> Read real value associated with parameter tag
    subroutine readfloat(this,tag,val,default)
       use messager,  only: die
@@ -323,8 +348,8 @@ contains
          call die('[inputfile read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine readfloat
-   
-   
+
+
    !> Read character value associated with parameter tag
    subroutine readchar(this,tag,val,default)
       use messager, only: die
@@ -352,8 +377,8 @@ contains
          call die('[inputfile read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine readchar
-   
-   
+
+
    !> Read integer array value associated with parameter tag
    subroutine readintarray(this,tag,val)
       use messager, only: die
@@ -372,8 +397,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[inputfile read] Did not find required parameter: '//trim(tag))
    end subroutine readintarray
-   
-   
+
+
    !> Read float array value associated with parameter tag
    subroutine readfloatarray(this,tag,val)
       use messager,  only: die
@@ -393,8 +418,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[inputfile read] Did not find required parameter: '//trim(tag))
    end subroutine readfloatarray
-   
-   
+
+
    !> Read float 2D array value associated with parameter tag
    subroutine readfloatarray2D(this,tag,val)
       use messager,  only: die
@@ -414,8 +439,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[inputfile read] Did not find required parameter: '//trim(tag))
    end subroutine readfloatarray2D
-   
-   
+
+
    !> Read character array value associated with parameter tag
    subroutine readchararray(this,tag,val)
       use messager, only: die
@@ -505,6 +530,6 @@ contains
          write(message,'("|_",a,"_|_",a,"_|")') sep,sep; call log(message)
       end if
    end subroutine inputlog
-   
-   
+
+
 end module inputfile_class

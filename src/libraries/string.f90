@@ -3,21 +3,21 @@
 module string
    implicit none
    private
-   
+
    ! Shorthand notation for useful string lengths
    integer, public, parameter :: str_short  = 8     !< This is a short string
    integer, public, parameter :: str_medium = 64    !< This is a medium string size
    integer, public, parameter :: str_long   = 8192  !< This is a long string size
-   
+
    ! Function visibility
-   public :: lowercase,uppercase,compress
-   
+   public :: lowercase,uppercase,compress,itoa,rtoa
+
    ! Upper/lower case letters
    character(len=26), private, parameter :: lower_case = 'abcdefghijklmnopqrstuvwxyz'
    character(len=26), private, parameter :: upper_case = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-   
+
 contains
-   
+
    !> This function converts a string to lower case
    function lowercase(str_in) result(str_out)
       character(len=*), intent(in) :: str_in !< Input string (any case)
@@ -29,7 +29,7 @@ contains
          if (n.ne.0) str_out(i:i)=lower_case(n:n)
       end do
    end function lowercase
-   
+
    !> This function converts a string to upper case
    function uppercase(str_in) result(str_out)
       character(len=*), intent(in) :: str_in !< Input string (any case)
@@ -41,7 +41,7 @@ contains
          if (n.ne.0) str_out(i:i)=upper_case(n:n)
       end do
    end function uppercase
-   
+
    !> This function compresses a string by removing all spaces/tabs
    function compress(str_in) result(str_out)
       ! Inputs/outputs
@@ -59,5 +59,22 @@ contains
          end if
       end do
    end function compress
-   
+
+
+   !> Convert integer to string (C-style itoa)
+   function itoa(ii) result(str)
+      integer, intent(in) :: ii
+      character(len=32) :: str
+      write(str,'(i0)') ii
+   end function itoa
+
+
+   !> Convert real to string (scientific notation)
+   function rtoa(r) result(str)
+      real(8), intent(in) :: r
+      character(len=32) :: str
+      write(str,'(es12.5)') r
+   end function rtoa
+
+
 end module string

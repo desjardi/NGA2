@@ -1,0 +1,27 @@
+# AMR grid
+Base nx:    32
+Base ny:    32
+Base nz:    32
+Max levels: 2
+
+# Regridding parameters
+Regrid nsteps:     10
+Tagging Rec:       50
+Tagging Res:       100
+
+# EoS parameters
+Gamma: 1.4
+Pinf:  0.0
+
+# Flow definition
+Mach:     1.25
+Reynolds: 1600
+Prandtl:  0.71
+
+# Time integration
+Max dt:   2.5e-2
+Max CFL:  1.5
+Max time: 20
+
+# Output
+Output period: 0.1

@@ -131,6 +131,8 @@ module bbmg_class
       
       procedure :: pmodx,pmody,pmodz                                  !< Parity calculation that accounts for periodicity
       
+      final     :: destructor                                         !< Destructor for BBMG object
+      
    end type bbmg
    
    
@@ -1722,6 +1724,49 @@ contains
       ! Deallocate
       deallocate(buf1,buf2,request)
    end subroutine msync
+   
+   
+   !> Final destructor for bbmg class
+   subroutine destructor(this)
+      implicit none
+      type(bbmg), intent(inout) :: this
+      integer :: n
+      ! Deallocate level data
+      if (allocated(this%lvl)) then
+         do n=1,size(this%lvl)
+            if (allocated(this%lvl(n)%c2f   )) deallocate(this%lvl(n)%c2f)
+            if (allocated(this%lvl(n)%f2c   )) deallocate(this%lvl(n)%f2c)
+            if (allocated(this%lvl(n)%oprc2f)) deallocate(this%lvl(n)%oprc2f)
+            if (allocated(this%lvl(n)%opr   )) deallocate(this%lvl(n)%opr)
+            if (allocated(this%lvl(n)%v     )) deallocate(this%lvl(n)%v)
+            if (allocated(this%lvl(n)%f     )) deallocate(this%lvl(n)%f)
+            if (allocated(this%lvl(n)%r     )) deallocate(this%lvl(n)%r)
+            if (allocated(this%lvl(n)%send_xm)) deallocate(this%lvl(n)%send_xm)
+            if (allocated(this%lvl(n)%send_xp)) deallocate(this%lvl(n)%send_xp)
+            if (allocated(this%lvl(n)%send_ym)) deallocate(this%lvl(n)%send_ym)
+            if (allocated(this%lvl(n)%send_yp)) deallocate(this%lvl(n)%send_yp)
+            if (allocated(this%lvl(n)%send_zm)) deallocate(this%lvl(n)%send_zm)
+            if (allocated(this%lvl(n)%send_zp)) deallocate(this%lvl(n)%send_zp)
+         end do
+         deallocate(this%lvl)
+      end if
+      ! Deallocate direct solver arrays
+      if (allocated(this%piv  )) deallocate(this%piv  )
+      if (allocated(this%myrhs)) deallocate(this%myrhs)
+      if (allocated(this%rhs  )) deallocate(this%rhs  )
+      if (allocated(this%myOP )) deallocate(this%myOP )
+      if (allocated(this%OP   )) deallocate(this%OP   )
+      ! Deallocate Krylov solver arrays
+      if (allocated(this%sol)) deallocate(this%sol)
+      if (allocated(this%res)) deallocate(this%res)
+      if (allocated(this%Ap )) deallocate(this%Ap )
+      if (allocated(this%pp )) deallocate(this%pp )
+      if (allocated(this%zz )) deallocate(this%zz )
+      ! Deallocate rank array
+      if (allocated(this%rank)) deallocate(this%rank)
+      ! Set communicator to NULL (do not free, not owned)
+      this%comm=MPI_COMM_NULL
+   end subroutine destructor
    
    
 end module bbmg_class

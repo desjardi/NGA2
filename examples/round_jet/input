@@ -54,7 +54,7 @@
 # Other options
 [Jet] Use implicit solver : .false.
 [Jet] Use SGS model :       .true.
-[Jet] Use stracker :        .true.
+[Jet] Use stracker :        .false.
 
 # Droplet diameter output
 [Jet] Drop analysis period : 1

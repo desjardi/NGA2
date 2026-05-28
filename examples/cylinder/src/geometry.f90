@@ -34,7 +34,9 @@ contains
          call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1))
          call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
          call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
-         
+         if (ny.eq.1) Ly=Lx/real(nx,WP)
+         if (nz.eq.1) Lz=Lx/real(nx,WP)
+
          ! Create simple rectilinear grid
          do i=1,nx+1
             x(i)=real(i-1,WP)/real(nx,WP)*Lx-0.25_WP*Lx
@@ -74,7 +76,10 @@ contains
          do k=cfg%kmino_,cfg%kmaxo_
             do j=cfg%jmino_,cfg%jmaxo_
                do i=cfg%imino_,cfg%imaxo_
+                  ! Cylinder
                   cfg%Gib(i,j,k)=Rcyl-sqrt(cfg%xm(i)**2+cfg%ym(j)**2)
+                  ! Sphere
+                  !cfg%Gib(i,j,k)=Rcyl-sqrt(cfg%xm(i)**2+cfg%ym(j)**2+cfg%zm(k)**2)
                end do
             end do
          end do

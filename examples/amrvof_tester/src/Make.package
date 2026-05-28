@@ -1,0 +1,3 @@
+f90EXE_sources += test_geometry.f90
+f90EXE_sources += test_amrvof.f90
+f90EXE_sources += simulation.f90

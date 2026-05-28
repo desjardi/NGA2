@@ -4,27 +4,28 @@ module param
    use string, only: str_medium,str_long
    implicit none
    private
-   
+
    public :: param_init,param_final,param_read
    public :: param_exists,param_getsize
-   
+
    !> Verbosity of this run
    integer, public, protected :: verbose
-   
+
    !> Type for storing parameters from command line and parser
    type :: param_type
       character(str_medium) :: tag !< Tag name for field
       character(str_long)   :: val !< Associated value
       character(str_medium) :: src !< Source of the parameter
    end type param_type
-   
+
    !> This array stores all user-defined parameters
    type(param_type), dimension(:), allocatable :: params
    integer :: nparams
-   
+
    !> Routine that reads a required value from the user
    interface param_read
       module procedure param_readlogical
+      module procedure param_readlogicalarray
       module procedure param_readint
       module procedure param_readintarray
       module procedure param_readfloat
@@ -33,10 +34,10 @@ module param
       module procedure param_readchar
       module procedure param_readchararray
    end interface param_read
-   
+
 contains
-   
-   
+
+
    !> Initialize the module handling user parameters
    subroutine param_init
       use messager, only: die
@@ -44,10 +45,10 @@ contains
       character(len=str_long) :: arg,val
       character(len=str_medium), dimension(:), allocatable :: files
       integer :: pos,eqpos,i
-      
+
       ! First ensure empty storage
       call param_final
-      
+
       ! Start by parsing the command line
       pos=1
       do while (pos.le.command_argument_count())
@@ -90,10 +91,10 @@ contains
          ! Increment position
          pos=pos+1
       end do
-      
+
       ! Before anything else, check if help has been invoked
       if (param_exists('help',short='h')) call param_help
-      
+
       ! Now continue with user-defined parameters coming from input files
       if (param_exists('input',short='i')) then
          ! Retrieve file name
@@ -103,14 +104,14 @@ contains
             call param_parsefile(files(i))
          end do
       end if
-      
+
       ! Check verbosity level
       call param_read('verbose',verbose,short='v',default=1)
       if (verbose.gt.0) call param_print
-      
+
    end subroutine param_init
-   
-   
+
+
    !> Read & parse parameter files
    subroutine param_parsefile(input)
       use messager, only: die
@@ -184,8 +185,8 @@ contains
       ! Deallocate
       deallocate(file,limit,line)
    end subroutine param_parsefile
-   
-   
+
+
    !> Add a new parameter in the param array:
    !>   - if param has been found already, replace it
    !>   - if param has not been found yet, add it
@@ -219,8 +220,8 @@ contains
          end do
       end if
    end subroutine param_add
-   
-   
+
+
    !> Check if a parameter already exists in params array
    function param_exists(tag,short) result(found)
       implicit none
@@ -241,8 +242,8 @@ contains
          end do
       end if
    end function param_exists
-   
-   
+
+
    !> Return parameter index for tag
    function param_index(tag) result(ind)
       implicit none
@@ -255,8 +256,8 @@ contains
          if (params(i)%tag.eq.tag) ind=i
       end do
    end function param_index
-   
-   
+
+
    !> Get size of the parameter value for reading arrays
    function param_getsize(tag,short) result(count)
       use messager, only: die
@@ -292,8 +293,8 @@ contains
       ! Still here: we failed to find a size
       call die('[param_getsize] Did not find parameter: '//trim(tag))
    end function param_getsize
-   
-   
+
+
    !> Read integer value associated with parameter tag
    subroutine param_readint(tag,val,short,default)
       use messager, only: die
@@ -335,8 +336,8 @@ contains
          call die('[param_read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine param_readint
-   
-   
+
+
    !> Read logical value associated with parameter tag
    subroutine param_readlogical(tag,val,short,default)
       use messager, only: die
@@ -378,8 +379,38 @@ contains
          call die('[param_read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine param_readlogical
-   
-   
+
+
+   !> Read logical array value associated with parameter tag
+   subroutine param_readlogicalarray(tag,val,short)
+      use messager, only: die
+      implicit none
+      character(len=*), intent(in)            :: tag
+      logical, dimension(:), intent(out)      :: val
+      character(len=*), intent(in) , optional :: short
+      integer :: ind
+      ! Get the parameter index
+      ind=param_index(tag)
+      ! Read as appropriate
+      if (ind.gt.0) then
+         read(params(ind)%val,*) val
+         return
+      end if
+      ! If short name has been provided, check that too
+      if (present(short)) then
+         ! Get the parameter index
+         ind=param_index(short)
+         ! Read as appropriate
+         if (ind.gt.0) then
+            read(params(ind)%val,*) val
+            return
+         end if
+      end if
+      ! If still here, we have not found a value to read
+      call die('[param_read] Did not find required parameter: '//trim(tag))
+   end subroutine param_readlogicalarray
+
+
    !> Read real value associated with parameter tag
    subroutine param_readfloat(tag,val,short,default)
       use messager,  only: die
@@ -422,8 +453,8 @@ contains
          call die('[param_read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine param_readfloat
-   
-   
+
+
    !> Read character value associated with parameter tag
    subroutine param_readchar(tag,val,short,default)
       use messager, only: die
@@ -465,8 +496,8 @@ contains
          call die('[param_read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine param_readchar
-   
-   
+
+
    !> Read integer array value associated with parameter tag
    subroutine param_readintarray(tag,val,short)
       use messager, only: die
@@ -495,8 +526,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[param_read] Did not find required parameter: '//trim(tag))
    end subroutine param_readintarray
-   
-   
+
+
    !> Read float array value associated with parameter tag
    subroutine param_readfloatarray(tag,val,short,default)
       use messager,  only: die
@@ -531,8 +562,8 @@ contains
          call die('[param_read] Did not find required parameter: '//trim(tag))
       end if
    end subroutine param_readfloatarray
-   
-   
+
+
    !> Read float 2D array value associated with parameter tag
    subroutine param_readfloatarray2D(tag,val,short)
       use messager,  only: die
@@ -562,8 +593,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[param_read] Did not find required parameter: '//trim(tag))
    end subroutine param_readfloatarray2D
-   
-   
+
+
    !> Read character array value associated with parameter tag
    subroutine param_readchararray(tag,val,short)
       use messager, only: die
@@ -592,8 +623,8 @@ contains
       ! If still here, we have not found a value to read
       call die('[param_read] Did not find required parameter: '//trim(tag))
    end subroutine param_readchararray
-   
-   
+
+
    !> Print out help message
    subroutine param_help
       use parallel, only: amroot,parallel_final
@@ -626,8 +657,8 @@ contains
       end if
       call parallel_final; stop
    end subroutine param_help
-   
-   
+
+
    !> Print all user-defined parameters if root
    subroutine param_print
       use messager, only: log
@@ -672,14 +703,14 @@ contains
          end if
       end if
    end subroutine param_print
-   
-   
+
+
    !> Clean up the param handling module
    subroutine param_final
       implicit none
       nparams=0
       if (allocated(params)) deallocate(params)
    end subroutine param_final
-   
-   
+
+
 end module param

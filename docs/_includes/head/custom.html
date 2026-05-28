@@ -1,0 +1,55 @@
+<style>
+  .nga2-footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 2rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .nga2-footer__col {
+    min-width: 260px;
+  }
+
+  .nga2-footer__col--right {
+    text-align: right;
+  }
+
+  .nga2-footer__title {
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 0.8em;
+    margin: 0 0 0.35rem 0;
+  }
+
+  .nga2-footer__links {
+    margin: 0 0 0.35rem 0;
+  }
+
+  .nga2-footer__links a {
+    margin-right: 1rem;
+    white-space: nowrap;
+  }
+
+  .nga2-footer__text {
+    margin: 0;
+  }
+
+  @media (max-width: 600px) {
+    .nga2-footer__col--right {
+      text-align: left;
+    }
+  }
+</style>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var githubHref = "https://github.com/desjardi/NGA2";
+    var links = document.querySelectorAll('a[href="' + githubHref + '"]');
+
+    for (var i = 0; i < links.length; i++) {
+      links[i].setAttribute("target", "_blank");
+      links[i].setAttribute("rel", "noopener noreferrer");
+    }
+  });
+</script>

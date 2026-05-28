@@ -1,0 +1,9 @@
+f90EXE_sources += simulation.f90
+f90EXE_sources += test_amrdata.f90
+f90EXE_sources += test_amrscalar.f90
+f90EXE_sources += test_amrmg.f90
+f90EXE_sources += test_project.f90
+f90EXE_sources += test_amrincomp.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/constant_density
+VPATH_LOCATIONS   += $(NGA_HOME)/src/constant_density

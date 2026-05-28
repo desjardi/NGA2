@@ -15,9 +15,15 @@ module filesys
          character(kind=c_char), intent(in) :: dirname
          integer(c_int) :: res
       end function isdir_c
+      !> Decides whether a given file name is a regular file.
+      function isfile_c(filename) bind(c, name='c_isfile') result(res)
+         import :: c_int,c_char
+         character(kind=c_char), intent(in) :: filename
+         integer(c_int) :: res
+      end function isfile_c
    end interface
    ! Routines
-   public :: makedir,isdir
+   public :: makedir,isdir,isfile
 contains
    !> Directory creation
    subroutine makedir(dirname)
@@ -36,5 +42,15 @@ contains
       cstring=trim(dirname)//c_null_char
       status=isdir_c(cstring)
       res=(status.ne.0)
-    end function isdir
+   end function isdir
+   !> Checks existence of regular file
+   function isfile(filename) result(res)
+      character(*), intent(in) :: filename
+      character(len=len_trim(filename)+1,kind=c_char) :: cstring
+      logical :: res
+      integer(c_int) :: status
+      cstring=trim(filename)//c_null_char
+      status=isfile_c(cstring)
+      res=(status.ne.0)
+   end function isfile
 end module filesys

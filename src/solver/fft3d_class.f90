@@ -35,6 +35,7 @@ module fft3d_class
       procedure :: solve=>fft3d_solve             !< Execute solver (assumes new RHS and initial guess at every call)
       procedure :: destroy=>fft3d_destroy         !< Solver destruction (every time the operator changes)
       
+      procedure :: finalize=>fft3d_finalize       !< Solver finalization
    end type fft3d
    
    
@@ -316,5 +317,25 @@ contains
      this%setup_done=.false.
    end subroutine fft3d_destroy
    
-
+   
+   !> Finalize fft3d solver
+   subroutine fft3d_finalize(this)
+      implicit none
+      class(fft3d), intent(inout) :: this
+      ! Deallocate Fourier object if allocated
+      if (allocated(this%dft)) deallocate(this%dft)
+      ! Deallocate unstrided arrays
+      if (allocated(this%transformed_opr)) deallocate(this%transformed_opr)
+      if (allocated(this%transformed_rhs)) deallocate(this%transformed_rhs)
+      ! Deallocate base solver arrays
+      if (allocated(this%stc))   deallocate(this%stc)
+      if (allocated(this%stmap)) deallocate(this%stmap)
+      if (allocated(this%opr))   deallocate(this%opr)
+      if (allocated(this%rhs))   deallocate(this%rhs)
+      if (allocated(this%sol))   deallocate(this%sol)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+   end subroutine fft3d_finalize
+   
+   
 end module fft3d_class

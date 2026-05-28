@@ -2662,21 +2662,21 @@ contains
              div2U = 2.0_WP*( &
                      this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*this%U (i+1,j,k) + this%divp_x(0,i,j,k)*this%Ui(i,j,k)) +&
                      this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Ui(i,j,k)   + this%divp_x(0,i,j,k)*this%U (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
+                     this%divp_y(1,i,j,k)*(this%divp_y(1,i,j,k)*Uf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Ui(i,j,k)) +&
                      this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Ui(i,j,k)   + this%divp_y(0,i,j,k)*Uf_y   (i,j,k)) +&
                      this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Uf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Ui(i,j,k)) +&
                      this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Ui(i,j,k)   + this%divp_z(0,i,j,k)*Uf_z   (i,j,k)) )
              div2V = 2.0_WP*( &
                      this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Vf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Vi(i,j,k)) +&
                      this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Vi(i,j,k)   + this%divp_x(0,i,j,k)*Vf_x   (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
+                     this%divp_y(1,i,j,k)*(this%divp_y(1,i,j,k)*this%V (i,j+1,k) + this%divp_y(0,i,j,k)*this%Vi(i,j,k)) +&
                      this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Vi(i,j,k)   + this%divp_y(0,i,j,k)*this%V (i,j,k)) +&
                      this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*Vf_z   (i,j,k+1) + this%divp_z(0,i,j,k)*this%Vi(i,j,k)) +&
                      this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Vi(i,j,k)   + this%divp_z(0,i,j,k)*Vf_z   (i,j,k)) )
              div2W = 2.0_WP*( &
                      this%divp_x(1,i,j,k)*(this%divp_x(1,i,j,k)*Wf_x   (i+1,j,k) + this%divp_x(0,i,j,k)*this%Wi(i,j,k)) +&
                      this%divp_x(0,i,j,k)*(this%divp_x(1,i,j,k)*this%Wi(i,j,k)   + this%divp_x(0,i,j,k)*Wf_x   (i,j,k)) +&
-                     this%divp_x(1,i,j,k)*(this%divp_y(1,i,j,k)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
+                     this%divp_y(1,i,j,k)*(this%divp_y(1,i,j,k)*Wf_y   (i,j+1,k) + this%divp_y(0,i,j,k)*this%Wi(i,j,k)) +&
                      this%divp_y(0,i,j,k)*(this%divp_y(1,i,j,k)*this%Wi(i,j,k)   + this%divp_y(0,i,j,k)*Wf_y   (i,j,k)) +&
                      this%divp_z(1,i,j,k)*(this%divp_z(1,i,j,k)*this%W (i,j,k+1) + this%divp_z(0,i,j,k)*this%Wi(i,j,k)) +&
                      this%divp_z(0,i,j,k)*(this%divp_z(1,i,j,k)*this%Wi(i,j,k)   + this%divp_z(0,i,j,k)*this%W (i,j,k)) )

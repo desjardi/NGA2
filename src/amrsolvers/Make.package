@@ -1,0 +1,5 @@
+# AMR single-phase solvers
+f90EXE_sources += amrflow_class.f90 amrscalar_class.f90 amrincomp_class.f90 amrcomp_class.f90 amrcinc_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/amrsolvers
+VPATH_LOCATIONS   += $(NGA_HOME)/src/amrsolvers

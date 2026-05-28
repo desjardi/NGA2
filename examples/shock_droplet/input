@@ -1,49 +1,41 @@
-# Parallelization
-Partition : 1 8 1
+# Adimensional flow parameters
+!---------- eos ----------
+Gas gamma :         1.3
+Liquid gamma :      6.12
+!--- fluids definition ---
+Density ratio :     815
+Sound speed ratio : 4.3
+!------- inviscid --------
+Shock Mach number : 5.12
+Shock location :   -0.6
+!------- viscous ---------
+Gas Reynolds number : 1e5
+Viscosity ratio :     58.3
 
-# Mesh definition
-Lx : 12
-Ly : 12
-Lz : 12
-nx : 256
-ny : 256
-nz : 1
-Cells per diameter :      50
-Cells per left region :   35
-Refined region left bdy:  5
-Refined region right bdy: 7
-Refined region top y bdy: 1
+# Maximum simulation time
+Max time : 30
 
-# Flow setup
-Droplet location : 6 0 0
-Shock location :   5.4
+# Postprocessing output
+Ensight output period : 0.1
+Drop analysis period :  0.1
 
-# Fluid properties
-Density ratio :           1000
-Dynamic viscosity ratio : 100
-Gas Reynolds number :     1000
-Gas Weber number :        100
-Gas Mach number :         0.577
-Liquid Mach number :      0.3
-Shock Mach number :       1.47
-Liquid gamma :            1.1
-Gas gamma :               1.4
-# Gas Prandtl number :      1.0
-# Liquid Prandtl number :   7.0
+# Shock-drop simulation
+!- Parallelization ----
+Shock-drop partition : 2 4 1
+!- Mesh ---------------
+Shock-drop dx :     0.01
+Shock-drop max nz : 1
+Shock-drop margin : 0.25
+!- Time ---------------
+Shock-drop dt :  2.5e-3
+Shock-drop CFL : 1
+!- Remeshing ----------
+Remeshing period : 0.2
 
-# Time integration
-Max timestep size : 5e-3
-Max cfl number :    0.9
-Max time :          50
-Max steps :         100000
-
-# Pressure solver
-Pressure tolerance : 1e-6
-Pressure iteration : 100
-
-# Implicit velocity solver
-Implicit tolerance : 1e-6
-Implicit iteration : 100
-
-# Ensight output
-Ensight output period : 0.5
+# Far-field simulation
+!- Parallelization ----
+Farfield partition : 8 1 1
+!- Mesh ---------------
+Farfield dx : 0.03
+Farfield nx : 250 250 1!200
+Farfield X0 : -2

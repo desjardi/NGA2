@@ -144,7 +144,7 @@ contains
 
       ! Initialize time tracker with 2 subiterations
       initialize_timetracker: block
-         this%time=timetracker(amRoot=this%cfg%amRoot)
+         this%time=timetracker(amRoot=this%cfg%amRoot,name='Pipe')
          call param_read('[Pipe] Max timestep size',this%time%dtmax)
          call param_read('[Pipe] Max cfl number',this%time%cflmax)
          this%time%dt=this%time%dtmax

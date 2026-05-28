@@ -3,7 +3,7 @@ module simulation
    use precision,         only: WP
    use geometry,          only: cfg
    use ddadi_class,       only: ddadi
-   use hypre_str_class,   only: hypre_str
+   use fft2d_class,       only: fft2d
    use lowmach_class,     only: lowmach
    use vdscalar_class,    only: vdscalar
    use timetracker_class, only: timetracker
@@ -14,7 +14,7 @@ module simulation
    private
    
    !> Single low Mach flow solver and scalar solver and corresponding time tracker
-   type(hypre_str),   public :: ps
+   type(fft2d),       public :: ps
    type(ddadi),       public :: vs,ss
    type(lowmach),     public :: fs
    type(vdscalar),    public :: sc
@@ -100,8 +100,7 @@ contains
       
       ! Create a low-Mach flow solver with bconds
       create_velocity_solver: block
-         use hypre_str_class, only: pcg_pfmg2
-         use lowmach_class,   only: dirichlet,clipped_neumann,slip
+         use lowmach_class,   only: dirichlet,clipped_neumann
          real(WP) :: visc
          ! Create flow solver
          fs=lowmach(cfg=cfg,name='Variable density low Mach NS')
@@ -110,16 +109,8 @@ contains
          ! Define boundary conditions
          call fs%add_bcond(name='inflow' ,type=dirichlet      ,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true. ,locator=xp_locator)
-         !call fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.false.,locator=xp_locator)
-         !call fs%add_bcond(name='yp',type=slip,face='y',dir=+1,canCorrect=.true.,locator=yp_locator)
-         !call fs%add_bcond(name='ym',type=slip,face='y',dir=-1,canCorrect=.true.,locator=ym_locator)
-         !call fs%add_bcond(name='zp',type=slip,face='z',dir=+1,canCorrect=.true.,locator=zp_locator)
-         !call fs%add_bcond(name='zm',type=slip,face='z',dir=-1,canCorrect=.true.,locator=zm_locator)
          ! Configure pressure solver
-         ps=hypre_str(cfg=cfg,name='Pressure',method=pcg_pfmg2,nst=7)
-         ps%maxlevel=18
-         call param_read('Pressure iteration',ps%maxit)
-         call param_read('Pressure tolerance',ps%rcvg)
+         ps=fft2d(cfg=cfg,name='Pressure',nst=7)
          ! Configure implicit velocity solver
          vs=ddadi(cfg=cfg,name='Velocity',nst=7)
          ! Setup the solver

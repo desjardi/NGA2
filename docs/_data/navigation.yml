@@ -1,0 +1,21 @@
+main:
+  - title: "Home"
+    url: /
+  - title: "Tutorials"
+    url: /tutorials/
+  - title: "Gallery"
+    url: /gallery/
+  - title: "About"
+    url: /about/
+
+tutorials:
+  - title: "Overview"
+    url: /tutorials/
+  - title: "Installing dependencies"
+    url: /tutorials/install-deps/
+  - title: "Installing NGA2"
+    url: /tutorials/install-nga2/
+  - title: "A first run"
+    url: /tutorials/first-run/
+  - title: "A second run"
+    url: /tutorials/second-run/

@@ -4,5 +4,5 @@ ifdef HDF5_DIR
   LIBRARY_LOCATIONS += $(HDF5_DIR)/lib
   LIBRARIES += -lhdf5 -lhdf5_fortran
 else
-  $(error HDF5_DIR not defined, but it is currently required by NGA)
+  $(error HDF5_DIR not defined. set it in your environment or GNUmakefile)
 endif

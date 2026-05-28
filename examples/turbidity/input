@@ -1,0 +1,41 @@
+# Parallelization
+Partition :	4 1 1
+
+# Mesh definition
+Lx :	0.05
+Ly :	0.01
+Lz :	1e-4
+nx :	250
+ny :	100
+nz :	1
+
+# Time integration
+Max timestep size :	1e-3
+Max cfl number :	1
+Max time : 		10
+
+# Fluid properties
+Dynamic viscosity : 8.9e-4
+Density :   1000
+Gravity :   0.976030432437939 -9.761324940547519 0
+
+# Particle parameters
+Bed width : 0.01
+Particle volume fraction : 0.01
+Particle density :  1200
+Particle diameter : 50e-6
+Particle timestep size : 1e-5
+Collision timescale : 15e-5
+Coefficient of restitution : 0.8
+Friction coefficient : 0.1
+
+# Pressure solver
+Pressure tolerance : 	1e-5
+Pressure iteration : 	100
+
+# Implicit velocity solver
+Implicit tolerance : 	1e-6
+Implicit iteration : 	100
+
+# Ensight output
+Ensight output period : 100e-4

@@ -14,7 +14,7 @@ module simulation
    type(roundjet) :: jet
    
    !> Couplers from pipe to round jet
-   type(coupler) :: xcpl,ycpl,zcpl
+   type(coupler) :: cpl
    
    public :: simulation_init,simulation_run,simulation_final
    
@@ -48,15 +48,10 @@ contains
       ! Initialize couplers from injector to atomization
       create_coupler: block
          use parallel, only: group
-         xcpl=coupler(src_grp=pipe_group,dst_grp=group,name='pipe2jet')
-         ycpl=coupler(src_grp=pipe_group,dst_grp=group,name='pipe2jet')
-         zcpl=coupler(src_grp=pipe_group,dst_grp=group,name='pipe2jet')
-         if (in_pipe_group) call xcpl%set_src(pipe%cfg,'x')
-         if (in_pipe_group) call ycpl%set_src(pipe%cfg,'y')
-         if (in_pipe_group) call zcpl%set_src(pipe%cfg,'z')
-         call xcpl%set_dst(jet%cfg,'x'); call xcpl%initialize()
-         call ycpl%set_dst(jet%cfg,'y'); call ycpl%initialize()
-         call zcpl%set_dst(jet%cfg,'z'); call zcpl%initialize()
+         cpl=coupler(src_grp=pipe_group,dst_grp=group,name='pipe2jet')
+         call cpl%set_src(pipe%cfg)
+         call cpl%set_dst(jet%cfg )
+         call cpl%initialize()
       end block create_coupler
       
    end subroutine simulation_init
@@ -81,13 +76,10 @@ contains
             use tpns_class, only: bcond
             integer :: n,i,j,k
             type(bcond), pointer :: mybc
-            ! Exchange data using cpl12x/y/z couplers
-            if (in_pipe_group) call xcpl%push(pipe%fs%U)
-            if (in_pipe_group) call ycpl%push(pipe%fs%V)
-            if (in_pipe_group) call zcpl%push(pipe%fs%W)
-            call xcpl%transfer(); call xcpl%pull(jet%resU)
-            call ycpl%transfer(); call ycpl%pull(jet%resV)
-            call zcpl%transfer(); call zcpl%pull(jet%resW)
+            ! Exchange data using coupler
+            if (in_pipe_group) call cpl%push(pipe%fs%U,loc='x'); call cpl%transfer(); call cpl%pull(jet%resU,loc='x')
+            if (in_pipe_group) call cpl%push(pipe%fs%V,loc='y'); call cpl%transfer(); call cpl%pull(jet%resV,loc='y')
+            if (in_pipe_group) call cpl%push(pipe%fs%W,loc='z'); call cpl%transfer(); call cpl%pull(jet%resW,loc='z')
             ! Apply time-varying Dirichlet conditions
             call jet%fs%get_bcond('inflow',mybc)
             do n=1,mybc%itr%no_
@@ -109,6 +101,9 @@ contains
    !> Finalize the NGA2 simulation
    subroutine simulation_final
       implicit none
+      
+      ! Finalize coupler
+      call cpl%finalize()
       
       ! Finalize pipe simulation
       if (in_pipe_group) call pipe%final()

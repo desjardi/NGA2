@@ -40,8 +40,13 @@ ifeq ($(DEBUG),TRUE)
   CXXFLAGS += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv -Wno-unused-but-set-variable
   CFLAGS   += -Og -fno-inline -ggdb -Wshadow -Wall -Wno-sign-compare -ftrapv
 
-  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
-  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -ffpe-trap=invalid,zero -finit-real=snan -finit-integer=2147483647 -ftrapv
+  FFLAGS   += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -finit-real=snan -finit-integer=2147483647 -ftrapv
+  F90FLAGS += -Og -ggdb -pedantic -fcheck=all -fbacktrace -Wall -Wuninitialized -Wunused -finit-real=snan -finit-integer=2147483647 -ftrapv
+  # -ffpe-trap seems broken on ARM/Apple Silicon (SIGILL), only enable on x86
+  ifneq ($(shell uname -m),arm64)
+    FFLAGS   += -ffpe-trap=zero,overflow,invalid
+    F90FLAGS += -ffpe-trap=zero,overflow,invalid
+  endif
 
   ifneq ($(gcc_major_version),$(filter $(gcc_major_version),4 5))
     CXXFLAGS += -Wnull-dereference
@@ -50,10 +55,10 @@ ifeq ($(DEBUG),TRUE)
 
 else
 
-  CXXFLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp
-  CFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp
-  FFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp
-  F90FLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp
+  CXXFLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp -fno-finite-math-only #-flto
+  CFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp -fno-finite-math-only #-flto
+  FFLAGS   += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp -fno-finite-math-only #-flto
+  F90FLAGS += -O3 -ftree-vectorize -ffast-math -funroll-loops -fomit-frame-pointer #-pipe -fopenmp -fno-finite-math-only #-flto
 
 endif
 

@@ -1,0 +1,21 @@
+# Select which test to run: geometry, plic, advect, all
+Test: advect
+
+# Mesh parameters
+Base nx: 16
+Base ny: 16
+Base nz: 16
+Max level: 3
+
+# Regridding parameters
+Regrid nsteps: 10
+
+# Time integration
+Max time: 3.0
+Max dt:   2.5e-3
+Max CFL:  0.9
+
+# Output
+Output period: 1e-2
+
+

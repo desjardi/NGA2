@@ -3333,9 +3333,9 @@ contains
       integer :: ind,ii,jj,kk
       real(IRL_double), dimension(0:2) :: normal
       real(IRL_double), dimension(0:188) :: moments
-      integer :: direction
+      integer :: direction, direction2
       logical :: flip
-      real(IRL_double) :: m000,m100,m010,m001
+      real(IRL_double) :: m000,m100,m010,m001,tmp
       real(IRL_double), dimension(0:2) :: center
       real(IRL_double) :: initial_dist
       type(RectCub_type) :: cell
@@ -3400,11 +3400,24 @@ contains
                ! Calculate geometric center of neighborhood
                center=[m100,m010,m001]/m000
                ! Symmetry about Cartesian planes
-               call reflect_moments(moments,center,direction)
+               call reflect_moments(moments,center,direction,direction2)
                ! Get PLIC normal vector from neural network
                call get_normal(moments,normal)
                normal=normalize(normal)
                ! Rotate normal vector to original octant
+               if (direction2.eq.1) then
+                  tmp=normal(0); normal(0)=normal(1); normal(1)=tmp
+               else if (direction2.eq.2) then
+                  tmp=normal(1); normal(1)=normal(2); normal(2)=tmp
+               else if (direction2.eq.3) then
+                  tmp=normal(0); normal(0)=normal(2); normal(2)=tmp
+               else if (direction2.eq.4) then
+                  tmp=normal(1); normal(1)=normal(2); normal(2)=tmp
+                  tmp=normal(0); normal(0)=normal(1); normal(1)=tmp
+               else if (direction2.eq.5) then
+                  tmp=normal(0); normal(0)=normal(2); normal(2)=tmp
+                  tmp=normal(0); normal(0)=normal(1); normal(1)=tmp
+               end if
                if (direction.eq.1) then
                   normal(0)=-normal(0)
                else if (direction.eq.2) then
@@ -3475,9 +3488,9 @@ contains
 
       real(IRL_double), dimension(0:2) :: normal
       real(IRL_double), dimension(0:188) :: moments
-      integer :: direction
+      integer :: direction, direction2
       logical :: flip
-      real(IRL_double) :: m000,m100,m010,m001
+      real(IRL_double) :: m000,m100,m010,m001,tmp_norm
       real(IRL_double), dimension(0:2) :: center
       type(RectCub_type) :: cell
       
@@ -3628,10 +3641,23 @@ contains
             ! Calculate geometric center of neighborhood
             center=[m100,m010,m001]/m000
             ! Symmetry about Cartesian planes
-            call reflect_moments(moments,center,direction)
+            call reflect_moments(moments,center,direction,direction2)
             ! Get PLIC normal vector from neural network
             call get_normal(moments,normal); normal=normalize(normal)
             ! Rotate normal vector to original octant
+            if (direction2.eq.1) then
+               tmp_norm=normal(0); normal(0)=normal(1); normal(1)=tmp_norm
+            else if (direction2.eq.2) then
+               tmp_norm=normal(1); normal(1)=normal(2); normal(2)=tmp_norm
+            else if (direction2.eq.3) then
+               tmp_norm=normal(0); normal(0)=normal(2); normal(2)=tmp_norm
+            else if (direction2.eq.4) then
+               tmp_norm=normal(1); normal(1)=normal(2); normal(2)=tmp_norm
+               tmp_norm=normal(0); normal(0)=normal(1); normal(1)=tmp_norm
+            else if (direction2.eq.5) then
+               tmp_norm=normal(0); normal(0)=normal(2); normal(2)=tmp_norm
+               tmp_norm=normal(0); normal(0)=normal(1); normal(1)=tmp_norm
+            end if
             if (direction.eq.1) then
                normal(0)=-normal(0)
             else if (direction.eq.2) then

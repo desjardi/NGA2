@@ -1,0 +1,20 @@
+# Mesh parameters
+Base nx:   16
+Base ny:   16
+Base nz:   1
+Max level: 5
+
+# Regridding parameters
+Regrid nsteps:    10
+Tagging Reynolds: 20
+
+# Flow parameter
+Reynolds number: 1e4
+
+# Time integration
+Max time:    100
+Max dt:      1e-2
+Max CFL:     0.9
+
+# Output
+Output period: 0.5

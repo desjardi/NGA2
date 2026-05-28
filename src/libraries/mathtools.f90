@@ -7,12 +7,14 @@ module mathtools
    public :: Pi,twoPi
    public :: fv_itp_build,fd_itp_build
    public :: inverse_matrix
+   public :: symsolve
    public :: cross_product
    public :: normalize
    public :: qrotate
    public :: arctan
    public :: eigensolve3
    public :: quadrature_rule
+   public :: spherical_harmonic
    
    ! Trigonometric parameters
    real(WP), parameter :: Pi   =3.1415926535897932385_WP
@@ -97,28 +99,129 @@ contains
    end subroutine fd_itp_build
    
    
+   ! function inverse_matrix(A) result(Ainv)
+   !    use messager, only: die
+   !    implicit none
+   !    real(WP), dimension(:,:), intent(in) :: A
+   !    real(WP), dimension(size(A,1),size(A,2)) :: Ainv
+   !    real(WP), dimension(size(A,1)) :: work
+   !    integer , dimension(size(A,1)) :: ipiv
+   !    integer :: n,info
+   !    external DGETRF
+   !    external DGETRI
+   !    ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
+   !    Ainv=A
+   !    ! Store size
+   !    n=size(A,1)
+   !    ! Compute LU factorization of matrix A using partial pivoting with row interchanges
+   !    call DGETRF(n,n,Ainv,n,ipiv,info)
+   !    ! Error handling
+   !    if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
+   !    ! Compute inverse of matrix using LU factorization computed above
+   !    call DGETRI(n,Ainv,n,ipiv,work,n,info)
+   !    if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
+   !  end function inverse_matrix
+   
+   
+   !> Computes the inverse of a square matrix A
    function inverse_matrix(A) result(Ainv)
+     use messager,only:die
+     implicit none
+     real(WP),dimension(:,:),intent(in)::A
+     real(WP),dimension(size(A,1),size(A,2))::Ainv
+     real(WP),dimension(size(A,1),size(A,2))::A_
+     real(WP),dimension(size(A,2))::row_temp
+     integer::i,j,n,pivot
+     real(WP)::maxA,factor
+     n=size(A,1)
+     if (size(A,2).ne.n) call die('[inverse_matrix] Matrix is not square')
+     A_=A
+     Ainv=0.0_WP
+     do i=1,n
+        Ainv(i,i)=1.0_WP
+     end do
+     do i=1,n
+        pivot=i
+        maxA=abs(A_(i,i))
+        do j=i+1,n
+           if(abs(A_(j,i)).gt.maxA)then
+              maxA=abs(A_(j,i))
+              pivot=j
+           end if
+        end do
+        if (pivot.ne.i) then
+           row_temp=A_(i,:)
+           A_(i,:)=A_(pivot,:)
+           A_(pivot,:)=row_temp
+           row_temp=Ainv(i,:)
+           Ainv(i,:)=Ainv(pivot,:)
+           Ainv(pivot,:)=row_temp
+        end if
+        if (abs(A_(i,i)).lt.1.0e-12_WP) call die('[inverse_matrix] Matrix is numerically singular')
+        factor=A_(i,i)
+        A_(i,:)=A_(i,:)/factor
+        Ainv(i,:)=Ainv(i,:)/factor
+        do j=1,n
+           if (j.ne.i) then
+              factor=A_(j,i)
+              A_(j,:)=A_(j,:)-factor*A_(i,:)
+              Ainv(j,:)=Ainv(j,:)-factor*Ainv(i,:)
+           end if
+        end do
+     end do
+   end function inverse_matrix
+
+
+   !> Solves the linear system A*x=b using Gauss-Jordan elimination with partial pivoting
+   !> A must be square; cost is O(n^3) — comparable to LAPACK for small n
+   function symsolve(A,b,info) result(x)
       use messager, only: die
       implicit none
       real(WP), dimension(:,:), intent(in) :: A
-      real(WP), dimension(size(A,1),size(A,2)) :: Ainv
-      real(WP), dimension(size(A,1)) :: work
-      integer , dimension(size(A,1)) :: ipiv
-      integer :: n,info
-      external DGETRF
-      external DGETRI
-      ! Copy A over to Ainv to prevent it from being overwritten by LAPACK
-      Ainv=A
-      ! Store size
-      n=size(A,1)
-      ! Compute LU factorization of matrix A using partial pivoting with row interchanges
-      call DGETRF(n,n,Ainv,n,ipiv,info)
-      ! Error handling
-      if (info.ne.0) call die('[inverse_matrix] Matrix is numerically singular')
-      ! Compute inverse of matrix using LU factorization computed above
-      call DGETRI(n,Ainv,n,ipiv,work,n,info)
-      if (info.ne.0) call die('[inverse_matrix] Matrix inversion failed')
-    end function inverse_matrix
+      real(WP), dimension(:),   intent(in) :: b
+      integer, intent(out), optional :: info
+      real(WP), dimension(size(b))         :: x
+      real(WP), dimension(size(A,1),size(A,2)) :: A_
+      real(WP), dimension(size(b))         :: x_
+      real(WP), dimension(size(A,2))       :: row_temp
+      real(WP) :: x_temp
+      integer :: i,j,n,pivot
+      real(WP) :: maxA,factor
+      n=size(b)
+      if (size(A,1).ne.n.or.size(A,2).ne.n) call die('[symsolve] Incompatible dimensions')
+      A_=A; x_=b
+      do i=1,n
+         ! Find pivot
+         pivot=i; maxA=abs(A_(i,i))
+         do j=i+1,n
+            if (abs(A_(j,i)).gt.maxA) then; maxA=abs(A_(j,i)); pivot=j; end if
+         end do
+         ! Swap rows
+         if (pivot.ne.i) then
+            row_temp=A_(i,:); A_(i,:)=A_(pivot,:); A_(pivot,:)=row_temp
+            x_temp=x_(i);     x_(i)=x_(pivot);     x_(pivot)=x_temp
+         end if
+         ! Singularity check
+         if (abs(A_(i,i)).lt.1.0e-12_WP) then
+            if (present(info)) then; info=-1; x=0.0_WP; return; end if
+            call die('[symsolve] Matrix is numerically singular')
+         end if
+         ! Normalize pivot row
+         factor=A_(i,i)
+         A_(i,:)=A_(i,:)/factor; x_(i)=x_(i)/factor
+         ! Eliminate column i from all other rows
+         do j=1,n
+            if (j.ne.i) then
+               factor=A_(j,i)
+               A_(j,:)=A_(j,:)-factor*A_(i,:)
+               x_(j)=x_(j)-factor*x_(i)
+            end if
+         end do
+      end do
+      ! Successful exit
+      if (present(info)) info=0
+      x=x_
+   end function symsolve
    
    
    ! Returns normalized vector: w=v/|v|
@@ -339,6 +442,78 @@ contains
       ! Rescale to be in [0,1]
       x=0.5_WP*(1.0_WP+x); w=0.5_WP*w
    end subroutine quadrature_rule
+   
+   
+   !> Computes spherical harmonics Y_l^m(theta,phi) for a given l and m at angles theta and phi
+   function spherical_harmonic(l,m,theta,phi) result(Ylm)
+      implicit none
+      integer , intent(in) :: l,m
+      real(WP), intent(in) :: theta,phi
+      real(WP) :: Ylm
+      real(WP) :: norm,plm
+      integer  :: mm,abs_m
+      ! Associated Legendre polynomial
+      abs_m=abs(m); plm=legendre_p(l,abs_m,cos(theta))
+      ! Normalization factor
+      norm=sqrt((2.0_WP*l+1.0_WP)/(4.0_WP*Pi)*real(factorial(l-abs_m),WP)/real(factorial(l+abs_m),WP))
+      ! Real-valued spherical harmonics
+      if (m.gt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*cos(m*phi)
+      else if (m.lt.0) then
+         Ylm=sqrt(2.0_WP)*norm*plm*sin(abs(m)*phi)
+      else
+         Ylm=norm*plm
+      end if
+   contains
+      !> Computes factorial of n
+      function factorial(n) result(fact)
+         integer, intent(in) :: n
+         integer :: fact,j
+         fact=1
+         if (n.gt.0) then
+            do j=2,n
+               fact=fact*j
+            end do
+         end if
+      end function factorial
+      !> Computes the associated Legendre polynomial P_l0^m0(x)
+      function legendre_p(l0,m0,x) result(p)
+         implicit none
+         integer , intent(in) :: l0,m0
+         real(WP), intent(in) :: x
+         real(WP) :: p
+         integer  :: i
+         real(WP) :: pmm,pmmp1,pll,somx2
+         if (m0.lt.0.or.m0.gt.l0.or.abs(x).gt.1.0_WP) then
+            p=0.0_WP
+            return
+         end if
+         pmm=1.0_WP
+         if (m0.gt.0) then
+            somx2=sqrt((1.0_WP-x)*(1.0_WP+x))
+            do i=1,m0
+               pmm=-pmm*(2*i-1)*somx2
+            end do
+         end if
+         if (l0.eq.m0) then
+            p=pmm
+            return
+         else
+            pmmp1=x*(2*m0+1)*pmm
+            if (l0.eq.m0+1) then
+               p=pmmp1
+               return
+            else
+               do i=m0+2,l0
+                  pll=((2*i-1)*x*pmmp1-(i+m0-1)*pmm)/(i-m0)
+                  pmm=pmmp1
+                  pmmp1=pll
+               end do
+               p=pmmp1
+            end if
+         end if
+      end function legendre_p
+   end function spherical_harmonic
    
    
 end module mathtools

@@ -7,16 +7,16 @@ module cclabel_class
    implicit none
    private
    
-
+   
    ! Expose type/constructor/methods
    public :: cclabel,make_label_ftype,same_label_ftype
    
-
+   
    ! Some parameters for memory management
    integer , parameter :: min_struct_size=100 !< Default minimum size of structure storage
    real(WP), parameter :: coeff_up=1.5_WP     !< When we run out of structure storage, increase by 50%
    
-
+   
    !> Structure object
    type :: struct_type
       integer :: parent                                   !< ID of parent struct
@@ -25,7 +25,7 @@ module cclabel_class
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
    
-
+   
    !> cclabel object definition
    type :: cclabel
       ! This is our pgrid
@@ -41,6 +41,7 @@ module cclabel_class
       procedure :: initialize
       procedure :: build
       procedure :: empty
+      procedure :: finalize
    end type cclabel
    
    !> Type of the make_label function used to generate a structure
@@ -57,7 +58,7 @@ module cclabel_class
       end function same_label_ftype
    end interface
    
-
+   
 contains
    
    
@@ -77,7 +78,7 @@ contains
       this%nstruct=0
    end subroutine initialize
    
-
+   
    !> Build structure using the user-set test functions
    subroutine build(this,make_label,same_label)
       implicit none
@@ -89,7 +90,7 @@ contains
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_own         !< Resolving structure id across procs
-
+      
       ! Start by cleaning up
       call this%empty()
       
@@ -492,6 +493,27 @@ contains
          deallocate(idp)
       end block compact_struct
       
+      ! Extra QOL step to ensure that id=1 is always the largest structure in terms of number of cells
+      rename_largest_structure: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+         integer :: ierr,bigid,i,j,k
+         integer, dimension(:), allocatable :: ncells
+         type(struct_type) :: tmp
+         ! Skip if no structure was found
+         if (this%nstruct.eq.0) exit rename_largest_structure
+         ! Loop over all structures and count total number of cells to find ID of largest structure
+         allocate(ncells(1:this%nstruct)); ncells=this%struct(:)%n_
+         call MPI_ALLREDUCE(MPI_IN_PLACE,ncells,this%nstruct,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
+         bigid=maxloc(ncells,1)
+         deallocate(ncells)
+         ! Swap structures
+         tmp=this%struct(1); this%struct(1)=this%struct(bigid); this%struct(bigid)=tmp
+         do k=this%pg%kmino_,this%pg%kmaxo_; do j=this%pg%jmino_,this%pg%jmaxo_; do i=this%pg%imino_,this%pg%imaxo_
+            if (this%id(i,j,k).eq.1) then; this%id(i,j,k)=bigid; else if (this%id(i,j,k).eq.bigid) then; this%id(i,j,k)=1; end if
+         end do; end do; end do
+      end block rename_largest_structure
+      
+      
    contains
       
       !> This recursive function that points the lineage of a structure to its root and returns that root
@@ -563,7 +585,7 @@ contains
          rx=rootify_parent(x); ry=rootify_parent(y); rmin=min(rx,ry); rmax=max(rx,ry)
          parent(rmax)=rmin
       end subroutine union_parent
-
+      
       !> For parent_all array: this function points the parent to root and returns that root
       recursive function find_all(x) result(y)
          implicit none
@@ -606,8 +628,8 @@ contains
       end function find_own
       
    end subroutine build
-
-
+   
+   
    !> Empty structure info
    subroutine empty(this)
       implicit none
@@ -626,6 +648,17 @@ contains
       ! Reset id to zero
       this%id=0
    end subroutine empty
+   
+   
+   !> Finalize CCL object
+   subroutine finalize(this)
+      implicit none
+      class(cclabel), intent(inout) :: this
+      call this%empty()
+      if (allocated(this%id)) deallocate(this%id)
+      nullify(this%pg)
+      this%name='UNNAMED_CCL'
+   end subroutine finalize
    
    
 end module cclabel_class

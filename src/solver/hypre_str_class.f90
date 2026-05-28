@@ -60,7 +60,7 @@ module hypre_str_class
       procedure :: setup=>hypre_str_setup                !< Solver setup (every time the operator changes)
       procedure :: solve=>hypre_str_solve                !< Execute solver (assumes new RHS and initial guess at every call)
       procedure :: destroy=>hypre_str_destroy            !< Preconditioner destruction (every time the operator changes)
-      procedure :: final=>hypre_str_final                !< Solver destruction - at the very end
+      procedure :: finalize=>hypre_str_finalize          !< Solver finalization
    end type hypre_str
    
    
@@ -446,7 +446,7 @@ contains
    
    
    !> Finalize solver
-   subroutine hypre_str_final(this)
+   subroutine hypre_str_finalize(this)
       implicit none
       class(hypre_str), intent(inout) :: this
       integer :: ierr
@@ -470,8 +470,14 @@ contains
          call HYPRE_StructCycRedDestroy(this%hypre_solver,ierr)
       end select
       ! Deallocate remaining lin_sol arrays
-      deallocate(this%stc,this%stmap,this%opr,this%rhs,this%sol)
-   end subroutine hypre_str_final
+      if (allocated(this%stc   )) deallocate(this%stc)
+      if (allocated(this%stmap )) deallocate(this%stmap)
+      if (allocated(this%opr   )) deallocate(this%opr)
+      if (allocated(this%rhs   )) deallocate(this%rhs)
+      if (allocated(this%sol   )) deallocate(this%sol)
+      ! Nullify pointer to config if present
+      if (associated(this%cfg)) nullify(this%cfg)
+   end subroutine hypre_str_finalize
    
    
    !> Log hypre_str info

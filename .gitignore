@@ -20,7 +20,7 @@
 *.dSYM/
 .history/
 
-# Python temporaries
+# Temporary files/folders
 _*
 
 # Executable
@@ -31,8 +31,31 @@ build/
 Make.local
 *.mod
 
-# Doc stuff
-doc/
+# Docs stuff
+!docs/_config.yml
+!docs/_data/
+!docs/_data/**
+!docs/_layouts/
+!docs/_layouts/**
+!docs/_includes/
+!docs/_includes/**
+!docs/_pages/
+!docs/_pages/**
+!docs/_sass/
+!docs/_sass/**
+
+# Ruby Gem
+*.gem
+.bundle
+Gemfile.lock
+**/vendor/bundle
+
+# Jekyll generated files
+.jekyll-cache
+.jekyll-metadata
+.sass-cache
+_asset_bundler_cache
+_site
 
 # Runtime files
 *.h5
@@ -69,3 +92,4 @@ examples/*/input*~
 !examples/compressible_taylor_green/dns.epss
 !examples/compressible_taylor_green/dns.tke
 !examples/compressible_taylor_green/plot.me
+!examples/amrcomp_drop/scripts

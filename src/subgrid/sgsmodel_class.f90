@@ -124,7 +124,7 @@ contains
       do k=self%cfg%kmin_  ,self%cfg%kmax_
          do j=self%cfg%jmin_-1,self%cfg%jmax_+1
             do i=self%cfg%imin_-1,self%cfg%imax_+1
-               zfilter(-1,i,j,k)=(-0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k  ))+self%cfg%dzm(k+1)/3.0_WP)/(self%cfg%dxm(k+1)+self%cfg%dzm(k))
+               zfilter(-1,i,j,k)=(-0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k  ))+self%cfg%dzm(k+1)/3.0_WP)/(self%cfg%dzm(k+1)+self%cfg%dzm(k))
                zfilter( 0,i,j,k)=2.0_WP/3.0_WP+(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k+1)*self%cfg%dzm(k))
                zfilter(+1,i,j,k)=(+0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k+1))+self%cfg%dzm(k  )/3.0_WP)/(self%cfg%dzm(k+1)+self%cfg%dzm(k))
                if (self%cfg%VF(i,j,k-1).eq.0.0_WP) then
@@ -194,7 +194,7 @@ contains
       do k=self%cfg%kmin_  ,self%cfg%kmax_
          do j=self%cfg%jmin_-1,self%cfg%jmax_+1
             do i=self%cfg%imin_-1,self%cfg%imax_+1
-               zfilter(-1,i,j,k)=(-0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k  ))+self%cfg%dzm(k+1)/3.0_WP)/(self%cfg%dxm(k+1)+self%cfg%dzm(k))
+               zfilter(-1,i,j,k)=(-0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k  ))+self%cfg%dzm(k+1)/3.0_WP)/(self%cfg%dzm(k+1)+self%cfg%dzm(k))
                zfilter( 0,i,j,k)=2.0_WP/3.0_WP+(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k+1)*self%cfg%dzm(k))
                zfilter(+1,i,j,k)=(+0.5_WP*(self%cfg%dzm(k+1)-self%cfg%dzm(k))-(self%cfg%dzm(k+1)-self%cfg%dzm(k))**2/(6.0_WP*self%cfg%dzm(k+1))+self%cfg%dzm(k  )/3.0_WP)/(self%cfg%dzm(k+1)+self%cfg%dzm(k))
                if (wmask(i,j,k).eq.1) then
