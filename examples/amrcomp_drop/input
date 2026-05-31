@@ -36,31 +36,38 @@ Sutherland temperature: 0.073
 ###### CONDITIONS FOR SHARMA Ms=1.45 ######
 ###########################################
 # Gammas
-!GammaG: 1.4
-!GammaL: 6.12
+#GammaG: 1.4
+#GammaL: 6.12
 # Shock parameters
-!Gas Mach number: 0.5585
-!Shock location: -0.6
+#Gas Mach number: 0.5585
+#Shock location: -0.6
 # Liquid state
-!Density ratio:      459.25
-!Liquid Mach number: 0.147
+#Density ratio:      459.25
+#Liquid Mach number: 0.147
 # Surface tension
-!Weber number:       795
+#Weber number:       795
 # Viscous parameters
-!Reynolds number:    1.2e4
-!Prandtl number:     0.71
-!Viscosity ratio:    48.25
-!Diffusivity ratio:  19.118
-!Sutherland exponent:    1.5
-!Sutherland temperature: 0.2925
+#Reynolds number:    1.2e4
+#Prandtl number:     0.71
+#Viscosity ratio:    48.25
+#Diffusivity ratio:  19.118
+#Sutherland exponent:    1.5
+#Sutherland temperature: 0.2925
+###########################################
+
+###########################################
+###### MOVING WALL MODEL FOR IMPACT #######
+###########################################
+#Wall location: -3.0
+#Wall velocity:  1.0
 ###########################################
 
 # Time integration
 Max dt:   1e-3
-Max CFL:  1.0
-Max time: 1e2
+Max CFL:  0.75
+Max time: 100
 
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      !restart/drop_6.00000E+00
+Restart from:      !restart/drop_3.00000E+00

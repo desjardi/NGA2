@@ -628,19 +628,20 @@ contains
    !> Add explicit phasic pressure gradient to face velocities, cell-centered momentum, and phasic internal energies
    !> Uses this%PL and this%PG directly
    !> Optional gravity(1:3) adds a constant face acceleration alongside -grad(Pmix)/rho
-   subroutine add_phasic_pressure(this,scale,gravity)
+   subroutine add_phasic_pressure(this,scale,gravity,mask)
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrmpcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
       real(WP), dimension(3), intent(in), optional :: gravity
+      type(amrdata), intent(in), optional :: mask
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pVF,pSubVF,pUVW
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pRHOL,pRHOG
-      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pRHOL,pRHOG,pMask
+      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div,coeff
       integer :: lvl,i,j,k
       ! Build temp face mfabs to store pressure fluxes
       allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
@@ -722,11 +723,13 @@ contains
             pPL=>this%PL%mf(lvl)%dataptr(mfi)
             pPG=>this%PG%mf(lvl)%dataptr(mfi)
             pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+            if (present(mask)) pMask=>mask%mf(lvl)%dataptr(mfi)
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
-               pQ(i,j,k,3)=pQ(i,j,k,3)-scale*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
-               pQ(i,j,k,4)=pQ(i,j,k,4)-scale*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
+               coeff=1.0_WP; if (present(mask)) coeff=pMask(i,j,k,1)
+               pQ(i,j,k,3)=pQ(i,j,k,3)-scale*coeff*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
+               pQ(i,j,k,4)=pQ(i,j,k,4)-scale*coeff*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)

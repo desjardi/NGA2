@@ -60,6 +60,10 @@ module simulation
    real(WP) :: Suth_n=1.5_WP          !< Sutherland exponent (1.0 for constant)
    real(WP) :: Suth_T=0.4042_WP       !< Sutherland temperature (0.0 for constant)
 
+   !> Moving wall model
+   type(amrdata), target :: IBw
+   real(WP) :: Xw,Uw
+
    !> Sponge parameters
    real(WP) :: R_spg=3.0_WP
    real(WP) :: L_spg=1.0_WP
@@ -183,6 +187,26 @@ contains
       Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
       Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
       VF=VFeq
+
+      ! ================ Second step: thermal relaxation ================
+      !a=Q(1)*CvL+Q(2)*CvG
+      !b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
+      !d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
+      ! Get equilibrium pressure
+      !if (b**2-4.0_WP*a*d.lt.0.0_WP) return
+      !Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
+      ! Check if pressure is sound
+      !if (Peq.le.max(-PinfG,-PinfL)) return
+      ! Get equilibrium volume fraction
+      !VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
+      ! Clean up solution
+      !if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
+      !if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
+      ! Adjust conserved quantities
+      !Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
+      !Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
+      !VF=VFeq
+
    end subroutine P_relax_generalized
 
    !> Compute viscosity: Sutherland for gas, VF-weighted blend with liquid
@@ -349,6 +373,40 @@ contains
          end select
       end select
    end subroutine shock_dirichlet
+
+   !> Set wall IB
+   subroutine set_IBw(data,lvl,time,ba,dm)
+      use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box,amrex_mfiter_build,amrex_mfiter_destroy
+      class(amrdata), intent(inout) :: data
+      integer, intent(in) :: lvl
+      real(WP), intent(in) :: time
+      type(amrex_boxarray), intent(in) :: ba
+      type(amrex_distromap), intent(in) :: dm
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      real(WP) :: dx,dy,dz,xlo,xhi,xwall
+      integer :: i,j,k
+      xwall=Xw+Uw*time
+      dx=data%amr%dx(lvl); dy=data%amr%dy(lvl); dz=data%amr%dz(lvl)
+      call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
+      do while (mfi%next())
+         bx=mfi%growntilebox(data%ng)
+         pVF=>data%mf(lvl)%dataptr(mfi)
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            xlo=data%amr%xlo+real(i  ,WP)*dx
+            xhi=data%amr%xlo+real(i+1,WP)*dx
+            if (xlo.ge.xwall) then
+               pVF(i,j,k,1)=1.0_WP
+            else if (xhi.le.xwall) then
+               pVF(i,j,k,1)=0.0_WP
+            else
+               pVF(i,j,k,1)=(xhi-xwall)/dx
+            end if
+         end do; end do; end do
+      end do
+      call amrex_mfiter_destroy(mfi)
+   end subroutine set_IBw
 
    !> Tagger based on velocity and density laplacians
    subroutine my_tagger(solver,lvl,time,tags_ptr)
@@ -560,6 +618,15 @@ contains
             fs%user_bc=>shock_dirichlet
          end if
       end block create_solver
+
+      ! Create IB data
+      create_IB: block
+         use amrdata_class, only: interp_reinit
+         call param_read('Wall location',Xw,default=-10.0_WP)
+         call param_read('Wall velocity',Uw,default=0.0_WP)
+         call IBw%initialize(amr,name='IBw',ncomp=1,ng=fs%nover,interp=interp_reinit); call IBw%register()
+         IBw%user_init=>set_IBw
+      end block create_IB
       
       ! Initialize workspaces
       create_workspace: block
@@ -749,7 +816,15 @@ contains
          call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
-         
+
+         ! Update wall IB
+         update_wall: block
+            integer :: lvl
+            do lvl=0,amr%clvl()
+               call IBw%user_init(lvl,time%t,amr%ba(lvl),amr%dm(lvl))
+            end do
+         end block update_wall
+
          ! Remember old state
          call fs%store_old()
          
@@ -768,9 +843,11 @@ contains
          ! Compute face velocities
          call fs%get_face_velocity()
          ! Add pressure term
-         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
+         call fs%add_phasic_pressure(scale=0.5_WP*time%dt,mask=IBw)
          ! Add surface tension term
          call fs%add_surface_tension(scale=0.5_WP*time%dt)
+         ! Apply IB forcing
+         call apply_ib_forcing()
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
@@ -791,9 +868,11 @@ contains
          ! Compute face velocities
          call fs%get_face_velocity()
          ! Add pressure term
-         call fs%add_phasic_pressure(scale=time%dt)
+         call fs%add_phasic_pressure(scale=time%dt,mask=IBw)
          ! Add surface tension term
          call fs%add_surface_tension(scale=time%dt)
+         ! Apply IB forcing
+         call apply_ib_forcing()
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
@@ -837,6 +916,72 @@ contains
          call tfile%write()
          
       end do
+
+   contains
+
+      !> Apply IB forcing - zero Q inside solid and apply quasi-Neumann
+      subroutine apply_ib_forcing()
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pVF
+         real(WP), dimension(:,:,:,:), allocatable :: pQold
+         real(WP) :: sum_VF,sum_VFQ(4) 
+         integer :: i,j,k,lvl,ii,jj,kk
+         ! Compressible IB scheme requires updated ghosts for Q
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         ! Apply IB scheme in solid region
+         do lvl=0,amr%clvl()
+            call amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pQ=>fs%Q%mf(lvl)%dataptr(mfi)
+               pU=>fs%U%mf(lvl)%dataptr(mfi)
+               pV=>fs%V%mf(lvl)%dataptr(mfi)
+               pW=>fs%W%mf(lvl)%dataptr(mfi)
+               pVF=>IBw%mf(lvl)%dataptr(mfi)
+               ! Get interior tilebox
+               bx=mfi%tilebox()
+               ! Create backup of Q
+               allocate(pQold,source=pQ)
+               ! Loop over tile interior
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Skip pure fluid cells
+                  if (pVF(i,j,k,1).eq.1.0_WP) cycle
+                  ! Scale Q(5-7) by VF and drive towards wall velocity
+                  pQ(i,j,k,5)=pVF(i,j,k,1)*pQ(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*sum(pQ(i,j,k,1:2))*Uw
+                  pQ(i,j,k,6)=pVF(i,j,k,1)*pQ(i,j,k,6)
+                  pQ(i,j,k,7)=pVF(i,j,k,1)*pQ(i,j,k,7)
+                  ! VF-weighted neighbor average for Q(1:4)
+                  sum_VF=0.0_WP; sum_VFQ=0.0_WP
+                  do kk=-1,1; do jj=-1,1; do ii=-1,1
+                     if (ii.eq.0.and.jj.eq.0.and.kk.eq.0) cycle
+                     sum_VF      =sum_VF      +pVF(i+ii,j+jj,k+kk,1)
+                     sum_VFQ(1:4)=sum_VFQ(1:4)+pVF(i+ii,j+jj,k+kk,1)*pQold(i+ii,j+jj,k+kk,1:4)
+                  end do; end do; end do
+                  if (sum_VF.gt.0.0_WP) then
+                     pQ(i,j,k,1:4)=pVF(i,j,k,1)*pQold(i,j,k,1:4)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ(1:4)/sum_VF
+                  end if
+               end do; end do; end do
+               ! Deallocate pQold
+               deallocate(pQold)
+               ! Force face velocities
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pU(i,j,k,1)=0.5_WP*sum(pVF(i-1:i,j,k,1))*pU(i,j,k,1)+(1.0_WP-0.5_WP*sum(pVF(i-1:i,j,k,1)))*Uw
+               end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pV(i,j,k,1)=0.5_WP*sum(pVF(i,j-1:j,k,1))*pV(i,j,k,1)
+               end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  pW(i,j,k,1)=0.5_WP*sum(pVF(i,j,k-1:k,1))*pW(i,j,k,1)
+               end do; end do; end do
+            end do
+            call amr%mfiter_destroy(mfi)
+         end do
+      end subroutine apply_ib_forcing
       
    end subroutine simulation_run
    
@@ -853,6 +998,7 @@ contains
       call dQdt%finalize()
       call Umag%finalize()
       call Mach%finalize()
+      call IBw%finalize()
       ! Finalize visualization
       call viz%finalize()
       call viz_evt%finalize()
