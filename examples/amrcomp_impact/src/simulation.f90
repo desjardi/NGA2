@@ -234,7 +234,6 @@ contains
          PL=get_PL(RHO=Q(1)/VF,I=Q(3)/Q(1))
          ! Check for cavitation
          if (PL.lt.-0.9_WP*PinfL) then
-            print*,PL,Q,VF
             print*,'Warning: cavitation detected, injecting energy'
             Q(3)=VF*((-0.9_WP*PinfL)+GammaL*PinfL)/(GammaL-1.0_WP)
          end if

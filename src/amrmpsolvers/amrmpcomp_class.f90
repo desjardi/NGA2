@@ -1182,6 +1182,7 @@ contains
       real(WP) :: t0,t1
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: Fx,Fy,Fz
       type(amrex_multifab) :: Vx,Vy,Vz
+      type(amrex_multifab) :: gradU
       type(amrex_multifab) :: band
       ! Shared variables for internal functions
       real(WP) :: dx,dy,dz,dxi,dyi,dzi                              ! Needed for SL transport
@@ -1189,6 +1190,8 @@ contains
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pPLICold ! PLICold used in tet2flux_plic
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQold    ! Qold used in tet2flux_plic
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVFold   ! VFold used in tet2flux_plic
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pCLold,pCGold ! old phasic barycenters
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pGradU   ! old-velocity gradient, for reconstruction
       logical :: crossed_plic ! Used in tet2flux/tet2flux_plic
       ! Start full routine timer
       t0=MPI_Wtime()
@@ -1210,8 +1213,47 @@ contains
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vx,ncomp=8,nover=0,atface=[.true. ,.false.,.false.]); call Vx%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vy,ncomp=8,nover=0,atface=[.false.,.true. ,.false.]); call Vy%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vz,ncomp=8,nover=0,atface=[.false.,.false.,.true. ]); call Vz%setval(0.0_WP)
+         ! Create gradU storage
+         call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=gradU,ncomp=9,nover=this%nover); call gradU%setval(0.0_WP)
       end block define_fluxes
 
+      ! Limited gradient of the OLD mixture velocity for conservative SL momentum reconstruction
+      velocity_reconstruct: block
+         integer :: lvl,i,j,k,c
+         real(WP), dimension(3) :: uc,um,up
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pG
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         ! Skip if clvl < maxlvl
+         if (this%amr%clvl().lt.this%amr%maxlvl) exit velocity_reconstruct
+         ! Get finest level info
+         lvl=this%amr%maxlvl; dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         ! Build minmod-limited gradient of old velocity
+         call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
+         do while (mfi%next())
+            ! Get data pointers
+            pQ=>this%Qold%mf(lvl)%dataptr(mfi)
+            pG=>gradU%dataptr(mfi)
+            ! Loop over all cells
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               uc=pQ(i  ,j,k,5:7)/max(sum(pQ(i  ,j,k,1:2)),this%rho_floor)
+               um=pQ(i-1,j,k,5:7)/max(sum(pQ(i-1,j,k,1:2)),this%rho_floor)
+               up=pQ(i+1,j,k,5:7)/max(sum(pQ(i+1,j,k,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-2)=mmod((uc(c)-um(c))*dxi,(up(c)-uc(c))*dxi); end do
+               um=pQ(i,j-1,k,5:7)/max(sum(pQ(i,j-1,k,1:2)),this%rho_floor)
+               up=pQ(i,j+1,k,5:7)/max(sum(pQ(i,j+1,k,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-1)=mmod((uc(c)-um(c))*dyi,(up(c)-uc(c))*dyi); end do
+               um=pQ(i,j,k-1,5:7)/max(sum(pQ(i,j,k-1,1:2)),this%rho_floor)
+               up=pQ(i,j,k+1,5:7)/max(sum(pQ(i,j,k+1,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-0)=mmod((uc(c)-um(c))*dzi,(up(c)-uc(c))*dzi); end do
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+         ! Fill same-level ghosts
+         call gradU%fill_boundary(this%amr%geom(lvl))
+      end block velocity_reconstruct
+                  
       ! Phase 1a: Semi-Lagrangian fluxes at finest level
       t1=MPI_Wtime()
       semilagrangian_fluxes: block
@@ -1242,6 +1284,9 @@ contains
             pPLICold=>this%PLICold%dataptr(mfi)
             pQold   =>this%Qold%mf(lvl)%dataptr(mfi)
             pVFold  =>this%VFold%mf(lvl)%dataptr(mfi)
+            pCLold  =>this%CLold%dataptr(mfi)
+            pCGold  =>this%CGold%dataptr(mfi)
+            pGradU  =>gradU%dataptr(mfi)
             pBand   =>band%dataptr(mfi)
             pU      =>this%U%mf(lvl)%dataptr(mfi)
             pV      =>this%V%mf(lvl)%dataptr(mfi)
@@ -1754,6 +1799,7 @@ contains
          call this%amr%mfab_destroy(Vx)
          call this%amr%mfab_destroy(Vy)
          call this%amr%mfab_destroy(Vz)
+         call this%amr%mfab_destroy(gradU)
          do lvl=0,this%amr%clvl()
             call this%amr%mfab_destroy(Fx(lvl))
             call this%amr%mfab_destroy(Fy(lvl))
@@ -1776,6 +1822,13 @@ contains
          real(WP), parameter :: delta=0.01_WP
          weno_weight=(1.0_WP-tanh((ratio-lambda)/delta))/3.0_WP+(1.0_WP-tanh((ratio-1.0_WP/lambda)/delta))/6.0_WP
       end function weno_weight
+
+      !> Minmod limiter
+      real(WP) function mmod(a,b)
+         implicit none
+         real(WP), intent(in) :: a,b
+         if (a*b.le.0.0_WP) then; mmod=0.0_WP; else if (abs(a).lt.abs(b)) then; mmod=a; else; mmod=b; end if
+      end function mmod
 
       !> Recursive subroutine that cuts a tet by grid planes to compute volume and Q fluxes
       recursive subroutine tet2flux(mytet,myind,myVflux,myQflux)
@@ -1907,6 +1960,7 @@ contains
             myVflux(3:5)=vol_tot*bary_tot
             ! Q flux: all mass is liquid
             myQflux=vol_tot*pQold(i0,j0,k0,:)
+            call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
             return
          else if (pPLICold(i0,j0,k0,4).lt.-1.0e9_WP) then
             ! Pure gas
@@ -1914,6 +1968,7 @@ contains
             myVflux(6:8)=vol_tot*bary_tot
             ! Q flux: all mass is gas
             myQflux=vol_tot*pQold(i0,j0,k0,:)
+            call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
             return
          end if
 
@@ -1988,9 +2043,31 @@ contains
             myQflux(2)=myVflux(2)*pQold(i0,j0,k0,2)/(1.0_WP-VF0)
             myQflux(4)=myVflux(2)*pQold(i0,j0,k0,4)/(1.0_WP-VF0)
          end if
-         myQflux(5:7)=sum(myQflux(1:2))*pQold(i0,j0,k0,5:7)/max(sum(pQold(i0,j0,k0,1:2)),this%rho_floor)
+         !myQflux(5:7)=sum(myQflux(1:2))*pQold(i0,j0,k0,5:7)/max(sum(pQold(i0,j0,k0,1:2)),this%rho_floor)
+         call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
          
       end subroutine tet2flux_plic
+
+      !> Conservative phase-split velocity reconstruction of the momentum flux (5:7)
+      subroutine reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
+         implicit none
+         integer,  intent(in) :: i0,j0,k0
+         real(WP), dimension(8), intent(in)    :: myVflux
+         real(WP), dimension(7), intent(inout) :: myQflux
+         real(WP), dimension(3) :: xmass,baryL,baryG,ucell,uL,uG
+         real(WP) :: mtot
+         integer  :: c
+         mtot =max(pQold(i0,j0,k0,1)+pQold(i0,j0,k0,2),this%rho_floor)
+         ucell=pQold(i0,j0,k0,5:7)/mtot
+         xmass=(pQold(i0,j0,k0,1)*pCLold(i0,j0,k0,1:3)+pQold(i0,j0,k0,2)*pCGold(i0,j0,k0,1:3))/mtot
+         if (myVflux(1).gt.tiny(1.0_WP)) then; baryL=myVflux(3:5)/myVflux(1); else; baryL=xmass; end if
+         if (myVflux(2).gt.tiny(1.0_WP)) then; baryG=myVflux(6:8)/myVflux(2); else; baryG=xmass; end if
+         do c=1,3
+            uL(c)=ucell(c)+sum(pGradU(i0,j0,k0,3*c-2:3*c)*(baryL-xmass))
+            uG(c)=ucell(c)+sum(pGradU(i0,j0,k0,3*c-2:3*c)*(baryG-xmass))
+         end do
+         myQflux(5:7)=myQflux(1)*uL+myQflux(2)*uG
+      end subroutine reconstruct_momentum
 
       !> RK2 vertex projection back in time
       function project(p1,mydt) result(p2)
@@ -2191,7 +2268,7 @@ contains
       end do
       call this%amr%mfiter_destroy(mfi)
       ! Sync and apply BC
-      call this%fill(lvl=this%amr%maxlvl,time=time)
+      call this%VF%average_down(); call this%fill(lvl=this%amr%maxlvl,time=time)
       call this%Q%average_down(); call this%Q%fill(time=time)
       ! End timer
       this%wt_relax=this%wt_relax+(MPI_Wtime()-t0)
