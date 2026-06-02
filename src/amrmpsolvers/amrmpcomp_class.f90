@@ -1383,6 +1383,89 @@ contains
          end do
          call this%amr%mfiter_destroy(mfi)
       end block semilagrangian_fluxes
+
+      ! Lower dissipation by blending SL with centered momentum fluxes
+      reduce_dissipation: block
+         integer :: lvl,i,j,k
+         type(amrex_multifab) :: blend
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pBlend,pBand,pFx,pFy,pFz
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: fbx,bx
+         real(WP) :: rho_old,drho,rhoLo,rhoHi,coeff
+         real(WP), dimension(3) :: FC
+         ! Skip if clvl < maxlvl
+         if (this%amr%clvl().lt.this%amr%maxlvl) exit reduce_dissipation
+         ! Get finest level info
+         lvl=this%amr%maxlvl
+         dx=this%amr%dx(lvl); dxi=1.0_WP/this%amr%dx(lvl)
+         dy=this%amr%dy(lvl); dyi=1.0_WP/this%amr%dy(lvl)
+         dz=this%amr%dz(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         ! Pass 1: build antidiffusive blend weight (1=full centered, 0=full SL)
+         call this%amr%mfab_build(lvl=lvl,mfab=blend,ncomp=1,nover=1); call blend%setval(1.0_WP)
+         call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
+         do while (mfi%next())
+            pQold =>this%Qold%mf(lvl)%dataptr(mfi)
+            pBand =>band%dataptr(mfi)
+            pFx   =>Fx(lvl)%dataptr(mfi)
+            pFy   =>Fy(lvl)%dataptr(mfi)
+            pFz   =>Fz(lvl)%dataptr(mfi)
+            pBlend=>blend%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               pBlend(i,j,k,1)=1.0_WP
+               if (pBand(i,j,k,1).le.0.0_WP) cycle
+               rho_old=max(pQold(i,j,k,1)+pQold(i,j,k,2),this%rho_floor)
+               drho=dt*sum(dxi*(pFx(i+1,j,k,1:2)-pFx(i,j,k,1:2))+dyi*(pFy(i,j+1,k,1:2)-pFy(i,j,k,1:2))+dzi*(pFz(i,j,k+1,1:2)-pFz(i,j,k,1:2)))
+               pBlend(i,j,k,1)=min(1.0_WP,1.0_WP+drho/rho_old)**2
+               !pBlend(i,j,k,1)=min(1.0_WP,max(rho_old+drho,0.0_WP)/max(-drho,this%rho_floor))
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+         call blend%fill_boundary(this%amr%geom(lvl))
+         ! Pass 2: F(5:7)=F_SL+coeff*(F_centered-F_SL)
+         call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
+         do while (mfi%next())
+            pQold =>this%Qold%mf(lvl)%dataptr(mfi)
+            pBand =>band%dataptr(mfi)
+            pFx   =>Fx(lvl)%dataptr(mfi)
+            pFy   =>Fy(lvl)%dataptr(mfi)
+            pFz   =>Fz(lvl)%dataptr(mfi)
+            pBlend=>blend%dataptr(mfi)
+            ! X-fluxes
+            fbx=mfi%nodaltilebox(1)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               if (maxval(pBand(i-1:i,j,k,1)).eq.0.0_WP) cycle
+               rhoLo=max(pQold(i-1,j,k,1)+pQold(i-1,j,k,2),this%rho_floor)
+               rhoHi=max(pQold(i  ,j,k,1)+pQold(i  ,j,k,2),this%rho_floor)
+               FC=sum(pFx(i,j,k,1:2))*0.5_WP*(pQold(i-1,j,k,5:7)/rhoLo+pQold(i,j,k,5:7)/rhoHi)
+               coeff=min(pBlend(i-1,j,k,1),pBlend(i,j,k,1))
+               pFx(i,j,k,5:7)=pFx(i,j,k,5:7)+coeff*(FC-pFx(i,j,k,5:7))
+            end do; end do; end do
+            ! Y-fluxes
+            fbx=mfi%nodaltilebox(2)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               if (maxval(pBand(i,j-1:j,k,1)).eq.0.0_WP) cycle
+               rhoLo=max(pQold(i,j-1,k,1)+pQold(i,j-1,k,2),this%rho_floor)
+               rhoHi=max(pQold(i,j  ,k,1)+pQold(i,j  ,k,2),this%rho_floor)
+               FC=sum(pFy(i,j,k,1:2))*0.5_WP*(pQold(i,j-1,k,5:7)/rhoLo+pQold(i,j,k,5:7)/rhoHi)
+               coeff=min(pBlend(i,j-1,k,1),pBlend(i,j,k,1))
+               pFy(i,j,k,5:7)=pFy(i,j,k,5:7)+coeff*(FC-pFy(i,j,k,5:7))
+            end do; end do; end do
+            ! Z-fluxes
+            fbx=mfi%nodaltilebox(3)
+            do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+               if (maxval(pBand(i,j,k-1:k,1)).eq.0.0_WP) cycle
+               rhoLo=max(pQold(i,j,k-1,1)+pQold(i,j,k-1,2),this%rho_floor)
+               rhoHi=max(pQold(i,j,k  ,1)+pQold(i,j,k  ,2),this%rho_floor)
+               FC=sum(pFz(i,j,k,1:2))*0.5_WP*(pQold(i,j,k-1,5:7)/rhoLo+pQold(i,j,k,5:7)/rhoHi)
+               coeff=min(pBlend(i,j,k-1,1),pBlend(i,j,k,1))
+               pFz(i,j,k,5:7)=pFz(i,j,k,5:7)+coeff*(FC-pFz(i,j,k,5:7))
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+         ! Cleanup
+         call this%amr%mfab_destroy(blend)
+      end block reduce_dissipation
       this%wt_sl=this%wt_sl+(MPI_Wtime()-t1)
       
       ! Phase 1b: Finite volume fluxes for all levels (Euler fluxes skip band cells at finest level)
@@ -2108,6 +2191,7 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG,pCurv,pPLIC
+      logical :: oldmix,newmix
       real(WP) :: dx,dy,dz,cell_vol,vol_liq,vol_gas
       real(WP), dimension(3) :: lo,hi,bary_liq,bary_gas
       real(WP), dimension(3,8) :: hex
@@ -2131,13 +2215,41 @@ contains
          pCG  =>this%CG%dataptr(mfi)
          pCurv=>this%curv%dataptr(mfi)
          pPLIC=>this%plic%dataptr(mfi)
-         ! Loop over all cells
-         bx=mfi%growntilebox(this%nover)
+         ! Loop over valid cells
+         bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Only relax mixture cells
-            if (pVF(i,j,k,1).lt.VFlo.or.pVF(i,j,k,1).gt.VFhi) cycle
+
+            ! Check if mixture cell prior to relaxation
+            oldmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
             ! Apply user-provided relaxation model (modifies VF and Q)
             call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
+            ! Check if mixture cell after relaxation
+            newmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
+
+            ! If not mixture cells, clean up and cycle
+            if (.not.newmix) then
+               if (pVF(i,j,k,1).lt.VFlo) then
+                  ! Pure gas
+                  pVF(i,j,k,1)=0.0_WP
+                  pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pQ(i,j,k,1)=0.0_WP
+                  pQ(i,j,k,3)=0.0_WP
+                  pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,-1.0e10_WP]
+               else if (pVF(i,j,k,1).gt.VFhi) then
+                  ! Pure liquid
+                  pVF(i,j,k,1)=1.0_WP
+                  pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pQ(i,j,k,2)=0.0_WP
+                  pQ(i,j,k,4)=0.0_WP
+                  pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,+1.0e10_WP]
+               end if
+               cycle
+            end if
+
+            ! If mixture cell, post-process PLIC and barycenters
+            if (.not.oldmix) pPLIC(i,j,k,1:3)=[1.0_WP,0.0_WP,0.0_WP]
             ! Adjust PLIC plane to match new VF
             lo=[this%amr%xlo+real(i  ,WP)*dx,this%amr%ylo+real(j  ,WP)*dy,this%amr%zlo+real(k  ,WP)*dz]
             hi=[this%amr%xlo+real(i+1,WP)*dx,this%amr%ylo+real(j+1,WP)*dy,this%amr%zlo+real(k+1,WP)*dz]
@@ -2157,27 +2269,13 @@ contains
             pVF(i,j,k,1)=vol_liq/cell_vol
             pCL(i,j,k,1:3)=bary_liq
             pCG(i,j,k,1:3)=bary_gas
-            ! Ensure consistency with modified VF
-            if (pVF(i,j,k,1).lt.VFlo) then
-               ! Pure liquid
-               pVF(i,j,k,1)=0.0_WP
-               pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pQ(i,j,k,1)=0.0_WP
-               pQ(i,j,k,3)=0.0_WP
-               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,-1.0e10_WP]
-            else if (pVF(i,j,k,1).gt.VFhi) then
-               ! Pure gas
-               pVF(i,j,k,1)=1.0_WP
-               pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pQ(i,j,k,2)=0.0_WP
-               pQ(i,j,k,4)=0.0_WP
-               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,+1.0e10_WP]
-            end if
+
          end do; end do; end do
       end do
       call this%amr%mfiter_destroy(mfi)
+      ! Sync and apply BC
+      call this%fill(lvl=this%amr%maxlvl,time=time)
+      call this%Q%fill(time=time)
       ! End timer
       this%wt_relax=this%wt_relax+(MPI_Wtime()-t0)
    end subroutine apply_relax

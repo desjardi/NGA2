@@ -716,7 +716,7 @@ contains
       
       do n = 1, this%ntime
          write(basename,'(A,"_",I6.6,".vtp")') trim(srf_name), n
-         write(time_str,'(es17.10)') this%time(n)
+         write(time_str,'(g0.17)') this%time(n)
          write(iunit,'(a,a,a,a,a)') '    <DataSet timestep="', trim(adjustl(time_str)), &
             '" file="', trim(basename), '"/>'
       end do
