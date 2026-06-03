@@ -55,6 +55,10 @@ module simulation
    real(WP) :: Reynolds,visc_ratio    !< Viscosity 
    real(WP) :: Prandtl ,diff_ratio    !< Heat diffusivity
    real(WP) :: Weber                  !< Weber number
+
+   !> Drop disturbances
+   real(WP) :: dist_amp=0.005_WP      !< Disturbance amplitude
+   real(WP) :: dist_num=64.0_WP       !< Disturbance wavenumber
    
    !> Sutherland viscosity parameters: mu_g = (1+Suth_T)*T^Suth_n / (Re*(T+Suth_T))
    real(WP) :: Suth_n=1.5_WP          !< Sutherland exponent (1.0 for constant)
@@ -86,9 +90,21 @@ contains
    function sphere_levelset(xyz,t) result(G)
       real(WP), dimension(3), intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G
-      G=0.5_WP-sqrt((xyz(1)-x_drop)**2+xyz(2)**2+xyz(3)**2)
-      if (amr%nz.eq.1) G=0.5_WP-sqrt((xyz(1)-x_drop)**2+xyz(2)**2) ! Enable quasi-2D runs
+      !real(WP) :: G
+      !G=0.5_WP-sqrt((xyz(1)-x_drop)**2+xyz(2)**2+xyz(3)**2)
+      !if (amr%nz.eq.1) G=0.5_WP-sqrt((xyz(1)-x_drop)**2+xyz(2)**2) ! Enable quasi-2D runs
+      real(WP) :: G,r,theta,r_perturbed
+      ! Local angle in xy plane around drop center
+      theta=atan2(xyz(2),xyz(1)-x_drop)
+      ! Perturbed radius
+      r_perturbed=0.5_WP*(1.0_WP+dist_amp*cos(real(dist_num,WP)*theta))
+      ! Distance from drop center
+      if (amr%nz.eq.1) then
+         r=sqrt((xyz(1)-x_drop)**2+xyz(2)**2)
+      else
+         r=sqrt((xyz(1)-x_drop)**2+xyz(2)**2+xyz(3)**2)
+      end if
+      G=r_perturbed-r
    end function sphere_levelset
 
    !> Liquid EOS: P=f(RHO,I) - Stiffened gas
@@ -616,36 +632,42 @@ contains
          fs%relax=>P_relax_generalized
          ! Set initial conditions
          fs%user_init=>shockdrop_init
-         ! Read wall BC type
+
+         ! Gas inflow from x+
+         !fs%hi_bc(1)=BC_GAS
+         !fs%Q%hi_bc(1,:)=amrex_bc_ext_dir
+         !fs%U%hi_bc(1,:)=amrex_bc_ext_dir
+         !fs%V%hi_bc(1,:)=amrex_bc_ext_dir
+         !fs%W%hi_bc(1,:)=amrex_bc_ext_dir
+         !fs%user_bc=>shock_dirichlet
+
+         ! Neumann at x+
+         fs%hi_bc(1)=BC_REFLECT
+         fs%Q%hi_bc(1,:)=amrex_bc_foextrap
+         fs%U%hi_bc(1,:)=amrex_bc_foextrap
+         fs%V%hi_bc(1,:)=amrex_bc_foextrap
+         fs%W%hi_bc(1,:)=amrex_bc_foextrap
+
+         ! Wall BC at x- (90 degree contact)
+         fs%lo_bc(1)=BC_REFLECT
+         fs%Q%lo_bc(1,1:4)=amrex_bc_foextrap
+         fs%Q%lo_bc(1,5  )=amrex_bc_reflect_odd
+         fs%U%lo_bc(1,:)=amrex_bc_reflect_odd
+         ! Tangential momenta Q(6:7) and face velocities V, W at wall: slip vs no-slip
          call param_read('Wall BC',wall_bc_type,default='noslip')
-         ! Set BCs: x- is wall, x+ is gas inflow
-         if (.not.amr%xper) then
-            ! Gas inflow from x+
-            fs%hi_bc(1)=BC_GAS
-            fs%Q%hi_bc(1,:)=amrex_bc_ext_dir
-            fs%U%hi_bc(1,:)=amrex_bc_ext_dir
-            fs%V%hi_bc(1,:)=amrex_bc_ext_dir
-            fs%W%hi_bc(1,:)=amrex_bc_ext_dir
-            fs%user_bc=>shock_dirichlet
-            ! Wall BC at x- (90 degree contact)
-            fs%lo_bc(1)=BC_REFLECT
-            fs%Q%lo_bc(1,1:4)=amrex_bc_foextrap
-            fs%Q%lo_bc(1,5  )=amrex_bc_reflect_odd
-            fs%U%lo_bc(1,:)=amrex_bc_reflect_odd
-            ! Tangential momenta Q(6:7) and face velocities V, W at wall: slip vs no-slip
-            select case (trim(wall_bc_type))
-            case ('noslip')
-               fs%Q%lo_bc(1,6:7)=amrex_bc_reflect_odd
-               fs%V%lo_bc(1,:)  =amrex_bc_reflect_odd
-               fs%W%lo_bc(1,:)  =amrex_bc_reflect_odd
-            case ('slip')
-               fs%Q%lo_bc(1,6:7)=amrex_bc_foextrap
-               fs%V%lo_bc(1,:)  =amrex_bc_foextrap
-               fs%W%lo_bc(1,:)  =amrex_bc_foextrap
-            case default
-               call die('[simulation_init] Unknown Wall BC type: must be slip or noslip')
-            end select
-         end if
+         select case (trim(wall_bc_type))
+         case ('noslip')
+            fs%Q%lo_bc(1,6:7)=amrex_bc_reflect_odd
+            fs%V%lo_bc(1,:)  =amrex_bc_reflect_odd
+            fs%W%lo_bc(1,:)  =amrex_bc_reflect_odd
+         case ('slip')
+            fs%Q%lo_bc(1,6:7)=amrex_bc_foextrap
+            fs%V%lo_bc(1,:)  =amrex_bc_foextrap
+            fs%W%lo_bc(1,:)  =amrex_bc_foextrap
+         case default
+            call die('[simulation_init] Unknown Wall BC type: must be slip or noslip')
+         end select
+
       end block create_solver
 
       ! Initialize workspaces

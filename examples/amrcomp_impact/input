@@ -2,7 +2,7 @@
 Base nx:   32
 Base ny:   32
 Base nz:   1
-Max level: 6
+Max level: 7
 
 # Regridding parameters
 Regrid nsteps: 10
@@ -10,8 +10,8 @@ Tagging Re:    100
 Tagging Rho:   0.1
 
 # Geometry
-Drop location:  5
-Shock location: 4
+Drop location:  10
+Shock location: 9.4
 Domain length:  20
 Wall BC:        slip
 
@@ -61,11 +61,11 @@ Sutherland temperature: 0.073
 ###########################################
 
 # Time integration
-Max dt:   1e-3
+Max dt:   0.5e-3
 Max CFL:  0.75
 Max time: 15
 
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      !restart/impact_3.00000E+00
+Restart from:      !restart/impact_1.00000E+01

@@ -1,0 +1,3 @@
+f90sources += material_class.f90
+f90sources += ideal_gas_class.f90
+f90sources += stiffened_gas_class.f90
