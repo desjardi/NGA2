@@ -10,8 +10,9 @@ module material_class
    public :: material
 
    type, abstract :: material
-      character(len=str_medium) :: name = 'UNNAMED'
+      character(len=str_medium) :: name = 'UNNAMED_MATERIAL'
       integer :: ns = 1   !< Number of species (1 = pure substance)
+      character(len=str_medium), dimension(:), allocatable :: species_names   !< Per-species names (length ns)
    contains
       procedure(get_p_from_rho_e_iface),    deferred :: get_p_from_rho_e
       procedure(get_T_from_p_rho_iface),    deferred :: get_T_from_p_rho

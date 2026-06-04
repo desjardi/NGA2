@@ -48,6 +48,7 @@ contains
       this%qp    = qp
       this%ns    = 1
       if (present(name)) this%name=name
+      allocate(this%species_names(1)); this%species_names(1)=this%name
    end subroutine ig_initialize
 
    real(WP) function ig_get_p_from_rho_e(this,rho,e,y) result(p)
@@ -143,7 +144,7 @@ contains
 
    subroutine ig_finalize(this)
       class(ideal_gas), intent(inout) :: this
-      ! No allocatables to release for a pure-substance EOS; no-op.
+      if (allocated(this%species_names)) deallocate(this%species_names)
    end subroutine ig_finalize
 
    subroutine ig_print(this)
@@ -151,6 +152,7 @@ contains
       use string,   only: str_long
       class(ideal_gas), intent(in) :: this
       character(len=str_long) :: msg
+      integer :: n
       write(msg,'(a,a)')         '[material:ideal_gas] ',trim(this%name); call log(msg)
       write(msg,'(2x,a,es12.5)') 'gamma = ',this%gamma; call log(msg)
       write(msg,'(2x,a,es12.5)') 'cv    = ',this%cv;    call log(msg)
@@ -159,6 +161,9 @@ contains
       write(msg,'(2x,a,es12.5)') 'q     = ',this%q;     call log(msg)
       write(msg,'(2x,a,es12.5)') 'qp    = ',this%qp;    call log(msg)
       write(msg,'(2x,a,i0)')     'ns    = ',this%ns;    call log(msg)
+      do n=1,this%ns
+         write(msg,'(2x,a,i0,a,a)') 'species(',n,') = ',trim(this%species_names(n)); call log(msg)
+      end do
    end subroutine ig_print
 
 end module ideal_gas_class

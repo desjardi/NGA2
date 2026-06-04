@@ -51,6 +51,7 @@ contains
       this%qp    = qp
       this%ns    = 1
       if (present(name)) this%name=name
+      allocate(this%species_names(1)); this%species_names(1)=this%name
    end subroutine sg_initialize
 
    real(WP) function sg_get_p_from_rho_e(this,rho,e,y) result(p)
@@ -146,7 +147,7 @@ contains
 
    subroutine sg_finalize(this)
       class(stiffened_gas), intent(inout) :: this
-      ! No allocatables to release for a pure-substance EOS; no-op.
+      if (allocated(this%species_names)) deallocate(this%species_names)
    end subroutine sg_finalize
 
    subroutine sg_print(this)
@@ -154,6 +155,7 @@ contains
       use string,   only: str_long
       class(stiffened_gas), intent(in) :: this
       character(len=str_long) :: msg
+      integer :: n
       write(msg,'(a,a)')         '[material:stiffened_gas] ',trim(this%name); call log(msg)
       write(msg,'(2x,a,es12.5)') 'gamma = ',this%gamma; call log(msg)
       write(msg,'(2x,a,es12.5)') 'pinf  = ',this%pinf;  call log(msg)
@@ -163,6 +165,9 @@ contains
       write(msg,'(2x,a,es12.5)') 'q     = ',this%q;     call log(msg)
       write(msg,'(2x,a,es12.5)') 'qp    = ',this%qp;    call log(msg)
       write(msg,'(2x,a,i0)')     'ns    = ',this%ns;    call log(msg)
+      do n=1,this%ns
+         write(msg,'(2x,a,i0,a,a)') 'species(',n,') = ',trim(this%species_names(n)); call log(msg)
+      end do
    end subroutine sg_print
 
 end module stiffened_gas_class
