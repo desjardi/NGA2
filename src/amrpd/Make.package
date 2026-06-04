@@ -1,0 +1,5 @@
+f90EXE_sources += amrpd_hash_class.f90 amrpd_class.f90 amrpdviz_class.f90
+CEXE_sources   += amrpd_wrapper.cpp
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/amrpd
+VPATH_LOCATIONS   += $(NGA_HOME)/src/amrpd

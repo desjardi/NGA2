@@ -9,6 +9,12 @@ Regrid nsteps: 10
 Tagging Re:    100
 Tagging Rho:   0.1
 
+# Geometry
+Drop location:  10
+Shock location: 9.4
+Domain length:  20
+Wall BC:        slip
+
 ###########################################
 ##### CONDITIONS FOR PARZIALE Ms=5.12 #####
 ###########################################
@@ -17,7 +23,6 @@ GammaG: 1.3
 GammaL: 6.12
 # Shock parameters
 Gas Mach number: 1.95
-Shock location: -0.6
 # Liquid state
 Density ratio:      133.5
 Liquid Mach number: 1.0
@@ -55,19 +60,12 @@ Sutherland temperature: 0.073
 #Sutherland temperature: 0.2925
 ###########################################
 
-###########################################
-###### MOVING WALL MODEL FOR IMPACT #######
-###########################################
-#Wall location: -3.0
-#Wall velocity:  1.0
-###########################################
-
 # Time integration
 Max dt:   1e-3
 Max CFL:  0.75
-Max time: 100
+Max time: 15
 
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      !restart/drop_3.00000E+00
+Restart from:      !restart/impact_1.00000E+01
