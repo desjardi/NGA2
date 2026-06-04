@@ -29,8 +29,8 @@ module amrmpcomp_class
       class(material), pointer :: gas=>null()
 
       ! Species index ranges in Q
-      integer :: Yl_lo=0,Yl_hi=-1        !< Liquid species range: Q(:,:,:, Yl_lo : Yl_hi)
-      integer :: Yg_lo=0,Yg_hi=-1        !< Gas    species range: Q(:,:,:, Yg_lo : Yg_hi)
+      integer :: Yl_lo=0,Yl_hi=-1        !< Liquid species range: Q(:,:,:, Yl_lo:Yl_hi)
+      integer :: Yg_lo=0,Yg_hi=-1        !< Gas    species range: Q(:,:,:, Yg_lo:Yg_hi)
 
       ! Pointer to subroutine for mixture cell relaxation
       procedure(relax_iface), pointer, nopass :: relax=>null()

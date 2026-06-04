@@ -24,6 +24,9 @@ module amrcomp_class
       ! Working material
       class(material), pointer :: mat=>null()
 
+      ! Species index ranges in Q
+      integer :: Y_lo=0,Y_hi=-1          !< Species range in  Q(:,:,:,Y_lo:Y_hi)
+
       ! Pressure solver for pressure projection
       logical :: use_projection=.false.
       type(amrmg) :: psolver
@@ -36,6 +39,9 @@ module amrcomp_class
 
       ! Speed of sound
       type(amrdata) :: C
+
+      !> Species mass fractions (ns-1 components; only allocated when ns>1)
+      type(amrdata) :: Y
 
       ! Physical properties
       type(amrdata) :: visc              !< Dynamic viscosity
@@ -53,6 +59,7 @@ module amrcomp_class
       real(WP) :: Tmin=0.0_WP,Tmax=0.0_WP
       real(WP) :: Cmin=0.0_WP,Cmax=0.0_WP
       real(WP) :: rhoKint=0.0_WP
+      real(WP), dimension(:), allocatable :: Ymin,Ymax
 
       ! Minimum density for stability
       real(WP) :: rho_floor=1.0e-10_WP
@@ -223,8 +230,9 @@ contains
       ! Material should have been provided by the user before this call
       if (.not.associated(this%mat)) call die('[amrcomp initialize] mat must be assigned before initialize')
 
-      ! Initialize amrflow parent with 5 conserved components and at least 2 ghost cells
-      this%nQ=5; this%nover=max(this%nover,2)
+      ! Q layout: 5 base components + (ns-1) extra species
+      this%nQ=5+(this%mat%ns-1); this%nover=max(this%nover,2)
+      this%Y_lo=6; this%Y_hi=4+this%mat%ns
       call this%amrflow%initialize(amr=amr,name=name); call this%set_parent()
 
       ! Initialize primitive/derived variables
@@ -233,6 +241,12 @@ contains
       call this%P%initialize(amr,name='P',ncomp=1,ng=this%nover); this%P%parent=>this
       call this%T%initialize(amr,name='T',ncomp=1,ng=this%nover); this%T%parent=>this
       call this%C%initialize(amr,name='C',ncomp=1,ng=this%nover); this%C%parent=>this
+
+      ! Species mass fractions (only if more than 1 species)
+      if (this%mat%ns.gt.1) then
+         call this%Y%initialize(amr,name='Y',ncomp=this%mat%ns-1,ng=this%nover); this%Y%parent=>this
+         allocate(this%Ymin(this%mat%ns-1),this%Ymax(this%mat%ns-1)); this%Ymin=0.0_WP; this%Ymax=0.0_WP
+      end if
 
       ! Initialize physical properties (Neumann BCs on those)
       call this%visc%initialize(amr,name='visc',ncomp=1,ng=this%nover); this%visc%parent=>this
@@ -285,6 +299,9 @@ contains
       call this%visc%finalize()
       call this%beta%finalize()
       call this%diff%finalize()
+      if (this%mat%ns.gt.1) call this%Y%finalize()
+      if (allocated(this%Ymin)) deallocate(this%Ymin)
+      if (allocated(this%Ymax)) deallocate(this%Ymax)
       if (this%use_projection) call this%psolver%finalize()
       this%use_projection=.false.
       nullify(this%user_init)
@@ -317,6 +334,7 @@ contains
       call this%visc%reset_level(lvl,ba,dm)
       call this%beta%reset_level(lvl,ba,dm)
       call this%diff%reset_level(lvl,ba,dm)
+      if (this%mat%ns.gt.1) call this%Y%reset_level(lvl,ba,dm)
       ! Zero out
       call this%UVW%setval(val=0.0_WP,lvl=lvl)
       call this%I%setval(val=0.0_WP,lvl=lvl)
@@ -326,6 +344,7 @@ contains
       call this%visc%setval(val=0.0_WP,lvl=lvl)
       call this%beta%setval(val=0.0_WP,lvl=lvl)
       call this%diff%setval(val=0.0_WP,lvl=lvl)
+      if (this%mat%ns.gt.1) call this%Y%setval(val=0.0_WP,lvl=lvl)
    end subroutine on_init
 
    !> Override on_coarse: create new fine level from coarse using conservative interpolation
@@ -347,6 +366,7 @@ contains
       call this%visc%reset_level(lvl,ba,dm)
       call this%beta%reset_level(lvl,ba,dm)
       call this%diff%reset_level(lvl,ba,dm)
+      if (this%mat%ns.gt.1) call this%Y%reset_level(lvl,ba,dm)
    end subroutine on_coarse
 
    !> Override on_remake: migrate data on regrid using conservative interpolation
@@ -368,6 +388,7 @@ contains
       call this%visc%reset_level(lvl,ba,dm)
       call this%beta%reset_level(lvl,ba,dm)
       call this%diff%reset_level(lvl,ba,dm)
+      if (this%mat%ns.gt.1) call this%Y%reset_level(lvl,ba,dm)
    end subroutine on_remake
 
    !> Override on_clear: delete level
@@ -386,6 +407,7 @@ contains
       call this%visc%clear_level(lvl)
       call this%beta%clear_level(lvl)
       call this%diff%clear_level(lvl)
+      if (this%mat%ns.gt.1) call this%Y%clear_level(lvl)
    end subroutine on_clear
 
    !> Override post_regrid: average down for C/F consistency
@@ -696,10 +718,11 @@ contains
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pI,pP,pT,pC
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pI,pP,pT,pC,pY
       real(WP) :: irho
+      real(WP), dimension(this%mat%ns) :: y
       ! Check passed Q is as expected
-      if (Q%ncomp.ne.5) call die('[amrcomp get_primitive] Q must have 5 components')
+      if (Q%ncomp.ne.this%nQ) call die('[amrcomp get_primitive] Q has wrong number of components')
       if (Q%ng.lt.this%nover) call die('[amrcomp get_primitive] Q must have at least nover ghost cells')
       ! Loop over levels
       do lvl=0,this%amr%clvl()
@@ -712,6 +735,7 @@ contains
             pP=>this%P%mf(lvl)%dataptr(mfi)
             pT=>this%T%mf(lvl)%dataptr(mfi)
             pC=>this%C%mf(lvl)%dataptr(mfi)
+            if (this%mat%ns.gt.1) pY=>this%Y%mf(lvl)%dataptr(mfi)
             ! Loop over grown tiles
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
@@ -722,12 +746,18 @@ contains
                pUVW(i,j,k,3)=pQ(i,j,k,4)*irho
                ! Compute internal energy per unit mass
                pI(i,j,k,1)=pQ(i,j,k,5)*irho
+               ! Composition: cache first ns-1 species (clipped to [0,1]), close ns-th (clipped to [0,1])
+               if (this%mat%ns.gt.1) then
+                  pY(i,j,k,:)=max(0.0_WP,min(pQ(i,j,k,this%Y_lo:this%Y_hi)*irho,1.0_WP))
+                  y(1:this%mat%ns-1)=pY(i,j,k,:)
+               end if
+               y(this%mat%ns)=max(0.0_WP,1.0_WP-sum(y(1:this%mat%ns-1)))
                ! Compute pressure via EoS: P = P(rho, I)
-               pP(i,j,k,1)=this%mat%get_p_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=[1.0_WP])
+               pP(i,j,k,1)=this%mat%get_p_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=y)
                ! Compute speed of sound via EoS: C = C(rho, P)
-               pC(i,j,k,1)=this%mat%get_c_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=[1.0_WP])
+               pC(i,j,k,1)=this%mat%get_c_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=y)
                ! Compute temperature via EoS: T = T(rho, P)
-               pT(i,j,k,1)=this%mat%get_T_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=[1.0_WP])
+               pT(i,j,k,1)=this%mat%get_T_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=y)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -754,14 +784,14 @@ contains
       
       ! Compute fluxes for all levels
       compute_fluxes: block
-         integer :: lvl,i,j,k
+         integer :: lvl,i,j,k,n
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx
          real(WP) :: dxi,dyi,dzi,div,w
          real(WP), dimension(-2: 0) :: wenop
          real(WP), dimension(-1:+1) :: wenom
          real(WP), dimension(1:3,1:3) :: gradU
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pQ,pUVW,pI,pT,pVisc,pBeta,pDiff
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pQ,pUVW,pI,pT,pVisc,pBeta,pDiff,pY
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz
          real(WP), parameter :: eps=1.0e-15_WP
          ! Traverse levels
@@ -787,6 +817,7 @@ contains
                pFx=>Fx(lvl)%dataptr(mfi)
                pFy=>Fy(lvl)%dataptr(mfi)
                pFz=>Fz(lvl)%dataptr(mfi)
+               if (this%mat%ns.gt.1) pY=>this%Y%mf(lvl)%dataptr(mfi)
                ! X-fluxes
                fbx=mfi%nodaltilebox(1)
                do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
@@ -804,6 +835,13 @@ contains
                   w=weno_weight((abs(pI(i+1,j,k,1)-pI(i  ,j,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                   pFx(i,j,k,5)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pI(i-2:i  ,j,k,1)) &
                   &           +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pI(i-1:i+1,j,k,1))
+                  ! WENO species fluxes
+                  do n=1,this%mat%ns-1
+                     w=weno_weight((abs(pY(i-1,j,k,n)-pY(i-2,j,k,n))+eps)/(abs(pY(i,j,k,n)-pY(i-1,j,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                     w=weno_weight((abs(pY(i+1,j,k,n)-pY(i  ,j,k,n))+eps)/(abs(pY(i,j,k,n)-pY(i-1,j,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                     pFx(i,j,k,this%Y_lo+n-1)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pY(i-2:i  ,j,k,n)) &
+                     &                       +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pY(i-1:i+1,j,k,n))
+                  end do
                   ! Velocity gradients at x-face
                   gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -821,6 +859,10 @@ contains
                   pFx(i,j,k,4)=pFx(i,j,k,4)+0.5_WP*sum(pVisc(i-1:i,j,k,1))*(gradU(3,1)+gradU(1,3))
                   ! Heat diffusion flux
                   pFx(i,j,k,5)=pFx(i,j,k,5)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pT(i,j,k,1)-pT(i-1,j,k,1))
+                  ! Species diffusion flux (Le=1)
+                  do n=1,this%mat%ns-1
+                     pFx(i,j,k,this%Y_lo+n-1)=pFx(i,j,k,this%Y_lo+n-1)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pY(i,j,k,n)-pY(i-1,j,k,n))
+                  end do
                end do; end do; end do
                ! Y-fluxes
                fbx=mfi%nodaltilebox(2)
@@ -839,6 +881,13 @@ contains
                   w=weno_weight((abs(pI(i,j+1,k,1)-pI(i,j  ,k,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                   pFy(i,j,k,5)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pI(i,j-2:j  ,k,1)) &
                   &           +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pI(i,j-1:j+1,k,1))
+                  ! WENO species fluxes
+                  do n=1,this%mat%ns-1
+                     w=weno_weight((abs(pY(i,j-1,k,n)-pY(i,j-2,k,n))+eps)/(abs(pY(i,j,k,n)-pY(i,j-1,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                     w=weno_weight((abs(pY(i,j+1,k,n)-pY(i,j  ,k,n))+eps)/(abs(pY(i,j,k,n)-pY(i,j-1,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                     pFy(i,j,k,this%Y_lo+n-1)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pY(i,j-2:j  ,k,n)) &
+                     &                       +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pY(i,j-1:j+1,k,n))
+                  end do
                   ! Velocity gradients at y-face
                   gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
@@ -856,6 +905,10 @@ contains
                   pFy(i,j,k,4)=pFy(i,j,k,4)+0.5_WP*sum(pVisc(i,j-1:j,k,1))*(gradU(3,2)+gradU(2,3))
                   ! Heat diffusion flux
                   pFy(i,j,k,5)=pFy(i,j,k,5)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pT(i,j,k,1)-pT(i,j-1,k,1))
+                  ! Species diffusion flux (Le=1)
+                  do n=1,this%mat%ns-1
+                     pFy(i,j,k,this%Y_lo+n-1)=pFy(i,j,k,this%Y_lo+n-1)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pY(i,j,k,n)-pY(i,j-1,k,n))
+                  end do
                end do; end do; end do
                ! Z-fluxes
                fbx=mfi%nodaltilebox(3)
@@ -874,6 +927,13 @@ contains
                   w=weno_weight((abs(pI(i,j,k+1,1)-pI(i,j,k  ,1))+eps)/(abs(pI(i,j,k,1)-pI(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                   pFz(i,j,k,5)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pI(i,j,k-2:k  ,1)) &
                   &           +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pI(i,j,k-1:k+1,1))
+                  ! WENO species fluxes
+                  do n=1,this%mat%ns-1
+                     w=weno_weight((abs(pY(i,j,k-1,n)-pY(i,j,k-2,n))+eps)/(abs(pY(i,j,k,n)-pY(i,j,k-1,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                     w=weno_weight((abs(pY(i,j,k+1,n)-pY(i,j,k  ,n))+eps)/(abs(pY(i,j,k,n)-pY(i,j,k-1,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                     pFz(i,j,k,this%Y_lo+n-1)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pY(i,j,k-2:k  ,n)) &
+                     &                       +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pY(i,j,k-1:k+1,n))
+                  end do
                   ! Velocity gradients at z-face
                   gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
                   gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
@@ -891,6 +951,10 @@ contains
                   pFz(i,j,k,4)=pFz(i,j,k,4)+0.5_WP*sum(pVisc(i,j,k-1:k,1))*(gradU(3,3)+gradU(3,3))+0.5_WP*(sum(pBeta(i,j,k-1:k,1))-2.0_WP/3.0_WP*sum(pVisc(i,j,k-1:k,1)))*div
                   ! Heat diffusion flux
                   pFz(i,j,k,5)=pFz(i,j,k,5)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pT(i,j,k,1)-pT(i,j,k-1,1))
+                  ! Species diffusion flux (Le=1)
+                  do n=1,this%mat%ns-1
+                     pFz(i,j,k,this%Y_lo+n-1)=pFz(i,j,k,this%Y_lo+n-1)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pY(i,j,k,n)-pY(i,j,k-1,n))
+                  end do
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
@@ -1107,7 +1171,7 @@ contains
    subroutine get_info(this)
       implicit none
       class(amrcomp), intent(inout) :: this
-      integer :: lvl
+      integer :: lvl,n
 
       ! Use parent's method first
       call this%amrflow%get_info()
@@ -1117,6 +1181,7 @@ contains
       this%Pmin=huge(1.0_WP); this%Pmax=-huge(1.0_WP)
       this%Tmin=huge(1.0_WP); this%Tmax=-huge(1.0_WP)
       this%Cmin=huge(1.0_WP); this%Cmax=-huge(1.0_WP)
+      if (this%mat%ns.gt.1) then; this%Ymin=huge(1.0_WP); this%Ymax=-huge(1.0_WP); end if
       do lvl=0,this%amr%clvl()
          ! Velocity norm 0
          this%Umax=max(this%Umax,this%UVW%norm0(lvl=lvl,comp=1))
@@ -1128,6 +1193,11 @@ contains
          this%Tmin=min(this%Tmin,this%T%get_min(lvl=lvl)); this%Tmax=max(this%Tmax,this%T%get_max(lvl=lvl))
          ! Extrema of speed of sound
          this%Cmin=min(this%Cmin,this%C%get_min(lvl=lvl)); this%Cmax=max(this%Cmax,this%C%get_max(lvl=lvl))
+         ! Per-species extrema
+         do n=1,this%mat%ns-1
+            this%Ymin(n)=min(this%Ymin(n),this%Y%get_min(lvl=lvl,comp=n))
+            this%Ymax(n)=max(this%Ymax(n),this%Y%get_max(lvl=lvl,comp=n))
+         end do
       end do
 
       ! Kinetic energy integral: 0.5 * rho * (U^2 + V^2 + W^2) * dV
