@@ -1,14 +1,15 @@
 !> AMR compressible multiphase solver class
 !> Inherits from amrmpflow_class
 module amrmpcomp_class
-   use iso_c_binding,    only: c_ptr,c_loc,c_f_pointer
-   use precision,        only: WP
-   use amrdata_class,    only: amrdata
-   use amrmpflow_class,  only: amrmpflow
-   use amrmg_class,      only: amrmg
-   use amrvof_class,     only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
-   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
-   use material_class,   only: material
+   use iso_c_binding,     only: c_ptr,c_loc,c_f_pointer
+   use precision,         only: WP
+   use amrdata_class,     only: amrdata
+   use amrmpflow_class,   only: amrmpflow
+   use amrmg_class,       only: amrmg
+   use amrvof_class,      only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
+   use amrex_amr_module,  only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
+   use material_class,    only: material
+   use thermorelax_class, only: thermorelax
    implicit none
    private
 
@@ -32,8 +33,8 @@ module amrmpcomp_class
       integer :: Yl_lo=0,Yl_hi=-1        !< Liquid species range: Q(:,:,:, Yl_lo:Yl_hi)
       integer :: Yg_lo=0,Yg_hi=-1        !< Gas    species range: Q(:,:,:, Yg_lo:Yg_hi)
 
-      ! Pointer to subroutine for mixture cell relaxation
-      procedure(relax_iface), pointer, nopass :: relax=>null()
+      ! Thermodynamic relaxation model
+      class(thermorelax), pointer :: relax=>null()
 
       ! Pressure solver for pressure projection
       logical :: use_projection=.false.
@@ -176,16 +177,6 @@ module amrmpcomp_class
          type(amrex_box), intent(in) :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
       end subroutine mpcomp_vofbc_iface
-   end interface
-
-   !> Abstract interface for pressure relaxation callback
-   abstract interface
-      subroutine relax_iface(VF,Q,Pjump)
-         import :: WP
-         real(WP), intent(inout) :: VF
-         real(WP), dimension(:), intent(inout) :: Q
-         real(WP), intent(in) :: Pjump
-      end subroutine relax_iface
    end interface
 
 contains
@@ -2229,11 +2220,12 @@ contains
    end subroutine clean_Q
 
    !> Apply relaxation to mixture cells
-   subroutine apply_relax(this,time)
+   subroutine apply_relax(this,dt,time)
       use mpi_f08, only: MPI_Wtime
       use amrvof_geometry, only: get_plane_dist,cut_hex_vol
       implicit none
       class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: dt
       real(WP), intent(in) :: time
       integer :: lvl,i,j,k
       real(WP) :: t0
@@ -2271,7 +2263,7 @@ contains
             ! Check if mixture cell prior to relaxation
             oldmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
             ! Apply user-provided relaxation model (modifies VF and Q)
-            call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
+            call this%relax%apply(dt=dt,VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
             ! Check if mixture cell after relaxation
             newmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
 

@@ -12,6 +12,7 @@ module simulation
    use amrio_class,         only: amrio
    use stiffened_gas_class, only: stiffened_gas
    use ideal_gas_class,     only: ideal_gas
+   use my_relax_class,      only: my_relax
    implicit none
    private
    
@@ -45,6 +46,9 @@ module simulation
    !> Materials
    type(stiffened_gas), target :: water
    type(ideal_gas),     target :: air
+
+   !> Relaxation model
+   type(my_relax), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -108,109 +112,6 @@ contains
       end if
       G=r_perturbed-r
    end function sphere_levelset
-
-   !> Generalized mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL+Pjump=PG=Peq,
-   !> then adjusts VF and internal energies via p*dV work exchange.
-   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   !> Enforces pressure jump provided in Pjump
-   subroutine P_relax_generalized(VF,Q,Pjump)
-      use amrmpcomp_class, only: VFlo,VFhi
-      implicit none
-      real(WP), intent(inout) :: VF
-      real(WP), dimension(:), intent(inout) :: Q
-      real(WP), intent(in) :: Pjump
-      real(WP) :: PG,PL,ZG,ZL,Pint,cJ
-      real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
-      real(WP), parameter :: RHOGmin=1.0e-2_WP
-      real(WP), parameter :: phist=1.0_WP,phi0=0.0_WP   !< Temporal weighting, phist=1 should yield best results
-
-      ! Relaxation depends on mixture status
-      if (VF.ge.VFlo.and.VF.le.VFhi) then
-
-         ! =============== First step: mechanical relaxation ===============
-         ! Skip if any conserved quantity is non-positive (EOS undefined)
-         if (any(Q(1:4).le.0.0_WP)) return
-         ! Skip near-pure-liquid cells (gas density too low, we're forming a vacuum)
-         if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-         ! Get phasic pressures
-         PL=water%get_p_from_rho_e(rho=Q(1)/(       VF),e=Q(3)/Q(1),y=[1.0_WP])
-         PG=air%get_p_from_rho_e  (rho=Q(2)/(1.0_WP-VF),e=Q(4)/Q(2),y=[1.0_WP])
-         ! Get phasic impedances
-         ZL=Q(1)/(       VF)*water%get_c_from_p_rho(p=PL,rho=Q(1)/(       VF),y=[1.0_WP])**2
-         ZG=Q(2)/(1.0_WP-VF)*air%get_c_from_p_rho  (p=PG,rho=Q(2)/(1.0_WP-VF),y=[1.0_WP])**2
-         cJ=ZL/(ZG+ZL)
-         ! Calculate model interface pressure
-         Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
-         ! Setup quadratic problem (assumes ideal gas for gas phase, pinf_g = 0)
-         n1=VF*phist
-         n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3)
-         d1=phist+1.0_WP/(water%gamma-1.0_WP)
-         d0=phi0*Pint-phist*cJ*pjump+water%gamma/(water%gamma-1.0_WP)*water%pinf
-         a=d1*(1.0_WP/(air%gamma-1.0_WP)+phist*VF)+n1*(-1.0_WP/(air%gamma-1.0_WP)-phist)
-         b=d1*(-pjump/(air%gamma-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(pjump/(air%gamma-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(air%gamma-1.0_WP)+phist*VF)+n0*(-1.0_WP/(air%gamma-1.0_WP)-phist)
-         d=d0*(-pjump/(air%gamma-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(pjump/(air%gamma-1.0_WP)-phi0*Pint+phist*cJ*pjump)
-         ! Get equilibrium pressure
-         if (b**2-4.0_WP*a*d.lt.0.0_WP) return
-         Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-         ! Check if pressure is sound
-         if (Peq.le.-water%pinf.or.Peq-Pjump.le.0.0_WP) return
-         ! Get equilibrium volume fraction
-         VFeq=(n1*Peq+n0)/(d1*Peq+d0)
-         if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
-         ! Adjust conserved quantities
-         Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
-         Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
-         VF=VFeq
-
-         ! ================ Second step: thermal relaxation ================
-         !a=Q(1)*water%cv+Q(2)*air%cv
-         !b=Q(1)*water%cv*water%gamma*water%pinf+Q(2)*air%cv*water%pinf-sum(Q(3:4))*(Q(1)*water%cv*(water%gamma-1.0_WP)+Q(2)*air%cv*(air%gamma-1.0_WP))
-         !d=-sum(Q(3:4))*Q(2)*air%cv*(air%gamma-1.0_WP)*water%pinf
-         ! Get equilibrium pressure
-         !if (b**2-4.0_WP*a*d.lt.0.0_WP) return
-         !Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-         ! Check if pressure is sound
-         !if (Peq.le.max(0.0_WP,-water%pinf)) return
-         ! Get equilibrium volume fraction
-         !VFeq=Q(1)*water%cv*(water%gamma-1.0_WP)*Peq/(Q(1)*water%cv*(water%gamma-1.0_WP)*Peq+Q(2)*air%cv*(air%gamma-1.0_WP)*(Peq+water%pinf))
-         ! Clean up solution
-         !if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-water%pinf); end if
-         !if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,0.0_WP); end if
-         ! Adjust conserved quantities
-         !Q(3)=(       VFeq)*(Peq+water%gamma*water%pinf)/(water%gamma-1.0_WP)
-         !Q(4)=(1.0_WP-VFeq)*Peq/(air%gamma-1.0_WP)
-         !VF=VFeq
-
-         ! ========== Naive model for air dissolution into water ===========
-         if (Peq.gt.200.0_WP) then
-            print*,'Warning: Pressure relaxation hit upper limit, applying naive model for air dissolution into water'
-            Q(1)=Q(1)*1.0_WP/VF
-            Q(2)=0.0_WP
-            Q(3)=Q(3)*1.0_WP/VF
-            Q(4)=0.0_WP
-            VF=1.0_WP
-            return
-         end if
-
-      else if (VF.gt.VFhi) then
-
-         ! =============== Cavitation check ===============
-         ! Pure liquid: need liquid quantities valid
-         if (Q(1).le.0.0_WP.or.Q(3).le.0.0_WP) return
-         ! Get liquid pressure
-         PL=water%get_p_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=[1.0_WP])
-         ! Check for cavitation
-         if (PL.lt.-0.9_WP*water%pinf) then
-            print*,'Warning: cavitation detected, injecting energy'
-            Q(3)=VF*((-0.9_WP*water%pinf)+water%gamma*water%pinf)/(water%gamma-1.0_WP)
-         end if
-
-      else
-         ! No pure gas relaxation model
-      end if
-
-   end subroutine P_relax_generalized
 
    !> Compute viscosity: Sutherland for gas, VF-weighted blend with liquid
    subroutine get_viscosities()
@@ -584,7 +485,7 @@ contains
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
-         fs%relax=>P_relax_generalized
+         call relax_model%initialize(gas=air,liq=water); fs%relax=>relax_model
          ! Set initial conditions
          fs%user_init=>shockdrop_init
 
@@ -692,6 +593,8 @@ contains
          call viz%add_scalar(fs%RHOG,1,'RHOG')
          call viz%add_scalar(fs%PL,1,'PL')
          call viz%add_scalar(fs%PG,1,'PG')
+         call viz%add_scalar(fs%TL,1,'TL')
+         call viz%add_scalar(fs%TG,1,'TG')
          call viz%add_scalar(fs%UVW,1,'U')
          call viz%add_scalar(fs%UVW,2,'V')
          call viz%add_scalar(fs%UVW,3,'W')
@@ -723,13 +626,14 @@ contains
          call mfile%add_column(fs%RHOLmax,'rhoLmax')
          call mfile%add_column(fs%PLmin,'PLmin')
          call mfile%add_column(fs%PLmax,'PLmax')
+         call mfile%add_column(fs%TLmin,'TLmin')
+         call mfile%add_column(fs%TLmax,'TLmax')
          call mfile%add_column(fs%RHOGmin,'rhoGmin')
          call mfile%add_column(fs%RHOGmax,'rhoGmax')
          call mfile%add_column(fs%PGmin,'PGmin')
          call mfile%add_column(fs%PGmax,'PGmax')
-         call mfile%add_column(fs%VFmin,'VFmin')
-         call mfile%add_column(fs%VFmax,'VFmax')
-         call mfile%add_column(fs%VFint,'VFint')
+         call mfile%add_column(fs%TGmin,'TGmin')
+         call mfile%add_column(fs%TGmax,'TGmax')
          call mfile%add_column(fs%dPmax,'dPmax')
          call mfile%write()
          ! Create CFL monitor
@@ -752,6 +656,7 @@ contains
          consfile=monitor(amRoot=amr%amRoot,name='conservation')
          call consfile%add_column(time%n,'Timestep number')
          call consfile%add_column(time%t,'Time')
+         call consfile%add_column(fs%VFint,'VFint')
          call consfile%add_column(fs%Qint(1),'Liquid Mass')
          call consfile%add_column(fs%Qint(2),'Gas Mass')
          call consfile%add_column(fs%Qint(3),'Liquid IntEnergy')
@@ -825,7 +730,7 @@ contains
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
          ! Get most up-to-date pressure
-         call fs%apply_relax(time=time%tmid)
+         call fs%apply_relax(dt=0.5_WP*time%dt,time=time%tmid)
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
@@ -848,7 +753,7 @@ contains
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
          ! Get most up-to-date pressure
-         call fs%apply_relax(time=time%t)
+         call fs%apply_relax(dt=time%dt,time=time%t)
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()

@@ -68,4 +68,4 @@ Max time: 15
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      !restart/impact_1.00000E+01
+Restart from:      restart/impact_1.00000E+01
