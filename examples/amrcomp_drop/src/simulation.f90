@@ -1,15 +1,17 @@
 !> AMR compressible drop test case
 module simulation
-   use precision,         only: WP
-   use string,            only: str_medium
-   use amrgrid_class,     only: amrgrid
-   use amrmpcomp_class,   only: amrmpcomp
-   use amrviz_class,      only: amrviz
-   use amrdata_class,     only: amrdata
-   use timetracker_class, only: timetracker
-   use event_class,       only: event
-   use monitor_class,     only: monitor
-   use amrio_class,       only: amrio
+   use precision,           only: WP
+   use string,              only: str_medium
+   use amrgrid_class,       only: amrgrid
+   use amrmpcomp_class,     only: amrmpcomp
+   use amrviz_class,        only: amrviz
+   use amrdata_class,       only: amrdata
+   use timetracker_class,   only: timetracker
+   use event_class,         only: event
+   use monitor_class,       only: monitor
+   use amrio_class,         only: amrio
+   use stiffened_gas_class, only: stiffened_gas
+   use ideal_gas_class,     only: ideal_gas
    implicit none
    private
    
@@ -40,9 +42,9 @@ module simulation
    !> Simulation monitoring
    type(monitor) :: mfile,consfile,cflfile,gridfile,tfile
    
-   !> Stiffened gas EOS parameters (liquid and gas)
-   real(WP) :: GammaL,PinfL,CvL
-   real(WP) :: GammaG,PinfG,CvG
+   !> Materials
+   type(stiffened_gas), target :: water
+   type(ideal_gas),     target :: air
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -89,61 +91,12 @@ contains
       if (amr%nz.eq.1) G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2) ! Enable quasi-2D runs
    end function sphere_levelset
 
-   !> Liquid EOS: P=f(RHO,I) - Stiffened gas
-   pure real(WP) function get_PL(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_PL=RHO*I*(GammaL-1.0_WP)-GammaL*PinfL
-   end function get_PL
-   !> Liquid EOS: T=f(RHO,P)
-   pure real(WP) function get_TL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_TL=(P+PinfL)/(CvL*RHO*(GammaL-1.0_WP))
-   end function get_TL
-   !> Liquid EOS: C=f(RHO,P)
-   pure real(WP) function get_CL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_CL=sqrt(max(0.0_WP,GammaL*(P+PinfL)/RHO))
-   end function get_CL
-   !> Liquid EOS: I=f(RHO,P) (used for initialization)
-   pure real(WP) function get_IL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_IL=(P+GammaL*PinfL)/(RHO*(GammaL-1.0_WP))
-   end function get_IL
-
-   !> Gas EOS: P=f(RHO,I) - Ideal gas
-   pure real(WP) function get_PG(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_PG=RHO*I*(GammaG-1.0_WP)-GammaG*PinfG
-   end function get_PG
-   !> Gas EOS: T=f(RHO,P)
-   pure real(WP) function get_TG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_TG=(P+PinfG)/(CvG*RHO*(GammaG-1.0_WP))
-   end function get_TG
-   !> Gas EOS: C=f(RHO,P)
-   pure real(WP) function get_CG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_CG=sqrt(max(0.0_WP,GammaG*(P+PinfG)/RHO))
-   end function get_CG
-   !> Gas EOS: I=f(RHO,P) (used for initialization)
-   pure real(WP) function get_IG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_IG=(P+GammaG*PinfG)/(RHO*(GammaG-1.0_WP))
-   end function get_IG
-
-   !> Generalized mechanical relaxation for stiffened gas EOS pair
+   !> Generalized mechanical relaxation for stiffened-gas/ideal-gas pair.
    !> Solves quadratic for equilibrium pressure Peq where PL+Pjump=PG=Peq,
    !> then adjusts VF and internal energies via p*dV work exchange.
-   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   !> Enforces pressure jump provided in Pjump
+   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7).
+   !> Enforces pressure jump provided in Pjump.
+   !> Assumes gas is ideal (pinf_g = 0) — terms with pinf_g are dropped.
    subroutine P_relax_generalized(VF,Q,Pjump)
       use amrmpcomp_class, only: VFlo,VFhi
       implicit none
@@ -159,27 +112,27 @@ contains
       ! Skip near-pure-liquid cells (gas density too low)
       if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
       ! Get phasic pressures
-      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
-      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
+      PL=water%get_p_from_rho_e(rho=Q(1)/(       VF),e=Q(3)/Q(1),y=[1.0_WP])
+      PG=air%get_p_from_rho_e  (rho=Q(2)/(1.0_WP-VF),e=Q(4)/Q(2),y=[1.0_WP])
       ! Get phasic impedances
-      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
-      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
+      ZL=Q(1)/(       VF)*water%get_c_from_p_rho(p=PL,rho=Q(1)/(       VF),y=[1.0_WP])**2
+      ZG=Q(2)/(1.0_WP-VF)*air%get_c_from_p_rho  (p=PG,rho=Q(2)/(1.0_WP-VF),y=[1.0_WP])**2
       cJ=ZL/(ZG+ZL)
       ! Calculate model interface pressure
       Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
       ! Setup quadratic problem
       n1=VF*phist
-      n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3) 
-      d1=phist+1.0_WP/(GammaL-1.0_WP)
-      d0=phi0*Pint-phist*cJ*pjump+GammaL/(GammaL-1.0_WP)*PinfL
-      a=d1*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n1*(-1.0_WP/(GammaG-1.0_WP)-phist)
-      b=d1*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n0*(-1.0_WP/(GammaG-1.0_WP)-phist)
-      d=d0*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)
+      n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3)
+      d1=phist+1.0_WP/(water%gamma-1.0_WP)
+      d0=phi0*Pint-phist*cJ*pjump+water%gamma/(water%gamma-1.0_WP)*water%pinf
+      a=d1*(1.0_WP/(air%gamma-1.0_WP)+phist*VF)+n1*(-1.0_WP/(air%gamma-1.0_WP)-phist)
+      b=d1*(-pjump/(air%gamma-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(pjump/(air%gamma-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(air%gamma-1.0_WP)+phist*VF)+n0*(-1.0_WP/(air%gamma-1.0_WP)-phist)
+      d=d0*(-pjump/(air%gamma-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(pjump/(air%gamma-1.0_WP)-phi0*Pint+phist*cJ*pjump)
       ! Get equilibrium pressure
       if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Check if pressure is sound
-      if (Peq.le.-PinfL.or.Peq-Pjump.le.-PinfG) return
+      if (Peq.le.-water%pinf.or.Peq-Pjump.le.0.0_WP) return
       ! Get equilibrium volume fraction
       VFeq=(n1*Peq+n0)/(d1*Peq+d0)
       if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
@@ -189,22 +142,22 @@ contains
       VF=VFeq
 
       ! ================ Second step: thermal relaxation ================
-      !a=Q(1)*CvL+Q(2)*CvG
-      !b=Q(1)*CvL*(GammaL*PinfL+PinfG)+Q(2)*CvG*(GammaG*PinfG+PinfL)-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)+Q(2)*CvG*(GammaG-1.0_WP))
-      !d=(Q(1)*CvL*GammaL+Q(2)*CvG*GammaG)*PinfL*PinfG-sum(Q(3:4))*(Q(1)*CvL*(GammaL-1.0_WP)*PinfG+Q(2)*CvG*(GammaG-1.0_WP)*PinfL)
+      !a=Q(1)*water%cv+Q(2)*air%cv
+      !b=Q(1)*water%cv*water%gamma*water%pinf+Q(2)*air%cv*water%pinf-sum(Q(3:4))*(Q(1)*water%cv*(water%gamma-1.0_WP)+Q(2)*air%cv*(air%gamma-1.0_WP))
+      !d=-sum(Q(3:4))*Q(2)*air%cv*(air%gamma-1.0_WP)*water%pinf
       ! Get equilibrium pressure
       !if (b**2-4.0_WP*a*d.lt.0.0_WP) return
       !Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Check if pressure is sound
-      !if (Peq.le.max(-PinfG,-PinfL)) return
+      !if (Peq.le.max(0.0_WP,-water%pinf)) return
       ! Get equilibrium volume fraction
-      !VFeq=Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)/(Q(1)*CvL*(GammaL-1.0_WP)*(Peq+PinfG)+Q(2)*CvG*(GammaG-1.0_WP)*(Peq+PinfL))
+      !VFeq=Q(1)*water%cv*(water%gamma-1.0_WP)*Peq/(Q(1)*water%cv*(water%gamma-1.0_WP)*Peq+Q(2)*air%cv*(air%gamma-1.0_WP)*(Peq+water%pinf))
       ! Clean up solution
-      !if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-PinfL); end if
-      !if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,-PinfG); end if
+      !if (VFeq.lt.0.0_WP) then; VFeq=0.0_WP; Peq=max(Peq,-water%pinf); end if
+      !if (VFeq.gt.1.0_WP) then; VFeq=1.0_WP; Peq=max(Peq,0.0_WP); end if
       ! Adjust conserved quantities
-      !Q(3)=(       VFeq)*(Peq+GammaL*PinfL)/(GammaL-1.0_WP)
-      !Q(4)=(1.0_WP-VFeq)*(Peq+GammaG*PinfG)/(GammaG-1.0_WP)
+      !Q(3)=(       VFeq)*(Peq+water%gamma*water%pinf)/(water%gamma-1.0_WP)
+      !Q(4)=(1.0_WP-VFeq)*Peq/(air%gamma-1.0_WP)
       !VF=VFeq
 
    end subroutine P_relax_generalized
@@ -252,9 +205,9 @@ contains
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Gas heat diffusivity: k=Cv*Gamma*mu/Pr
-               k_g=GammaG*CvG*mu_g/Prandtl
+               k_g=air%gamma*air%cv*mu_g/Prandtl
                ! Liquid heat diffusivity from ratio
-               k_l=diff_ratio*GammaG*CvG/(Reynolds*Prandtl)
+               k_l=diff_ratio*air%gamma*air%cv/(Reynolds*Prandtl)
                ! Mixture diffusivity
                !pDiff(i,j,k,1)=pVF(i,j,k,1)*k_l+(1.0_WP-pVF(i,j,k,1))*k_g ! Arithmetic averaging
                pDiff(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(k_l,myeps)+(1.0_WP-pVF(i,j,k,1))/max(k_g,myeps)) ! Harmonic averaging
@@ -294,7 +247,7 @@ contains
       ! Get mesh size
       dx=solver%amr%dx(lvl); dy=solver%amr%dy(lvl); dz=solver%amr%dz(lvl)
       ! Get internal energy of liquid
-      IEL=get_IL(rhoL1,pL1)
+      IEL=water%get_e_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP])
       ! Use passed ba/dm since grid is being constructed
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
       do while (mfi%next())
@@ -329,7 +282,7 @@ contains
             pQ(i,j,k,1)=(       myVF)*rhoL1
             pQ(i,j,k,2)=(1.0_WP-myVF)*rhoG
             pQ(i,j,k,3)=pQ(i,j,k,1)*IEL
-            pQ(i,j,k,4)=pQ(i,j,k,2)*get_IG(rhoG,pG)
+            pQ(i,j,k,4)=pQ(i,j,k,2)*air%get_e_from_p_rho(p=pG,rho=rhoG,y=[1.0_WP])
             pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*uG
             pQ(i,j,k,6)=0.0_WP
             pQ(i,j,k,7)=0.0_WP
@@ -365,7 +318,7 @@ contains
                p(i,j,k,1)=0.0_WP                  ! No liquid
                p(i,j,k,2)=rhoG2                   ! Gas density
                p(i,j,k,3)=0.0_WP                  ! No liquid energy
-               p(i,j,k,4)=rhoG2*get_IG(rhoG2,pG2) ! Gas internal energy
+               p(i,j,k,4)=rhoG2*air%get_e_from_p_rho(p=pG2,rho=rhoG2,y=[1.0_WP]) ! Gas internal energy
                p(i,j,k,5)=rhoG2*u2                ! X-momentum
                p(i,j,k,6)=0.0_WP
                p(i,j,k,7)=0.0_WP
@@ -508,9 +461,11 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
-         ! Gas EoS parameters (ideal gas = stiffened gas with Pinf=0)
+         real(WP) :: GammaL,PinfL,CvL
+         real(WP) :: GammaG,CvG
+         real(WP) :: T_G
+         ! Gas EoS parameters (ideal gas)
          call param_read('GammaG',GammaG)
-         PinfG=0.0_WP
          ! Liquid EoS: gamma only, PinfL is computed below
          call param_read('GammaL',GammaL)
          ! Shock parameters (gas phase, uses GammaG)
@@ -545,7 +500,12 @@ contains
          pL1=pG1+4.0_WP/Weber                   ! Force pressure equilibrium, accounting for 3D Laplace pressure
          if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! Force pressure equilibrium, accounting for 2D Laplace pressure
          PinfL=rhoL1/(GammaL*ML**2)-pL1
-         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*get_TG(rhoG1,pG1)) ! Force thermal equilibrium
+         ! Pre-shock gas temperature (ideal gas, T = p/((gamma-1)*Cv*rho))
+         T_G=pG1/(rhoG1*(GammaG-1.0_WP)*CvG)
+         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*T_G) ! Force thermal equilibrium
+         ! Build materials
+         call air%initialize  (gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='air')
+         call water%initialize(gamma=GammaL,pinf=PinfL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -559,8 +519,7 @@ contains
          write(message,'("[Pre-shock]  rhoG1=",es12.5," pG1=",es12.5)') rhoG1,pG1; call log(message)
          write(message,'("[Post-shock] rhoG2=",es12.5," pG2=",es12.5)') rhoG2,pG2; call log(message)
          write(message,'("[Liquid] rhoL1=",es12.5," pL1=",es12.5," ML=",es12.5)') rhoL1,pL1,ML; call log(message)
-         write(message,'("[Liquid] GammaL=",es12.5," PinfL=",es12.5," CvL=",es12.5)') GammaL,PinfL,CvL; call log(message)
-         write(message,'("[Gas]    GammaG=",es12.5," PinfG=",es12.5," CvG=",es12.5)') GammaG,PinfG,CvG; call log(message)
+         call water%print(); call air%print()
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
          write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
       end block init_eos_and_flow
@@ -595,15 +554,12 @@ contains
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrmpcomp_class,  only: BC_GAS
          use amrdata_class,    only: interp_face_lin
-         ! Create flow solver
-         call fs%initialize(amr=amr,name='drop')
+         ! Assign materials and create flow solver
+         fs%liq=>water; fs%gas=>air; call fs%initialize(amr=amr,name='drop')
          ! Set surface tension coefficient
          fs%sigma=1.0_WP/Weber
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
-         ! Provide thermodynamic model (6 EOS pointers)
-         fs%getPL=>get_PL; fs%getCL=>get_CL; fs%getTL=>get_TL
-         fs%getPG=>get_PG; fs%getCG=>get_CG; fs%getTG=>get_TG
          ! Provide pressure relaxation model
          fs%relax=>P_relax_generalized
          ! Set initial conditions
@@ -999,6 +955,9 @@ contains
       call Umag%finalize()
       call Mach%finalize()
       call IBw%finalize()
+      ! Finalize materials
+      call water%finalize()
+      call air%finalize()
       ! Finalize visualization
       call viz%finalize()
       call viz_evt%finalize()

@@ -27,6 +27,7 @@ module material_class
       procedure(get_rhoe_from_p_rho_iface), deferred :: get_rhoe_from_p_rho
       procedure(get_rhoe_from_p_T_iface),   deferred :: get_rhoe_from_p_T
       procedure(print_iface),               deferred :: print
+      procedure(finalize_iface),            deferred :: finalize
    end type material
 
    abstract interface
@@ -125,6 +126,11 @@ module material_class
          import :: material
          class(material), intent(in) :: this
       end subroutine print_iface
+
+      subroutine finalize_iface(this)
+         import :: material
+         class(material), intent(inout) :: this
+      end subroutine finalize_iface
    end interface
 
 end module material_class

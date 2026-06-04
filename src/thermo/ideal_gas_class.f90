@@ -31,6 +31,7 @@ module ideal_gas_class
       procedure :: get_rhoe_from_p_rho     => ig_get_rhoe_from_p_rho
       procedure :: get_rhoe_from_p_T       => ig_get_rhoe_from_p_T
       procedure :: print                   => ig_print
+      procedure :: finalize                => ig_finalize
    end type ideal_gas
 
 contains
@@ -139,6 +140,11 @@ contains
       real(WP), dimension(:), intent(in) :: y
       rhoe = p*(this%cv*T+this%q)/(this%R*T)
    end function ig_get_rhoe_from_p_T
+
+   subroutine ig_finalize(this)
+      class(ideal_gas), intent(inout) :: this
+      ! No allocatables to release for a pure-substance EOS; no-op.
+   end subroutine ig_finalize
 
    subroutine ig_print(this)
       use messager, only: log

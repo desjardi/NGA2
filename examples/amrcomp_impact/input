@@ -2,7 +2,7 @@
 Base nx:   32
 Base ny:   32
 Base nz:   1
-Max level: 7
+Max level: 6
 
 # Regridding parameters
 Regrid nsteps: 10
@@ -61,7 +61,7 @@ Sutherland temperature: 0.073
 ###########################################
 
 # Time integration
-Max dt:   0.5e-3
+Max dt:   1e-3
 Max CFL:  0.75
 Max time: 15
 

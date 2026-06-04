@@ -33,6 +33,7 @@ module stiffened_gas_class
       procedure :: get_rhoe_from_p_rho     => sg_get_rhoe_from_p_rho
       procedure :: get_rhoe_from_p_T       => sg_get_rhoe_from_p_T
       procedure :: print                   => sg_print
+      procedure :: finalize                => sg_finalize
    end type stiffened_gas
 
 contains
@@ -142,6 +143,11 @@ contains
       real(WP), dimension(:), intent(in) :: y
       rhoe = ((p+this%gamma*this%pinf)*this%cv*T+this%q*(p+this%pinf))/(this%R*T)
    end function sg_get_rhoe_from_p_T
+
+   subroutine sg_finalize(this)
+      class(stiffened_gas), intent(inout) :: this
+      ! No allocatables to release for a pure-substance EOS; no-op.
+   end subroutine sg_finalize
 
    subroutine sg_print(this)
       use messager, only: log

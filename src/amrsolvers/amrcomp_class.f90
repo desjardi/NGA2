@@ -77,7 +77,6 @@ module amrcomp_class
       procedure :: prepare_psolver           !< Prepare Helmholtz pressure solver
       ! Physics
       procedure :: get_primitive             !< Get primitive variables from conserved variables
-      procedure :: get_conserved             !< Get conserved variables from primitive variables
       procedure :: get_dQdt                  !< Compute conserved variable time derivative
       procedure :: add_viscartif             !< Add localized artificial diffusivity
       procedure :: add_vreman                !< Add Vreman SGS eddy viscosity
@@ -764,32 +763,6 @@ contains
          call this%amr%mfiter_destroy(mfi)
       end do
    end subroutine get_primitive
-
-   !> Calculate conserved variables from primitive variables
-   subroutine get_conserved(this)
-      implicit none
-      class(amrcomp), intent(inout) :: this
-      integer :: lvl,i,j,k
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pI
-      do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            bx=mfi%growntilebox(this%nover)
-            pQ=>this%Q%mf(lvl)%dataptr(mfi)
-            pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
-            pI=>this%I%mf(lvl)%dataptr(mfi)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pQ(i,j,k,2)=pQ(i,j,k,1)*pUVW(i,j,k,1)
-               pQ(i,j,k,3)=pQ(i,j,k,1)*pUVW(i,j,k,2)
-               pQ(i,j,k,4)=pQ(i,j,k,1)*pUVW(i,j,k,3)
-               pQ(i,j,k,5)=pQ(i,j,k,1)*pI(i,j,k,1)
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-      end do
-   end subroutine get_conserved
 
    !> Calculate dQdt from passed Q without pressure term (user can add it via add_pressure)
    subroutine get_dQdt(this,dQdt)
