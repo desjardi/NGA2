@@ -5,6 +5,7 @@ module amrcomp_class
    use amrdata_class,    only: amrdata
    use amrflow_class,    only: amrflow
    use amrmg_class,      only: amrmg
+   use material_class,   only: material
    use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
    implicit none
    private
@@ -20,10 +21,8 @@ module amrcomp_class
       procedure(comp_tagging_iface), pointer, pass :: user_tagging=>null()  !< User-defined tagging
       procedure(comp_bc_iface),      pointer, pass :: user_bc     =>null()  !< User-defined boundary conditions
 
-      ! Equation of state function pointers: P=P(rho,I), C=C(rho,P), T=T(rho,P)
-      procedure(eos_P_iface), pointer, nopass :: getP=>null()
-      procedure(eos_C_iface), pointer, nopass :: getC=>null()
-      procedure(eos_T_iface), pointer, nopass :: getT=>null()
+      ! Working material
+      class(material), pointer :: mat=>null()
 
       ! Pressure solver for pressure projection
       logical :: use_projection=.false.
@@ -127,33 +126,6 @@ module amrcomp_class
       end subroutine comp_bc_iface
    end interface
 
-   !> Abstract interface for EoS: P=P(rho,I)
-   abstract interface
-      pure real(WP) function eos_P_iface(rho,I)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: I
-      end function eos_P_iface
-   end interface
-
-   !> Abstract interface for EoS: C=C(rho,P)
-   abstract interface
-      pure real(WP) function eos_C_iface(rho,P)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: P
-      end function eos_C_iface
-   end interface
-
-   !> Abstract interface for EoS: T=T(rho,P)
-   abstract interface
-      pure real(WP) function eos_T_iface(rho,P)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: P
-      end function eos_T_iface
-   end interface
-
 contains
 
    ! ============================================================================
@@ -242,10 +214,14 @@ contains
       use amrex_amr_module, only: amrex_bc_foextrap
       use amrmg_class,      only: amrmg_varcoef
       use amrgrid_class,    only: amrgrid
+      use messager,         only: die
       implicit none
       class(amrcomp), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
+
+      ! Material should have been provided by the user before this call
+      if (.not.associated(this%mat)) call die('[amrcomp initialize] mat must be assigned before initialize')
 
       ! Initialize amrflow parent with 5 conserved components and at least 2 ghost cells
       this%nQ=5; this%nover=max(this%nover,2)
@@ -314,9 +290,7 @@ contains
       nullify(this%user_init)
       nullify(this%user_tagging)
       nullify(this%user_bc)
-      nullify(this%getP)
-      nullify(this%getC)
-      nullify(this%getT)
+      nullify(this%mat)
       call this%amrflow%finalize()
    end subroutine finalize
 
@@ -727,10 +701,6 @@ contains
       ! Check passed Q is as expected
       if (Q%ncomp.ne.5) call die('[amrcomp get_primitive] Q must have 5 components')
       if (Q%ng.lt.this%nover) call die('[amrcomp get_primitive] Q must have at least nover ghost cells')
-      ! Check EoS functions are set
-      if (.not.associated(this%getP)) call die('[amrcomp get_primitive] getP not set')
-      if (.not.associated(this%getC)) call die('[amrcomp get_primitive] getC not set')
-      if (.not.associated(this%getT)) call die('[amrcomp get_primitive] getT not set')
       ! Loop over levels
       do lvl=0,this%amr%clvl()
          call this%amr%mfiter_build(lvl,mfi)
@@ -753,11 +723,11 @@ contains
                ! Compute internal energy per unit mass
                pI(i,j,k,1)=pQ(i,j,k,5)*irho
                ! Compute pressure via EoS: P = P(rho, I)
-               pP(i,j,k,1)=this%getP(rho=pQ(i,j,k,1),I=pI(i,j,k,1))
+               pP(i,j,k,1)=this%mat%get_p_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=[1.0_WP])
                ! Compute speed of sound via EoS: C = C(rho, P)
-               pC(i,j,k,1)=this%getC(rho=pQ(i,j,k,1),P=pP(i,j,k,1))
+               pC(i,j,k,1)=this%mat%get_c_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=[1.0_WP])
                ! Compute temperature via EoS: T = T(rho, P)
-               pT(i,j,k,1)=this%getT(rho=pQ(i,j,k,1),P=pP(i,j,k,1))
+               pT(i,j,k,1)=this%mat%get_T_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=[1.0_WP])
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)

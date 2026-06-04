@@ -1,14 +1,15 @@
 !> AMR Taylor-Green Vortex test case for compressible solver
 module simulation
-   use precision,         only: WP
-   use amrgrid_class,     only: amrgrid
-   use amrcomp_class,     only: amrcomp
-   use amrviz_class,      only: amrviz
-   use amrdata_class,     only: amrdata
-   use timetracker_class, only: timetracker
-   use event_class,       only: event
-   use monitor_class,     only: monitor
-   use messager,          only: log
+   use precision,           only: WP
+   use amrgrid_class,       only: amrgrid
+   use amrcomp_class,       only: amrcomp
+   use amrviz_class,        only: amrviz
+   use amrdata_class,       only: amrdata
+   use timetracker_class,   only: timetracker
+   use event_class,         only: event
+   use monitor_class,       only: monitor
+   use messager,            only: log
+   use stiffened_gas_class, only: stiffened_gas
    implicit none
    private
    
@@ -37,32 +38,10 @@ module simulation
    !> Flow parameters
    real(WP) :: Mach,Reynolds,Prandtl
 
-   !> Stiffened gas EOS parameters
-   real(WP) :: Gamma,Pinf,Cv
-   
+   !> Material
+   type(stiffened_gas), target :: fluid
+
 contains
-
-
-   !> P=EOS(RHO,I) - Stiffened gas
-   pure real(WP) function get_P(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_P=RHO*I*(Gamma-1.0_WP)-Gamma*Pinf
-   end function get_P
-   
-   !> T=f(RHO,P)
-   pure real(WP) function get_T(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_T=(P+Pinf)/(Cv*RHO*(Gamma-1.0_WP))
-   end function get_T
-   
-   !> C=f(RHO,P) - Speed of sound
-   pure real(WP) function get_C(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_C=sqrt(Gamma*(P+Pinf)/RHO)
-   end function get_C
 
    !> Compute viscosity using Sutherland's law, zero bulk viscosity, and set diffusivity based on Prandtl number
    subroutine get_viscosities()
@@ -87,7 +66,7 @@ contains
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Heat diffusivity: k = Cp*mu/Pr = Cv*Gamma*mu/Pr
-               pDiff(i,j,k,1)=Cv*Gamma*pVisc(i,j,k,1)/Prandtl
+               pDiff(i,j,k,1)=fluid%cv*fluid%gamma*pVisc(i,j,k,1)/Prandtl
             end do; end do; end do
          end do
          call amr%mfiter_destroy(mfi)
@@ -125,11 +104,11 @@ contains
             V=-cos(x)*sin(y)*cos(z)
             W=0.0_WP
             ! TGV pressure
-            P=1.0_WP/(Gamma*Mach**2)+(cos(2.0_WP*x)+cos(2.0_WP*y))*(cos(2.0_WP*z)+2.0_WP)/16.0_WP
-            ! Internal energy with T=1 normalization
-            IE=Cv
+            P=1.0_WP/(fluid%gamma*Mach**2)+(cos(2.0_WP*x)+cos(2.0_WP*y))*(cos(2.0_WP*z)+2.0_WP)/16.0_WP
+            ! Internal energy with T=1 normalization (valid for ideal gas, Pinf=0)
+            IE=fluid%cv
             ! Density from EOS inversion
-            rho=(P+Gamma*Pinf)/(IE*(Gamma-1.0_WP))
+            rho=(P+fluid%gamma*fluid%pinf)/(IE*(fluid%gamma-1.0_WP))
             ! Set conserved variable Q
             pQ(i,j,k,1)=rho
             pQ(i,j,k,2)=rho*U
@@ -205,12 +184,14 @@ contains
       
       ! Read EoS and flow parameters
       init_eos_and_flow: block
+         real(WP) :: Gamma,Pinf,Cv
          call param_read('Gamma',Gamma)
          call param_read('Pinf',Pinf)
          call param_read('Mach',Mach)
          call param_read('Reynolds',Reynolds)
          call param_read('Prandtl',Prandtl)
          Cv=1.0_WP/(Gamma*(Gamma-1.0_WP)*Mach**2)
+         call fluid%initialize(gamma=Gamma,pinf=Pinf,cv=Cv,q=0.0_WP,qp=0.0_WP,name='fluid')
       end block init_eos_and_flow
       
       ! Initialize AMR grid
@@ -239,12 +220,8 @@ contains
 
       ! Initialize compressible solver
       create_solver: block
-         ! Create flow solver
-         call fs%initialize(amr=amr)
-         ! Provide thermodynamic model
-         fs%getP=>get_P
-         fs%getC=>get_C
-         fs%getT=>get_T
+         ! Assign material and create flow solver
+         fs%mat=>fluid; call fs%initialize(amr=amr)
          ! Set initial conditions
          fs%user_init=>user_init
       end block create_solver
@@ -439,6 +416,8 @@ contains
       ! Finalize solver
       call fs%finalize()
       call dQdt%finalize()
+      ! Finalize material
+      call fluid%finalize()
       call k1%finalize()
       call k2%finalize()
       call k3%finalize()
