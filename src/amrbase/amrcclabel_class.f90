@@ -13,6 +13,7 @@ module amrcclabel_class
    use string,          only: str_medium
    use amrdata_class,   only: amrdata
    use amrsolver_class, only: amrsolver
+   use amrgrid_class,   only: amrgrid
    implicit none
    private
    
@@ -43,7 +44,8 @@ module amrcclabel_class
    
    
    !> amrcclabel object definition
-   type, extends(amrsolver) :: amrcclabel
+   type :: amrcclabel
+      character(len=str_medium) :: name = 'UNNAMED_CCLABEL'
       ! ID of the structure that contains each cell
       type(amrdata) :: id
       ! Periodicity treatement
@@ -53,6 +55,8 @@ module amrcclabel_class
       type(struct_type), dimension(:), allocatable :: struct
       ! Ghost cells
       integer :: nover=1
+      ! Associated amr grid 
+      class(amrgrid), pointer, private :: amr => null()
    contains
       procedure :: initialize
       procedure :: build
@@ -64,7 +68,7 @@ module amrcclabel_class
    interface
       logical function make_label_ftype(pVF,i,j,k)
          use precision,    only: WP
-         real(WP), dimension(:,:,:,:), contiguous, intent(in) :: pVF
+         real(WP), dimension(:,:,:,:), intent(in) :: pVF
          integer, intent(in) :: i,j,k
       end function make_label_ftype
    end interface
@@ -73,7 +77,7 @@ module amrcclabel_class
    interface
       logical function same_label_ftype(pVF,i,j,k,ii,jj,kk)
          use precision,    only: WP
-         real(WP), dimension(:,:,:,:), contiguous, intent(in) :: pVF
+         real(WP), dimension(:,:,:,:), intent(in) :: pVF
          integer, intent(in) :: i,j,k,ii,jj,kk
       end function same_label_ftype
    end interface
@@ -83,29 +87,34 @@ contains
    
    
    !> Initialization for amrcclabel class
-   subroutine initialize(this,name)
+   subroutine initialize(this,amr,name)
       implicit none
       class(amrcclabel) :: this
+      class(amrgrid), target, intent(in) :: amr 
       character(len=*), optional :: name
       ! Set the name for the object
       if (present(name)) this%name=trim(adjustl(name))
+      ! Point cclabel to amr grid
+      this%amr => amr
       ! Allocate and initialize ID array
-      call this%id%initialize(amr,name='id',ncomp=1,ng=this%nover); this%id%parent=>this
-      call this%id%setval(val=0)
+      call this%id%initialize(amr,name='id',ncomp=1,ng=this%nover);! this%id%parent=>this
+      call this%id%register() ! Update with regriding
+      call this%id%setval(val=0.0_WP)
       ! Allocate and initialize periodicity array
-      call this%idp%initialize(amr,name='idp',ncomp=3,ng=this%nover); this%idp%parent=>this
+      call this%idp%initialize(amr,name='idp',ncomp=3,ng=this%nover);! this%idp%parent=>this
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
    
    
    !> Build structure using the user-set test functions
-   subroutine build(this,make_label,same_label)
+   subroutine build(this,make_label,same_label,data)
       use amrdata_class,    only: amrdata
       implicit none
       class(amrcclabel), intent(inout) :: this
       procedure(make_label_ftype) :: make_label
       procedure(same_label_ftype) :: same_label
+      type(amrdata), intent(in) :: data
       integer :: nstruct_,stmin,stmax
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
@@ -124,7 +133,7 @@ contains
       this%struct(:)%n_=0
       
       ! Allocate periodicity work array
-      call this%idp%setval(val=0)
+      call this%idp%setval(val=0.0_WP)
       
       ! Perform a first pass to build proc-local structures and corresponding tree
       first_pass: block
@@ -135,24 +144,24 @@ contains
          integer, dimension(3) :: pos
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp,pdata
 
          ! Traverse levels
-         do lvl=0,this%amr%clvl()
+         do lvl=0,data%amr%clvl()
             ! Loop over tiles
-            call this%amr%mfiter_build(lvl,mfi)
+            call data%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
-               ! Get pointers to data
+               ! Get pointers to data arrays
                pid=>this%id%mf(lvl)%dataptr(mfi)
                pidp=>this%idp%mf(lvl)%dataptr(mfi)
-               pVF=>this%VF%mf(lvl)%dataptr(mfi)
+               pdata=>data%mf(lvl)%dataptr(mfi)
                ! Only work on finest level for now
-               if (lvl.ne.this%amr%finest_level()) cycle
+               if (lvl.ne.data%amr%maxlvl) cycle
                ! Perform local loop
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   ! Find next cell in a structure
-                  if (make_label(pVF,i,j,k)) then
+                  if (make_label(pdata,i,j,k)) then
                      ! Loop through one-sided neighbors
                      do dim=1,3
                         pos=0; pos(dim)=-1
@@ -162,12 +171,12 @@ contains
                            ! Neighbor is labeled, but are we?
                            if (pid(i,j,k,1).ne.0) then
                               ! We already have a label, perform a union of both labels
-                              if (same_label(pVF,i,j,k,ii,jj,kk)) then
-                                 pid(i,j,k,1)=union_struct(pid(i,j,k,1),pid(ii,jj,kk,1))
+                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
+                                 pid(i,j,k,1)=union_struct(int(pid(i,j,k,1)),int(pid(ii,jj,kk,1)))
                               end if
                            else
                               ! We don't have a label, check if we take the neighbor's label
-                              if (same_label(pVF,i,j,k,ii,jj,kk)) then
+                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
                                  pid(i,j,k,1)=pid(ii,jj,kk,1)
                               else
                                  pid(i,j,k,1)=add()
@@ -177,11 +186,11 @@ contains
                      end do
                      ! If no neighbor was labeled, we need a new structure
                      if (pid(i,j,k,1).eq.0) pid(i,j,k,1)=add()
-                     ! Identify periodicity cases
-                     if (this%pg%xper.and.i.eq.this%pg%imax) this%struct(pid(i,j,k,1))%per(1)=1
-                     if (this%pg%yper.and.j.eq.this%pg%jmax) this%struct(pid(i,j,k,1))%per(2)=1
-                     if (this%pg%zper.and.k.eq.this%pg%kmax) this%struct(pid(i,j,k,1))%per(3)=1
-                     pidp(i,j,k,:)=this%struct(pid(i,j,k,1))%per
+                     ! ! Identify periodicity cases
+                     ! if (this%pg%xper.and.i.eq.this%pg%imax) this%struct(pid(i,j,k,1))%per(1)=1
+                     ! if (this%pg%yper.and.j.eq.this%pg%jmax) this%struct(pid(i,j,k,1))%per(2)=1
+                     ! if (this%pg%zper.and.k.eq.this%pg%kmax) this%struct(pid(i,j,k,1))%per(3)=1
+                     ! pidp(i,j,k,:)=this%struct(pid(i,j,k,1))%per
                   end if
                end do; end do; end do
             end do
@@ -191,97 +200,97 @@ contains
       ! Now collapse the tree, count the cells and resolve periodicity in each structure
       collapse_tree: block
          use amrex_amr_module, only: amrex_mfiter,amrex_box
-         integer :: i,j,k
+         integer :: lvl,i,j,k
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
-         do lvl=0,this%amr%clvl()
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp
+         do lvl=0,data%amr%clvl()
             ! Loop over tiles
-            call this%amr%mfiter_build(lvl,mfi)
+            call data%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
                ! Get pointers to data
                pid=>this%id%mf(lvl)%dataptr(mfi)
                pidp=>this%idp%mf(lvl)%dataptr(mfi)
-               pVF=>this%VF%mf(lvl)%dataptr(mfi)
                ! Only work on finest level for now
-               if (lvl.ne.this%amr%finest_level()) cycle
+               if (lvl.ne.data%amr%maxlvl) cycle
                ! Perform local loop
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   if (pid(i,j,k,1).gt.0) then
-                     pid(i,j,k,1)=rootify_struct(pid(i,j,k,1))
-                     this%struct(pid(i,j,k,1))%n_=this%struct(pid(i,j,k,1))%n_+1
-                     pidp(i,j,k,1)=max(pidp(1,i,j,k),this%struct(pid(i,j,k,1))%per(1))
-                     pidp(i,j,k,2)=max(pidp(2,i,j,k),this%struct(pid(i,j,k,1))%per(2))
-                     pidp(i,j,k,3)=max(pidp(3,i,j,k),this%struct(pid(i,j,k,1))%per(3))
-                     this%struct(pid(i,j,k,1))%per=pidp(:,i,j,k)
+                     pid(i,j,k,1)=rootify_struct(int(pid(i,j,k,1)))
+                     this%struct(int(pid(i,j,k,1)))%n_=this%struct(int(pid(i,j,k,1)))%n_+1
+                     pidp(i,j,k,1)=max(int(pidp(1,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(1))
+                     pidp(i,j,k,2)=max(int(pidp(2,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(2))
+                     pidp(i,j,k,3)=max(int(pidp(3,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(3))
+                     this%struct(int(pid(i,j,k,1)))%per=int(pidp(:,i,j,k))
                   end if
                end do; end do; end do
             end do
          end do
       end block collapse_tree
       
-      ! Compact structure array
-      compact_tree: block
-         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
-         integer :: i,j,k,n,ierr
-         integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
-         type(struct_type), dimension(:), allocatable :: tmp
-         ! Count exact number of local structures
-         nstruct_=0
-         do n=1,size(this%struct,dim=1)
-            if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
-         end do
-         ! Gather this info to ensure unique index
-         allocate( my_nstruct(0:this%pg%nproc-1)); my_nstruct=0; my_nstruct(this%pg%rank)=nstruct_
-         allocate(all_nstruct(0:this%pg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%pg%nproc,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
-         stmin=1
-         if (this%pg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%pg%rank-1))
-         this%nstruct=sum(all_nstruct)
-         deallocate(my_nstruct,all_nstruct)
-         stmax=stmin+nstruct_-1
-         ! Generate an index map
-         allocate(idmap(1:size(this%struct,dim=1))); idmap=0
-         nstruct_=0
-         do n=1,size(this%struct,dim=1)
-            if (this%struct(n)%n_.gt.0) then
-               nstruct_=nstruct_+1
-               idmap(n)=stmin+nstruct_-1
-            end if
-         end do
-         ! Update id array to new index
-         update_id: block
-            use amrex_amr_module, only: amrex_mfiter,amrex_box
-            integer :: lvl
-            type(amrex_mfiter) :: mfi
-            type(amrex_box) :: bx
-            ! Traverse levels ! Only work on finest level for now
-            do lvl=this%amr%finest_level()
-               ! Loop over tiles
-               call this%amr%mfiter_build(lvl,mfi)
-               do while (mfi%next())
-                  ! Get pointers to data
-                  pid=>this%id%mf(lvl)%dataptr(mfi)
-                  ! Perform local loop
-                  bx=mfi%tilebox()
-                  do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                     if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
-                  end do; end do; end do  
-               end do
-            end do
-         end block update_id
-         deallocate(idmap)
-         ! Finish compacting and renumbering
-         allocate(tmp(stmin:stmax))
-         nstruct_=0
-         do n=1,size(this%struct,dim=1)
-            if (this%struct(n)%n_.gt.0) then
-               nstruct_=nstruct_+1
-               tmp(stmin+nstruct_-1)=this%struct(n)
-               allocate(tmp(stmin+nstruct_-1)%map(3,tmp(stmin+nstruct_-1)%n_))
-            end if
-         end do
-         call move_alloc(tmp,this%struct)
-      end block compact_tree
+      ! ! Compact structure array
+      ! compact_tree: block
+      !    use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+      !    integer :: i,j,k,n,ierr
+      !    integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
+      !    type(struct_type), dimension(:), allocatable :: tmp
+      !    ! Count exact number of local structures
+      !    nstruct_=0
+      !    do n=1,size(this%struct,dim=1)
+      !       if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
+      !    end do
+      !    ! Gather this info to ensure unique index
+      !    allocate( my_nstruct(0:this%pg%nproc-1)); my_nstruct=0; my_nstruct(this%pg%rank)=nstruct_
+      !    allocate(all_nstruct(0:this%pg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%pg%nproc,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
+      !    stmin=1
+      !    if (this%pg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%pg%rank-1))
+      !    this%nstruct=sum(all_nstruct)
+      !    deallocate(my_nstruct,all_nstruct)
+      !    stmax=stmin+nstruct_-1
+      !    ! Generate an index map
+      !    allocate(idmap(1:size(this%struct,dim=1))); idmap=0
+      !    nstruct_=0
+      !    do n=1,size(this%struct,dim=1)
+      !       if (this%struct(n)%n_.gt.0) then
+      !          nstruct_=nstruct_+1
+      !          idmap(n)=stmin+nstruct_-1
+      !       end if
+      !    end do
+      !    ! Update id array to new index
+      !    update_id: block
+      !       use amrex_amr_module, only: amrex_mfiter,amrex_box
+      !       integer :: lvl
+      !       type(amrex_mfiter) :: mfi
+      !       type(amrex_box) :: bx
+      !       ! Traverse levels ! Only work on finest level for now
+      !       do lvl=this%amr%finest_level()
+      !          ! Loop over tiles
+      !          call this%amr%mfiter_build(lvl,mfi)
+      !          do while (mfi%next())
+      !             ! Get pointers to data
+      !             pid=>this%id%mf(lvl)%dataptr(mfi)
+      !             ! Perform local loop
+      !             bx=mfi%tilebox()
+      !             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+      !                if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
+      !             end do; end do; end do  
+      !          end do
+      !       end do
+      !    end block update_id
+      !    deallocate(idmap)
+      !    ! Finish compacting and renumbering
+      !    allocate(tmp(stmin:stmax))
+      !    nstruct_=0
+      !    do n=1,size(this%struct,dim=1)
+      !       if (this%struct(n)%n_.gt.0) then
+      !          nstruct_=nstruct_+1
+      !          tmp(stmin+nstruct_-1)=this%struct(n)
+      !          allocate(tmp(stmin+nstruct_-1)%map(3,tmp(stmin+nstruct_-1)%n_))
+      !       end if
+      !    end do
+      !    call move_alloc(tmp,this%struct)
+      ! end block compact_tree
       
       ! ! Fill out the node map
       ! node_map: block
@@ -619,25 +628,25 @@ contains
       !    deallocate(idp)
       ! end block compact_struct
       
-      ! Extra QOL step to ensure that id=1 is always the largest structure in terms of number of cells
-      rename_largest_structure: block
-         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
-         integer :: ierr,bigid,i,j,k
-         integer, dimension(:), allocatable :: ncells
-         type(struct_type) :: tmp
-         ! Skip if no structure was found
-         if (this%nstruct.eq.0) exit rename_largest_structure
-         ! Loop over all structures and count total number of cells to find ID of largest structure
-         allocate(ncells(1:this%nstruct)); ncells=this%struct(:)%n_
-         call MPI_ALLREDUCE(MPI_IN_PLACE,ncells,this%nstruct,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
-         bigid=maxloc(ncells,1)
-         deallocate(ncells)
-         ! Swap structures
-         tmp=this%struct(1); this%struct(1)=this%struct(bigid); this%struct(bigid)=tmp
-         do k=this%pg%kmino_,this%pg%kmaxo_; do j=this%pg%jmino_,this%pg%jmaxo_; do i=this%pg%imino_,this%pg%imaxo_
-            if (this%id(i,j,k).eq.1) then; this%id(i,j,k)=bigid; else if (this%id(i,j,k).eq.bigid) then; this%id(i,j,k)=1; end if
-         end do; end do; end do
-      end block rename_largest_structure
+      ! ! Extra QOL step to ensure that id=1 is always the largest structure in terms of number of cells
+      ! rename_largest_structure: block
+      !    use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_IN_PLACE
+      !    integer :: ierr,bigid,i,j,k
+      !    integer, dimension(:), allocatable :: ncells
+      !    type(struct_type) :: tmp
+      !    ! Skip if no structure was found
+      !    if (this%nstruct.eq.0) exit rename_largest_structure
+      !    ! Loop over all structures and count total number of cells to find ID of largest structure
+      !    allocate(ncells(1:this%nstruct)); ncells=this%struct(:)%n_
+      !    call MPI_ALLREDUCE(MPI_IN_PLACE,ncells,this%nstruct,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
+      !    bigid=maxloc(ncells,1)
+      !    deallocate(ncells)
+      !    ! Swap structures
+      !    tmp=this%struct(1); this%struct(1)=this%struct(bigid); this%struct(bigid)=tmp
+      !    do k=this%pg%kmino_,this%pg%kmaxo_; do j=this%pg%jmino_,this%pg%jmaxo_; do i=this%pg%imino_,this%pg%imaxo_
+      !       if (this%id(i,j,k).eq.1) then; this%id(i,j,k)=bigid; else if (this%id(i,j,k).eq.bigid) then; this%id(i,j,k)=1; end if
+      !    end do; end do; end do
+      ! end block rename_largest_structure
       
       
    contains
@@ -759,7 +768,7 @@ contains
    !> Empty structure info
    subroutine empty(this)
       implicit none
-      class(cclabel), intent(inout) :: this
+      class(amrcclabel), intent(inout) :: this
       integer :: n
       ! Loop over all structures and deallocate maps
       if (allocated(this%struct)) then
@@ -772,19 +781,20 @@ contains
       ! Zero structures
       this%nstruct=0
       ! Reset id to zero
-      this%id=0
+      call this%id%setVal(0.0_WP)
    end subroutine empty
    
    
    !> Finalize CCL object
    subroutine finalize(this)
       implicit none
-      class(cclabel), intent(inout) :: this
+      class(amrcclabel), intent(inout) :: this
       call this%empty()
-      if (allocated(this%id)) deallocate(this%id)
-      nullify(this%pg)
+      call this%id%finalize()
+      call this%idp%finalize()
+      ! nullify(this%pg)
       this%name='UNNAMED_CCL'
    end subroutine finalize
    
    
-end module cclabel_class
+end module amrcclabel_class
