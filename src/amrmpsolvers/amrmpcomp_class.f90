@@ -1,13 +1,15 @@
 !> AMR compressible multiphase solver class
 !> Inherits from amrmpflow_class
 module amrmpcomp_class
-   use iso_c_binding,    only: c_ptr,c_loc,c_f_pointer
-   use precision,        only: WP
-   use amrdata_class,    only: amrdata
-   use amrmpflow_class,  only: amrmpflow
-   use amrmg_class,      only: amrmg
-   use amrvof_class,     only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
-   use amrex_amr_module, only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
+   use iso_c_binding,     only: c_ptr,c_loc,c_f_pointer
+   use precision,         only: WP
+   use amrdata_class,     only: amrdata
+   use amrmpflow_class,   only: amrmpflow
+   use amrmg_class,       only: amrmg
+   use amrvof_class,      only: VFlo,VFhi,vol_eps,BC_LIQ,BC_GAS,BC_REFLECT,BC_USER
+   use amrex_amr_module,  only: amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter
+   use material_class,    only: material
+   use thermorelax_class, only: thermorelax
    implicit none
    private
 
@@ -23,18 +25,16 @@ module amrmpcomp_class
       procedure(mpcomp_bc_iface),      pointer, pass :: user_bc     =>null()
       procedure(mpcomp_vofbc_iface),   pointer, pass :: user_vofbc  =>null()
 
-      ! Liquid equation of state function pointers: PL=PL(rho,I), CL=CL(rho,P), TL=TL(rho,P)
-      procedure(eos_P_iface), pointer, nopass :: getPL=>null()
-      procedure(eos_C_iface), pointer, nopass :: getCL=>null()
-      procedure(eos_T_iface), pointer, nopass :: getTL=>null()
+      ! Liquid and gas materials
+      class(material), pointer :: liq=>null()
+      class(material), pointer :: gas=>null()
 
-      ! Gas equation of state function pointers: PG=PG(rho,I), CG=CG(rho,P), TG=TG(rho,P)
-      procedure(eos_P_iface), pointer, nopass :: getPG=>null()
-      procedure(eos_C_iface), pointer, nopass :: getCG=>null()
-      procedure(eos_T_iface), pointer, nopass :: getTG=>null()
+      ! Species index ranges in Q
+      integer :: Yl_lo=0,Yl_hi=-1        !< Liquid species range: Q(:,:,:, Yl_lo:Yl_hi)
+      integer :: Yg_lo=0,Yg_hi=-1        !< Gas    species range: Q(:,:,:, Yg_lo:Yg_hi)
 
-      ! Pointer to subroutine for mixture cell relaxation
-      procedure(relax_iface), pointer, nopass :: relax=>null()
+      ! Thermodynamic relaxation model
+      class(thermorelax), pointer :: relax=>null()
 
       ! Pressure solver for pressure projection
       logical :: use_projection=.false.
@@ -45,6 +45,7 @@ module amrmpcomp_class
       type(amrdata) :: IL,IG             !< Phasic internal energies
       type(amrdata) :: PL,PG             !< Phasic pressures
       type(amrdata) :: TL,TG             !< Phasic temperatures
+      type(amrdata) :: Yl,Yg             !< Phasic species mass fractions
 
       ! Mixture variables
       type(amrdata) :: UVW               !< Cell-centered mixture velocity
@@ -68,6 +69,8 @@ module amrmpcomp_class
       real(WP) :: Cmin=0.0_WP,Cmax=0.0_WP
       real(WP) :: dPmax=0.0_WP
       real(WP) :: rhoKint=0.0_WP
+      real(WP), dimension(:), allocatable :: Ylmin,Ylmax
+      real(WP), dimension(:), allocatable :: Ygmin,Ygmax
 
       ! Minimum density for stability
       real(WP) :: rho_floor=1.0e-10_WP
@@ -111,7 +114,6 @@ module amrmpcomp_class
       procedure, private :: apply_face_fluxes !< Apply pre-built face fluxes to face velocities and cell-centered momentum
       ! Physics methods
       procedure :: get_primitive
-      procedure :: get_conserved
       procedure :: get_dQdt
       procedure :: build_plic
       procedure :: clean_Q
@@ -175,43 +177,6 @@ module amrmpcomp_class
          type(amrex_box), intent(in) :: bx
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pCL,pCG,pPLIC
       end subroutine mpcomp_vofbc_iface
-   end interface
-
-   !> Abstract interface for EoS: P=P(rho,I)
-   abstract interface
-      pure real(WP) function eos_P_iface(rho,I)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: I
-      end function eos_P_iface
-   end interface
-
-   !> Abstract interface for EoS: C=C(rho,P)
-   abstract interface
-      pure real(WP) function eos_C_iface(rho,P)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: P
-      end function eos_C_iface
-   end interface
-
-   !> Abstract interface for EoS: T=T(rho,P)
-   abstract interface
-      pure real(WP) function eos_T_iface(rho,P)
-         import :: WP
-         real(WP), intent(in) :: rho
-         real(WP), intent(in) :: P
-      end function eos_T_iface
-   end interface
-
-   !> Abstract interface for pressure relaxation callback
-   abstract interface
-      subroutine relax_iface(VF,Q,Pjump)
-         import :: WP
-         real(WP), intent(inout) :: VF
-         real(WP), dimension(:), intent(inout) :: Q
-         real(WP), intent(in) :: Pjump
-      end subroutine relax_iface
    end interface
 
 contains
@@ -315,13 +280,18 @@ contains
       use amrgrid_class,    only: amrgrid
       use amrex_amr_module, only: amrex_bc_foextrap
       use amrmg_class,      only: amrmg_varcoef
+      use messager,         only: die
       implicit none
       class(amrmpcomp), target, intent(inout) :: this
       class(amrgrid), target, intent(in) :: amr
       character(len=*), intent(in), optional :: name
 
-      ! Initialize amrmpflow parent with 7 conserved components and at least 2 ghost cells
-      this%nQ=7; this%nover=max(this%nover,2)
+      ! Materials must have been provided by the user already - check
+      if (.not.associated(this%liq).or..not.associated(this%gas)) call die('[amrmpcomp initialize] liq and gas materials must be assigned before initialize')
+
+      ! Q layout: 7 base components + (ns-1) extra species per phase
+      this%nQ=7+(this%liq%ns-1)+(this%gas%ns-1); this%nover=max(this%nover,2)
+      this%Yl_lo=8; this%Yl_hi=6+this%liq%ns; this%Yg_lo=7+this%liq%ns; this%Yg_hi=5+this%liq%ns+this%gas%ns
       call this%amrmpflow%initialize(amr,name); call this%set_parent()
 
       ! Initialize mixture velocity
@@ -336,6 +306,16 @@ contains
       call this%PG%initialize  (amr,name='PG'  ,ncomp=1,ng=this%nover); this%PG%parent  =>this
       call this%TL%initialize  (amr,name='TL'  ,ncomp=1,ng=this%nover); this%TL%parent  =>this
       call this%TG%initialize  (amr,name='TG'  ,ncomp=1,ng=this%nover); this%TG%parent  =>this
+
+      ! Phasic species mass fractions (only if more than 1 species in the phase)
+      if (this%liq%ns.gt.1) then
+         call this%Yl%initialize(amr,name='Yl',ncomp=this%liq%ns-1,ng=this%nover); this%Yl%parent=>this
+         allocate(this%Ylmin(this%liq%ns-1),this%Ylmax(this%liq%ns-1)); this%Ylmin=0.0_WP; this%Ylmax=0.0_WP
+      end if
+      if (this%gas%ns.gt.1) then
+         call this%Yg%initialize(amr,name='Yg',ncomp=this%gas%ns-1,ng=this%nover); this%Yg%parent=>this
+         allocate(this%Ygmin(this%gas%ns-1),this%Ygmax(this%gas%ns-1)); this%Ygmin=0.0_WP; this%Ygmax=0.0_WP
+      end if
 
       ! Initialize mixture properties
       call this%C%initialize(amr,name='C',ncomp=1,ng=this%nover); this%C%parent=>this
@@ -393,14 +373,18 @@ contains
       call this%IL%finalize(); call this%IG%finalize()
       call this%PL%finalize(); call this%PG%finalize()
       call this%TL%finalize(); call this%TG%finalize()
+      ! Phasic species mass fractions
+      if (this%liq%ns.gt.1) call this%Yl%finalize()
+      if (this%gas%ns.gt.1) call this%Yg%finalize()
+      if (allocated(this%Ylmin)) deallocate(this%Ylmin,this%Ylmax)
+      if (allocated(this%Ygmin)) deallocate(this%Ygmin,this%Ygmax)
       ! Mixture properties
       call this%C%finalize()
       ! Physical properties
       call this%visc%finalize(); call this%beta%finalize(); call this%diff%finalize()
       ! Nullify pointers
       nullify(this%user_init); nullify(this%user_tagging); nullify(this%user_bc); nullify(this%user_vofbc)
-      nullify(this%getPL); nullify(this%getCL); nullify(this%getTL)
-      nullify(this%getPG); nullify(this%getCG); nullify(this%getTG)
+      nullify(this%liq); nullify(this%gas)
       nullify(this%relax)
       ! Finalize parent
       call this%amrmpflow%finalize()
@@ -427,6 +411,8 @@ contains
       call this%IL%reset_level(lvl,ba,dm); call this%IG%reset_level(lvl,ba,dm)
       call this%PL%reset_level(lvl,ba,dm); call this%PG%reset_level(lvl,ba,dm)
       call this%TL%reset_level(lvl,ba,dm); call this%TG%reset_level(lvl,ba,dm)
+      if (this%liq%ns.gt.1) call this%Yl%reset_level(lvl,ba,dm)
+      if (this%gas%ns.gt.1) call this%Yg%reset_level(lvl,ba,dm)
       ! Reset mixture properties
       call this%C%reset_level(lvl,ba,dm)
       ! Reset physical properties
@@ -439,6 +425,8 @@ contains
       call this%IL%setval(val=0.0_WP,lvl=lvl); call this%IG%setval(val=0.0_WP,lvl=lvl)
       call this%PL%setval(val=0.0_WP,lvl=lvl); call this%PG%setval(val=0.0_WP,lvl=lvl)
       call this%TL%setval(val=0.0_WP,lvl=lvl); call this%TG%setval(val=0.0_WP,lvl=lvl)
+      if (this%liq%ns.gt.1) call this%Yl%setval(val=0.0_WP,lvl=lvl)
+      if (this%gas%ns.gt.1) call this%Yg%setval(val=0.0_WP,lvl=lvl)
       ! Reset mixture properties
       call this%C%setval(val=0.0_WP,lvl=lvl)
       ! Reset physical properties
@@ -463,6 +451,8 @@ contains
       call this%IL%reset_level(lvl,ba,dm); call this%IG%reset_level(lvl,ba,dm)
       call this%PL%reset_level(lvl,ba,dm); call this%PG%reset_level(lvl,ba,dm)
       call this%TL%reset_level(lvl,ba,dm); call this%TG%reset_level(lvl,ba,dm)
+      if (this%liq%ns.gt.1) call this%Yl%reset_level(lvl,ba,dm)
+      if (this%gas%ns.gt.1) call this%Yg%reset_level(lvl,ba,dm)
       call this%C%reset_level(lvl,ba,dm)
       call this%visc%reset_level(lvl,ba,dm)
       call this%beta%reset_level(lvl,ba,dm)
@@ -485,6 +475,8 @@ contains
       call this%IL%reset_level(lvl,ba,dm); call this%IG%reset_level(lvl,ba,dm)
       call this%PL%reset_level(lvl,ba,dm); call this%PG%reset_level(lvl,ba,dm)
       call this%TL%reset_level(lvl,ba,dm); call this%TG%reset_level(lvl,ba,dm)
+      if (this%liq%ns.gt.1) call this%Yl%reset_level(lvl,ba,dm)
+      if (this%gas%ns.gt.1) call this%Yg%reset_level(lvl,ba,dm)
       call this%C%reset_level(lvl,ba,dm)
       call this%visc%reset_level(lvl,ba,dm)
       call this%beta%reset_level(lvl,ba,dm)
@@ -504,6 +496,8 @@ contains
       call this%IL%clear_level(lvl); call this%IG%clear_level(lvl)
       call this%PL%clear_level(lvl); call this%PG%clear_level(lvl)
       call this%TL%clear_level(lvl); call this%TG%clear_level(lvl)
+      if (this%liq%ns.gt.1) call this%Yl%clear_level(lvl)
+      if (this%gas%ns.gt.1) call this%Yg%clear_level(lvl)
       call this%C%clear_level(lvl)
       call this%visc%clear_level(lvl)
       call this%beta%clear_level(lvl)
@@ -628,19 +622,20 @@ contains
    !> Add explicit phasic pressure gradient to face velocities, cell-centered momentum, and phasic internal energies
    !> Uses this%PL and this%PG directly
    !> Optional gravity(1:3) adds a constant face acceleration alongside -grad(Pmix)/rho
-   subroutine add_phasic_pressure(this,scale,gravity)
+   subroutine add_phasic_pressure(this,scale,gravity,mask)
       use amrex_amr_module, only: amrex_multifab
       use amrex_interface,  only: amrmfab_average_down_face
       implicit none
       class(amrmpcomp), intent(inout) :: this
       real(WP), intent(in) :: scale
       real(WP), dimension(3), intent(in), optional :: gravity
+      type(amrdata), intent(in), optional :: mask
       type(amrex_multifab), dimension(:), allocatable :: Fx,Fy,Fz
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pFx,pFy,pFz,pQ,pVF,pSubVF,pUVW
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pRHOL,pRHOG
-      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW,pPL,pPG,pRHOL,pRHOG,pMask
+      real(WP) :: dxi,dyi,dzi,rhoLo,rhoHi,div,coeff
       integer :: lvl,i,j,k
       ! Build temp face mfabs to store pressure fluxes
       allocate(Fx(0:this%amr%clvl()),Fy(0:this%amr%clvl()),Fz(0:this%amr%clvl()))
@@ -722,11 +717,13 @@ contains
             pPL=>this%PL%mf(lvl)%dataptr(mfi)
             pPG=>this%PG%mf(lvl)%dataptr(mfi)
             pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
+            if (present(mask)) pMask=>mask%mf(lvl)%dataptr(mfi)
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                div=dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))
-               pQ(i,j,k,3)=pQ(i,j,k,3)-scale*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
-               pQ(i,j,k,4)=pQ(i,j,k,4)-scale*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
+               coeff=1.0_WP; if (present(mask)) coeff=pMask(i,j,k,1)
+               pQ(i,j,k,3)=pQ(i,j,k,3)-scale*coeff*(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
+               pQ(i,j,k,4)=pQ(i,j,k,4)-scale*coeff*(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -1054,20 +1051,15 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF,pUVW
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pRHOL,pRHOG,pIL,pIG,pPL,pPG,pTL,pTG,pC
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pRHOL,pRHOG,pIL,pIG,pPL,pPG,pTL,pTG,pC,pYl,pYg
       real(WP) :: irho,CL,CG
+      real(WP), dimension(this%liq%ns) :: yL
+      real(WP), dimension(this%gas%ns) :: yG
       ! Start timer
       t0=MPI_Wtime()
       ! Check passed Q is as expected
-      if (Q%ncomp.ne.7) call die('[amrmpcomp get_primitive] Q must have 7 components')
+      if (Q%ncomp.ne.this%nQ) call die('[amrmpcomp get_primitive] Q has wrong number of components')
       if (Q%ng.lt.this%nover) call die('[amrmpcomp get_primitive] Q must have at least nover ghost cells')
-      ! Check EoS functions are set
-      if (.not.associated(this%getPL)) call die('[amrmpcomp get_primitive] getPL not set')
-      if (.not.associated(this%getCL)) call die('[amrmpcomp get_primitive] getCL not set')
-      if (.not.associated(this%getTL)) call die('[amrmpcomp get_primitive] getTL not set')
-      if (.not.associated(this%getPG)) call die('[amrmpcomp get_primitive] getPG not set')
-      if (.not.associated(this%getCG)) call die('[amrmpcomp get_primitive] getCG not set')
-      if (.not.associated(this%getTG)) call die('[amrmpcomp get_primitive] getTG not set')
       ! Loop over levels
       do lvl=0,this%amr%clvl()
          call this%amr%mfiter_build(lvl,mfi)
@@ -1085,6 +1077,9 @@ contains
             pTL  =>this%TL%mf(lvl)%dataptr(mfi)
             pTG  =>this%TG%mf(lvl)%dataptr(mfi)
             pC   =>this%C%mf(lvl)%dataptr(mfi)
+            ! Optional species pointers
+            if (this%liq%ns.gt.1) pYl=>this%Yl%mf(lvl)%dataptr(mfi)
+            if (this%gas%ns.gt.1) pYg=>this%Yg%mf(lvl)%dataptr(mfi)
             ! Loop over grown tiles
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
@@ -1097,29 +1092,43 @@ contains
                if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) then
                   pRHOL(i,j,k,1)=pQ(i,j,k,1)/pVF(i,j,k,1)
                   pIL  (i,j,k,1)=pQ(i,j,k,3)/pQ(i,j,k,1)
-                  pPL  (i,j,k,1)=this%getPL(pRHOL(i,j,k,1),pIL(i,j,k,1))
-                  pTL  (i,j,k,1)=this%getTL(pRHOL(i,j,k,1),pPL(i,j,k,1))
-                  CL            =this%getCL(pRHOL(i,j,k,1),pPL(i,j,k,1))
+                  ! Liquid composition: cache first ns-1 species (clipped to [0,1]), close ns-th (clipped to [0,1])
+                  if (this%liq%ns.gt.1) then
+                     pYl(i,j,k,:)=max(0.0_WP,min(pQ(i,j,k,this%Yl_lo:this%Yl_hi)/pQ(i,j,k,1),1.0_WP))
+                     yL(1:this%liq%ns-1)=pYl(i,j,k,:)
+                  end if
+                  yL(this%liq%ns)=max(0.0_WP,1.0_WP-sum(yL(1:this%liq%ns-1)))
+                  pPL  (i,j,k,1)=this%liq%get_p_from_rho_e(pRHOL(i,j,k,1),pIL  (i,j,k,1),yL)
+                  pTL  (i,j,k,1)=this%liq%get_T_from_p_rho(pPL  (i,j,k,1),pRHOL(i,j,k,1),yL)
+                  CL            =this%liq%get_c_from_p_rho(pPL  (i,j,k,1),pRHOL(i,j,k,1),yL)
                else
                   pRHOL(i,j,k,1)=0.0_WP
                   pIL  (i,j,k,1)=0.0_WP
                   pPL  (i,j,k,1)=0.0_WP
                   pTL  (i,j,k,1)=0.0_WP
                   CL            =0.0_WP
+                  if (this%liq%ns.gt.1) pYl(i,j,k,:)=0.0_WP
                end if
                ! Get gas primitive variables
                if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) then
                   pRHOG(i,j,k,1)=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
                   pIG  (i,j,k,1)=pQ(i,j,k,4)/pQ(i,j,k,2)
-                  pPG  (i,j,k,1)=this%getPG(pRHOG(i,j,k,1),pIG(i,j,k,1))
-                  pTG  (i,j,k,1)=this%getTG(pRHOG(i,j,k,1),pPG(i,j,k,1))
-                  CG            =this%getCG(pRHOG(i,j,k,1),pPG(i,j,k,1))
+                  ! Gas composition: cache first ns-1 species (clipped to [0,1]), close ns-th (clipped to [0,1])
+                  if (this%gas%ns.gt.1) then
+                     pYg(i,j,k,:)=max(0.0_WP,min(pQ(i,j,k,this%Yg_lo:this%Yg_hi)/pQ(i,j,k,2),1.0_WP))
+                     yG(1:this%gas%ns-1)=pYg(i,j,k,:)
+                  end if
+                  yG(this%gas%ns)=max(0.0_WP,1.0_WP-sum(yG(1:this%gas%ns-1)))
+                  pPG  (i,j,k,1)=this%gas%get_p_from_rho_e(pRHOG(i,j,k,1),pIG  (i,j,k,1),yG)
+                  pTG  (i,j,k,1)=this%gas%get_T_from_p_rho(pPG  (i,j,k,1),pRHOG(i,j,k,1),yG)
+                  CG            =this%gas%get_c_from_p_rho(pPG  (i,j,k,1),pRHOG(i,j,k,1),yG)
                else
                   pRHOG(i,j,k,1)=0.0_WP
                   pIG  (i,j,k,1)=0.0_WP
                   pPG  (i,j,k,1)=0.0_WP
                   pTG  (i,j,k,1)=0.0_WP
                   CG            =0.0_WP
+                  if (this%gas%ns.gt.1) pYg(i,j,k,:)=0.0_WP
                end if
                ! Get mixture speed of sound
                pC(i,j,k,1)=sqrt((pQ(i,j,k,1)*CL**2+pQ(i,j,k,2)*CG**2)*irho)
@@ -1130,43 +1139,6 @@ contains
       ! End timer
       this%wt_prim=this%wt_prim+(MPI_Wtime()-t0)
    end subroutine get_primitive
-
-   !> Calculate conserved variables from primitive variables without pressure
-   !> Rebuilds Q from VF, phasic densities, phasic energies, and mixture velocity
-   subroutine get_conserved(this)
-      use amrex_amr_module, only: amrex_mfiter,amrex_box
-      implicit none
-      class(amrmpcomp), intent(inout) :: this
-      integer :: lvl,i,j,k
-      type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF,pUVW,pRHOL,pRHOG,pIL,pIG
-      do lvl=0,this%amr%clvl()
-         call this%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            ! Get pointers to data
-            pQ   =>this%Q%mf(lvl)%dataptr(mfi)
-            pVF  =>this%VF%mf(lvl)%dataptr(mfi)
-            pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
-            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
-            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
-            pIL  =>this%IL%mf(lvl)%dataptr(mfi)
-            pIG  =>this%IG%mf(lvl)%dataptr(mfi)
-            ! Loop over grown tiles
-            bx=mfi%growntilebox(this%nover)
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               pQ(i,j,k,1)=(       pVF(i,j,k,1))*pRHOL(i,j,k,1)
-               pQ(i,j,k,2)=(1.0_WP-pVF(i,j,k,1))*pRHOG(i,j,k,1)
-               pQ(i,j,k,3)=pQ(i,j,k,1)*pIL(i,j,k,1)
-               pQ(i,j,k,4)=pQ(i,j,k,2)*pIG(i,j,k,1)
-               pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*pUVW(i,j,k,1)
-               pQ(i,j,k,6)=(pQ(i,j,k,1)+pQ(i,j,k,2))*pUVW(i,j,k,2)
-               pQ(i,j,k,7)=(pQ(i,j,k,1)+pQ(i,j,k,2))*pUVW(i,j,k,3)
-            end do; end do; end do
-         end do
-         call this%amr%mfiter_destroy(mfi)
-      end do
-   end subroutine get_conserved
 
    !> Calculate dQdt using current this%Q and primitives
    subroutine get_dQdt(this,dQdt,dt,time)
@@ -1179,6 +1151,7 @@ contains
       real(WP) :: t0,t1
       type(amrex_multifab), dimension(0:this%amr%maxlvl) :: Fx,Fy,Fz
       type(amrex_multifab) :: Vx,Vy,Vz
+      type(amrex_multifab) :: gradU
       type(amrex_multifab) :: band
       ! Shared variables for internal functions
       real(WP) :: dx,dy,dz,dxi,dyi,dzi                              ! Needed for SL transport
@@ -1186,6 +1159,8 @@ contains
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pPLICold ! PLICold used in tet2flux_plic
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQold    ! Qold used in tet2flux_plic
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVFold   ! VFold used in tet2flux_plic
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pCLold,pCGold ! old phasic barycenters
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pGradU   ! old-velocity gradient, for reconstruction
       logical :: crossed_plic ! Used in tet2flux/tet2flux_plic
       ! Start full routine timer
       t0=MPI_Wtime()
@@ -1197,18 +1172,57 @@ contains
       ! Allocate all fluxes
       define_fluxes: block
          integer :: lvl
-         ! Face-centered conserved variable fluxes (7 components)
+         ! Face-centered conserved variable fluxes (nQ components)
          do lvl=0,this%amr%clvl()
-            call this%amr%mfab_build(lvl=lvl,mfab=Fx(lvl),ncomp=7,nover=0,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
-            call this%amr%mfab_build(lvl=lvl,mfab=Fy(lvl),ncomp=7,nover=0,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
-            call this%amr%mfab_build(lvl=lvl,mfab=Fz(lvl),ncomp=7,nover=0,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl=lvl,mfab=Fx(lvl),ncomp=this%nQ,nover=0,atface=[.true. ,.false.,.false.]); call Fx(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl=lvl,mfab=Fy(lvl),ncomp=this%nQ,nover=0,atface=[.false.,.true. ,.false.]); call Fy(lvl)%setval(0.0_WP)
+            call this%amr%mfab_build(lvl=lvl,mfab=Fz(lvl),ncomp=this%nQ,nover=0,atface=[.false.,.false.,.true. ]); call Fz(lvl)%setval(0.0_WP)
          end do
          ! Volume moment fluxes at finest level (8 components: Lvol,Gvol,Lbar,Gbar)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vx,ncomp=8,nover=0,atface=[.true. ,.false.,.false.]); call Vx%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vy,ncomp=8,nover=0,atface=[.false.,.true. ,.false.]); call Vy%setval(0.0_WP)
          call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=Vz,ncomp=8,nover=0,atface=[.false.,.false.,.true. ]); call Vz%setval(0.0_WP)
+         ! Create gradU storage
+         call this%amr%mfab_build(lvl=this%amr%clvl(),mfab=gradU,ncomp=9,nover=this%nover); call gradU%setval(0.0_WP)
       end block define_fluxes
 
+      ! Limited gradient of the OLD mixture velocity for conservative SL momentum reconstruction
+      velocity_reconstruct: block
+         integer :: lvl,i,j,k,c
+         real(WP), dimension(3) :: uc,um,up
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pG
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         ! Skip if clvl < maxlvl
+         if (this%amr%clvl().lt.this%amr%maxlvl) exit velocity_reconstruct
+         ! Get finest level info
+         lvl=this%amr%maxlvl; dxi=1.0_WP/this%amr%dx(lvl); dyi=1.0_WP/this%amr%dy(lvl); dzi=1.0_WP/this%amr%dz(lvl)
+         ! Build minmod-limited gradient of old velocity
+         call this%amr%mfiter_build(lvl=lvl,mfi=mfi)
+         do while (mfi%next())
+            ! Get data pointers
+            pQ=>this%Qold%mf(lvl)%dataptr(mfi)
+            pG=>gradU%dataptr(mfi)
+            ! Loop over all cells
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               uc=pQ(i  ,j,k,5:7)/max(sum(pQ(i  ,j,k,1:2)),this%rho_floor)
+               um=pQ(i-1,j,k,5:7)/max(sum(pQ(i-1,j,k,1:2)),this%rho_floor)
+               up=pQ(i+1,j,k,5:7)/max(sum(pQ(i+1,j,k,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-2)=mmod((uc(c)-um(c))*dxi,(up(c)-uc(c))*dxi); end do
+               um=pQ(i,j-1,k,5:7)/max(sum(pQ(i,j-1,k,1:2)),this%rho_floor)
+               up=pQ(i,j+1,k,5:7)/max(sum(pQ(i,j+1,k,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-1)=mmod((uc(c)-um(c))*dyi,(up(c)-uc(c))*dyi); end do
+               um=pQ(i,j,k-1,5:7)/max(sum(pQ(i,j,k-1,1:2)),this%rho_floor)
+               up=pQ(i,j,k+1,5:7)/max(sum(pQ(i,j,k+1,1:2)),this%rho_floor)
+               do c=1,3; pG(i,j,k,3*c-0)=mmod((uc(c)-um(c))*dzi,(up(c)-uc(c))*dzi); end do
+            end do; end do; end do
+         end do
+         call this%amr%mfiter_destroy(mfi)
+         ! Fill same-level ghosts
+         call gradU%fill_boundary(this%amr%geom(lvl))
+      end block velocity_reconstruct
+                  
       ! Phase 1a: Semi-Lagrangian fluxes at finest level
       t1=MPI_Wtime()
       semilagrangian_fluxes: block
@@ -1220,7 +1234,7 @@ contains
          integer , dimension(3,9) :: fijk
          real(WP), dimension(:,:,:,:), allocatable :: proj
          real(WP), dimension(8) :: Vflux
-         real(WP), dimension(7) :: Qflux
+         real(WP), dimension(this%nQ) :: Qflux
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pBand,pVx,pVy,pVz,pFx,pFy,pFz
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx,nbx
@@ -1239,6 +1253,9 @@ contains
             pPLICold=>this%PLICold%dataptr(mfi)
             pQold   =>this%Qold%mf(lvl)%dataptr(mfi)
             pVFold  =>this%VFold%mf(lvl)%dataptr(mfi)
+            pCLold  =>this%CLold%dataptr(mfi)
+            pCGold  =>this%CGold%dataptr(mfi)
+            pGradU  =>gradU%dataptr(mfi)
             pBand   =>band%dataptr(mfi)
             pU      =>this%U%mf(lvl)%dataptr(mfi)
             pV      =>this%V%mf(lvl)%dataptr(mfi)
@@ -1274,7 +1291,7 @@ contains
                crossed_plic=.false.
                ! Decompose into tets, cut, and accumulate
                pVx(i,j,k,1:8)=0.0_WP
-               pFx(i,j,k,1:7)=0.0_WP
+               pFx(i,j,k,1:this%nQ)=0.0_WP
                do n=1,8
                   do nn=1,4
                      tet(:,nn)=face(:,tet_map(nn,n))
@@ -1282,10 +1299,10 @@ contains
                   end do
                   call tet2flux(tet,ijk,Vflux,Qflux)
                   pVx(i,j,k,1:8)=pVx(i,j,k,1:8)+tet_sign(tet)*Vflux
-                  pFx(i,j,k,1:7)=pFx(i,j,k,1:7)+tet_sign(tet)*Qflux
+                  pFx(i,j,k,1:this%nQ)=pFx(i,j,k,1:this%nQ)+tet_sign(tet)*Qflux
                end do
                ! Convert to flux rate
-               pFx(i,j,k,1:7)=-pFx(i,j,k,1:7)/(dt*dy*dz)
+               pFx(i,j,k,1:this%nQ)=-pFx(i,j,k,1:this%nQ)/(dt*dy*dz)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
                   rhoLo=max(pQold(i-1,j,k,1)+pQold(i-1,j,k,2),this%rho_floor)
@@ -1314,7 +1331,7 @@ contains
                crossed_plic=.false.
                ! Decompose into tets, cut, and accumulate
                pVy(i,j,k,1:8)=0.0_WP
-               pFy(i,j,k,1:7)=0.0_WP
+               pFy(i,j,k,1:this%nQ)=0.0_WP
                do n=1,8
                   do nn=1,4
                      tet(:,nn)=face(:,tet_map(nn,n))
@@ -1322,10 +1339,10 @@ contains
                   end do
                   call tet2flux(tet,ijk,Vflux,Qflux)
                   pVy(i,j,k,1:8)=pVy(i,j,k,1:8)+tet_sign(tet)*Vflux
-                  pFy(i,j,k,1:7)=pFy(i,j,k,1:7)+tet_sign(tet)*Qflux
+                  pFy(i,j,k,1:this%nQ)=pFy(i,j,k,1:this%nQ)+tet_sign(tet)*Qflux
                end do
                ! Convert to flux rate
-               pFy(i,j,k,1:7)=-pFy(i,j,k,1:7)/(dt*dz*dx)
+               pFy(i,j,k,1:this%nQ)=-pFy(i,j,k,1:this%nQ)/(dt*dz*dx)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
                   rhoLo=max(pQold(i,j-1,k,1)+pQold(i,j-1,k,2),this%rho_floor)
@@ -1354,7 +1371,7 @@ contains
                crossed_plic=.false.
                ! Decompose into tets, cut, and accumulate
                pVz(i,j,k,1:8)=0.0_WP
-               pFz(i,j,k,1:7)=0.0_WP
+               pFz(i,j,k,1:this%nQ)=0.0_WP
                do n=1,8
                   do nn=1,4
                      tet(:,nn)=face(:,tet_map(nn,n))
@@ -1362,10 +1379,10 @@ contains
                   end do
                   call tet2flux(tet,ijk,Vflux,Qflux)
                   pVz(i,j,k,1:8)=pVz(i,j,k,1:8)+tet_sign(tet)*Vflux
-                  pFz(i,j,k,1:7)=pFz(i,j,k,1:7)+tet_sign(tet)*Qflux
+                  pFz(i,j,k,1:this%nQ)=pFz(i,j,k,1:this%nQ)+tet_sign(tet)*Qflux
                end do
                ! Convert to flux rate
-               pFz(i,j,k,1:7)=-pFz(i,j,k,1:7)/(dt*dx*dy)
+               pFz(i,j,k,1:this%nQ)=-pFz(i,j,k,1:this%nQ)/(dt*dx*dy)
                ! Switch to dissipation-free momentum flux for BB-pure regions
                if (.not.crossed_plic) then
                   rhoLo=max(pQold(i,j,k-1,1)+pQold(i,j,k-1,2),this%rho_floor)
@@ -1387,16 +1404,16 @@ contains
       finitevolume_fluxes: block
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pFx,pFy,pFz,pBand
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pTL,pTG,pIL,pIG,pVF,pUVW!,pPL,pPG
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc,pBeta,pDiff
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVisc,pBeta,pDiff,pYl,pYg
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW ! Intentional masking
          real(WP), dimension(-2: 0) :: wenop
          real(WP), dimension(-1:+1) :: wenom
-         real(WP), dimension(1:3,1:3) :: gradU
+         real(WP), dimension(1:3,1:3) :: dUdx
          real(WP) :: w,div,visc_f,beta_f
          real(WP), parameter :: eps=1.0e-15_WP
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: fbx
-         integer :: lvl,i,j,k
+         integer :: lvl,i,j,k,n
          logical :: in_band
          do lvl=0,this%amr%clvl()
             ! Grid spacings for this level
@@ -1425,6 +1442,8 @@ contains
                pFx  =>Fx(lvl)%dataptr(mfi)
                pFy  =>Fy(lvl)%dataptr(mfi)
                pFz  =>Fz(lvl)%dataptr(mfi)
+               if (this%liq%ns.gt.1) pYl=>this%Yl%mf(lvl)%dataptr(mfi)
+               if (this%gas%ns.gt.1) pYg=>this%Yg%mf(lvl)%dataptr(mfi)
                if (lvl.eq.this%amr%clvl()) pBand=>band%dataptr(mfi)
                ! X-fluxes
                fbx=mfi%nodaltilebox(1)
@@ -1443,6 +1462,12 @@ contains
                         w=weno_weight((abs(pIL(i+1,j,k,1)-pIL(i  ,j,k,1))+eps)/(abs(pIL(i,j,k,1)-pIL(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFx(i,j,k,3)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pIL(i-2:i  ,j,k,1)) &
                         &           +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pIL(i-1:i+1,j,k,1))
+                        do n=1,this%liq%ns-1
+                           w=weno_weight((abs(pYl(i-1,j,k,n)-pYl(i-2,j,k,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i-1,j,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYl(i+1,j,k,n)-pYl(i  ,j,k,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i-1,j,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFx(i,j,k,this%Yl_lo+n-1)=0.5_WP*(pFx(i,j,k,1)-abs(pFx(i,j,k,1)))*sum(wenop*pYl(i-2:i  ,j,k,n)) &
+                           &                        +0.5_WP*(pFx(i,j,k,1)+abs(pFx(i,j,k,1)))*sum(wenom*pYl(i-1:i+1,j,k,n))
+                        end do
                      end if
                      ! WENO gas mass and energy fluxes
                      if (any(pVF(i-1:i,j,k,1).le.VFhi)) then
@@ -1454,6 +1479,12 @@ contains
                         w=weno_weight((abs(pIG(i+1,j,k,1)-pIG(i  ,j,k,1))+eps)/(abs(pIG(i,j,k,1)-pIG(i-1,j,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFx(i,j,k,4)=0.5_WP*(pFx(i,j,k,2)-abs(pFx(i,j,k,2)))*sum(wenop*pIG(i-2:i  ,j,k,1)) &
                         &           +0.5_WP*(pFx(i,j,k,2)+abs(pFx(i,j,k,2)))*sum(wenom*pIG(i-1:i+1,j,k,1))
+                        do n=1,this%gas%ns-1
+                           w=weno_weight((abs(pYg(i-1,j,k,n)-pYg(i-2,j,k,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i-1,j,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYg(i+1,j,k,n)-pYg(i  ,j,k,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i-1,j,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFx(i,j,k,this%Yg_lo+n-1)=0.5_WP*(pFx(i,j,k,2)-abs(pFx(i,j,k,2)))*sum(wenop*pYg(i-2:i  ,j,k,n)) &
+                           &                        +0.5_WP*(pFx(i,j,k,2)+abs(pFx(i,j,k,2)))*sum(wenom*pYg(i-1:i+1,j,k,n))
+                        end do
                      end if
                      ! Momentum fluxes
                      pFx(i,j,k,5)=sum(pFx(i,j,k,1:2))*0.5_WP*sum(pUVW(i-1:i,j,k,1))
@@ -1463,26 +1494,37 @@ contains
                   ! Add pressure stress
                   !pFx(i,j,k,5)=pFx(i,j,k,5)-0.5_WP*sum(pVF(i-1:i,j,k,1)*pPL(i-1:i,j,k,1)+(1.0_WP-pVF(i-1:i,j,k,1))*pPG(i-1:i,j,k,1))
                   ! Velocity gradients at x-face
-                  gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
-                  gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
-                  gradU(3,1)=0.25_WP*dzi*(pUVW(i-1,j,k+1,1)-pUVW(i-1,j,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
-                  gradU(1,2)=dxi*(pUVW(i,j,k,2)-pUVW(i-1,j,k,2))
-                  gradU(2,2)=0.25_WP*dyi*(pUVW(i-1,j+1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
-                  gradU(3,2)=0.25_WP*dzi*(pUVW(i-1,j,k+1,2)-pUVW(i-1,j,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
-                  gradU(1,3)=dxi*(pUVW(i,j,k,3)-pUVW(i-1,j,k,3))
-                  gradU(2,3)=0.25_WP*dyi*(pUVW(i-1,j+1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
-                  gradU(3,3)=0.25_WP*dzi*(pUVW(i-1,j,k+1,3)-pUVW(i-1,j,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
-                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  dUdx(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
+                  dUdx(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  dUdx(3,1)=0.25_WP*dzi*(pUVW(i-1,j,k+1,1)-pUVW(i-1,j,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  dUdx(1,2)=dxi*(pUVW(i,j,k,2)-pUVW(i-1,j,k,2))
+                  dUdx(2,2)=0.25_WP*dyi*(pUVW(i-1,j+1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  dUdx(3,2)=0.25_WP*dzi*(pUVW(i-1,j,k+1,2)-pUVW(i-1,j,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  dUdx(1,3)=dxi*(pUVW(i,j,k,3)-pUVW(i-1,j,k,3))
+                  dUdx(2,3)=0.25_WP*dyi*(pUVW(i-1,j+1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  dUdx(3,3)=0.25_WP*dzi*(pUVW(i-1,j,k+1,3)-pUVW(i-1,j,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=dUdx(1,1)+dUdx(2,2)+dUdx(3,3)
                   ! Viscosities at x-face
                   visc_f=2.0_WP*product(pVisc(i-1:i,j,k,1))/(sum(pVisc(i-1:i,j,k,1))+tiny(1.0_WP))
                   beta_f=2.0_WP*product(pBeta(i-1:i,j,k,1))/(sum(pBeta(i-1:i,j,k,1))+tiny(1.0_WP))
                   ! Viscous stress at x-face
-                  pFx(i,j,k,5)=pFx(i,j,k,5)+visc_f*(gradU(1,1)+gradU(1,1))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
-                  pFx(i,j,k,6)=pFx(i,j,k,6)+visc_f*(gradU(2,1)+gradU(1,2))
-                  pFx(i,j,k,7)=pFx(i,j,k,7)+visc_f*(gradU(3,1)+gradU(1,3))
+                  pFx(i,j,k,5)=pFx(i,j,k,5)+visc_f*(dUdx(1,1)+dUdx(1,1))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
+                  pFx(i,j,k,6)=pFx(i,j,k,6)+visc_f*(dUdx(2,1)+dUdx(1,2))
+                  pFx(i,j,k,7)=pFx(i,j,k,7)+visc_f*(dUdx(3,1)+dUdx(1,3))
                   ! Phasic heat diffusion flux (pure cells only)
                   if (all(pVF(i-1:i,j,k,1).gt.VFhi)) pFx(i,j,k,3)=pFx(i,j,k,3)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pTL(i,j,k,1)-pTL(i-1,j,k,1))
                   if (all(pVF(i-1:i,j,k,1).lt.VFlo)) pFx(i,j,k,4)=pFx(i,j,k,4)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pTG(i,j,k,1)-pTG(i-1,j,k,1))
+                  ! Phasic species diffusion flux (pure cells only, Le=1)
+                  if (all(pVF(i-1:i,j,k,1).gt.VFhi)) then
+                     do n=1,this%liq%ns-1
+                        pFx(i,j,k,this%Yl_lo+n-1)=pFx(i,j,k,this%Yl_lo+n-1)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pYl(i,j,k,n)-pYl(i-1,j,k,n))
+                     end do
+                  end if
+                  if (all(pVF(i-1:i,j,k,1).lt.VFlo)) then
+                     do n=1,this%gas%ns-1
+                        pFx(i,j,k,this%Yg_lo+n-1)=pFx(i,j,k,this%Yg_lo+n-1)+0.5_WP*sum(pDiff(i-1:i,j,k,1))*dxi*(pYg(i,j,k,n)-pYg(i-1,j,k,n))
+                     end do
+                  end if
                end do; end do; end do
                ! Y-fluxes
                fbx=mfi%nodaltilebox(2)
@@ -1501,6 +1543,12 @@ contains
                         w=weno_weight((abs(pIL(i,j+1,k,1)-pIL(i,j  ,k,1))+eps)/(abs(pIL(i,j,k,1)-pIL(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFy(i,j,k,3)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pIL(i,j-2:j  ,k,1)) &
                         &           +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pIL(i,j-1:j+1,k,1))
+                        do n=1,this%liq%ns-1
+                           w=weno_weight((abs(pYl(i,j-1,k,n)-pYl(i,j-2,k,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i,j-1,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYl(i,j+1,k,n)-pYl(i,j  ,k,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i,j-1,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFy(i,j,k,this%Yl_lo+n-1)=0.5_WP*(pFy(i,j,k,1)-abs(pFy(i,j,k,1)))*sum(wenop*pYl(i,j-2:j  ,k,n)) &
+                           &                        +0.5_WP*(pFy(i,j,k,1)+abs(pFy(i,j,k,1)))*sum(wenom*pYl(i,j-1:j+1,k,n))
+                        end do
                      end if
                      ! WENO gas mass and energy fluxes
                      if (any(pVF(i,j-1:j,k,1).le.VFhi)) then
@@ -1512,6 +1560,12 @@ contains
                         w=weno_weight((abs(pIG(i,j+1,k,1)-pIG(i,j  ,k,1))+eps)/(abs(pIG(i,j,k,1)-pIG(i,j-1,k,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFy(i,j,k,4)=0.5_WP*(pFy(i,j,k,2)-abs(pFy(i,j,k,2)))*sum(wenop*pIG(i,j-2:j  ,k,1)) &
                         &           +0.5_WP*(pFy(i,j,k,2)+abs(pFy(i,j,k,2)))*sum(wenom*pIG(i,j-1:j+1,k,1))
+                        do n=1,this%gas%ns-1
+                           w=weno_weight((abs(pYg(i,j-1,k,n)-pYg(i,j-2,k,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i,j-1,k,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYg(i,j+1,k,n)-pYg(i,j  ,k,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i,j-1,k,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFy(i,j,k,this%Yg_lo+n-1)=0.5_WP*(pFy(i,j,k,2)-abs(pFy(i,j,k,2)))*sum(wenop*pYg(i,j-2:j  ,k,n)) &
+                           &                        +0.5_WP*(pFy(i,j,k,2)+abs(pFy(i,j,k,2)))*sum(wenom*pYg(i,j-1:j+1,k,n))
+                        end do
                      end if
                      ! Momentum fluxes
                      pFy(i,j,k,5)=sum(pFy(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j-1:j,k,1))
@@ -1521,26 +1575,37 @@ contains
                   ! Add pressure stress
                   !pFy(i,j,k,6)=pFy(i,j,k,6)-0.5_WP*sum(pVF(i,j-1:j,k,1)*pPL(i,j-1:j,k,1)+(1.0_WP-pVF(i,j-1:j,k,1))*pPG(i,j-1:j,k,1))
                   ! Velocity gradients at y-face
-                  gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
-                  gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
-                  gradU(3,1)=0.25_WP*dzi*(pUVW(i,j-1,k+1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
-                  gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j-1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
-                  gradU(2,2)=dyi*(pUVW(i,j,k,2)-pUVW(i,j-1,k,2))
-                  gradU(3,2)=0.25_WP*dzi*(pUVW(i,j-1,k+1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
-                  gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j-1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
-                  gradU(2,3)=dyi*(pUVW(i,j,k,3)-pUVW(i,j-1,k,3))
-                  gradU(3,3)=0.25_WP*dzi*(pUVW(i,j-1,k+1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
-                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  dUdx(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  dUdx(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
+                  dUdx(3,1)=0.25_WP*dzi*(pUVW(i,j-1,k+1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  dUdx(1,2)=0.25_WP*dxi*(pUVW(i+1,j-1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  dUdx(2,2)=dyi*(pUVW(i,j,k,2)-pUVW(i,j-1,k,2))
+                  dUdx(3,2)=0.25_WP*dzi*(pUVW(i,j-1,k+1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  dUdx(1,3)=0.25_WP*dxi*(pUVW(i+1,j-1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  dUdx(2,3)=dyi*(pUVW(i,j,k,3)-pUVW(i,j-1,k,3))
+                  dUdx(3,3)=0.25_WP*dzi*(pUVW(i,j-1,k+1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=dUdx(1,1)+dUdx(2,2)+dUdx(3,3)
                   ! Viscosities at y-face
                   visc_f=2.0_WP*product(pVisc(i,j-1:j,k,1))/(sum(pVisc(i,j-1:j,k,1))+tiny(1.0_WP))
                   beta_f=2.0_WP*product(pBeta(i,j-1:j,k,1))/(sum(pBeta(i,j-1:j,k,1))+tiny(1.0_WP))
                   ! Viscous stress at y-face
-                  pFy(i,j,k,5)=pFy(i,j,k,5)+visc_f*(gradU(1,2)+gradU(2,1))
-                  pFy(i,j,k,6)=pFy(i,j,k,6)+visc_f*(gradU(2,2)+gradU(2,2))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
-                  pFy(i,j,k,7)=pFy(i,j,k,7)+visc_f*(gradU(3,2)+gradU(2,3))
+                  pFy(i,j,k,5)=pFy(i,j,k,5)+visc_f*(dUdx(1,2)+dUdx(2,1))
+                  pFy(i,j,k,6)=pFy(i,j,k,6)+visc_f*(dUdx(2,2)+dUdx(2,2))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
+                  pFy(i,j,k,7)=pFy(i,j,k,7)+visc_f*(dUdx(3,2)+dUdx(2,3))
                   ! Phasic heat diffusion flux (pure cells only)
                   if (all(pVF(i,j-1:j,k,1).gt.VFhi)) pFy(i,j,k,3)=pFy(i,j,k,3)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pTL(i,j,k,1)-pTL(i,j-1,k,1))
                   if (all(pVF(i,j-1:j,k,1).lt.VFlo)) pFy(i,j,k,4)=pFy(i,j,k,4)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pTG(i,j,k,1)-pTG(i,j-1,k,1))
+                  ! Phasic species diffusion flux (pure cells only, Le=1)
+                  if (all(pVF(i,j-1:j,k,1).gt.VFhi)) then
+                     do n=1,this%liq%ns-1
+                        pFy(i,j,k,this%Yl_lo+n-1)=pFy(i,j,k,this%Yl_lo+n-1)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pYl(i,j,k,n)-pYl(i,j-1,k,n))
+                     end do
+                  end if
+                  if (all(pVF(i,j-1:j,k,1).lt.VFlo)) then
+                     do n=1,this%gas%ns-1
+                        pFy(i,j,k,this%Yg_lo+n-1)=pFy(i,j,k,this%Yg_lo+n-1)+0.5_WP*sum(pDiff(i,j-1:j,k,1))*dyi*(pYg(i,j,k,n)-pYg(i,j-1,k,n))
+                     end do
+                  end if
                end do; end do; end do
                ! Z-fluxes
                fbx=mfi%nodaltilebox(3)
@@ -1559,6 +1624,12 @@ contains
                         w=weno_weight((abs(pIL(i,j,k+1,1)-pIL(i,j,k  ,1))+eps)/(abs(pIL(i,j,k,1)-pIL(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFz(i,j,k,3)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pIL(i,j,k-2:k  ,1)) &
                         &           +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pIL(i,j,k-1:k+1,1))
+                        do n=1,this%liq%ns-1
+                           w=weno_weight((abs(pYl(i,j,k-1,n)-pYl(i,j,k-2,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i,j,k-1,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYl(i,j,k+1,n)-pYl(i,j,k  ,n))+eps)/(abs(pYl(i,j,k,n)-pYl(i,j,k-1,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFz(i,j,k,this%Yl_lo+n-1)=0.5_WP*(pFz(i,j,k,1)-abs(pFz(i,j,k,1)))*sum(wenop*pYl(i,j,k-2:k  ,n)) &
+                           &                        +0.5_WP*(pFz(i,j,k,1)+abs(pFz(i,j,k,1)))*sum(wenom*pYl(i,j,k-1:k+1,n))
+                        end do
                      end if
                      ! WENO gas mass and energy fluxes
                      if (any(pVF(i,j,k-1:k,1).le.VFhi)) then
@@ -1570,6 +1641,12 @@ contains
                         w=weno_weight((abs(pIG(i,j,k+1,1)-pIG(i,j,k  ,1))+eps)/(abs(pIG(i,j,k,1)-pIG(i,j,k-1,1))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
                         pFz(i,j,k,4)=0.5_WP*(pFz(i,j,k,2)-abs(pFz(i,j,k,2)))*sum(wenop*pIG(i,j,k-2:k  ,1)) &
                         &           +0.5_WP*(pFz(i,j,k,2)+abs(pFz(i,j,k,2)))*sum(wenom*pIG(i,j,k-1:k+1,1))
+                        do n=1,this%gas%ns-1
+                           w=weno_weight((abs(pYg(i,j,k-1,n)-pYg(i,j,k-2,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i,j,k-1,n))+eps)); wenop=0.5_WP*[-w,1.0_WP+2.0_WP*w,1.0_WP-w]
+                           w=weno_weight((abs(pYg(i,j,k+1,n)-pYg(i,j,k  ,n))+eps)/(abs(pYg(i,j,k,n)-pYg(i,j,k-1,n))+eps)); wenom=0.5_WP*[1.0_WP-w,1.0_WP+2.0_WP*w,-w]
+                           pFz(i,j,k,this%Yg_lo+n-1)=0.5_WP*(pFz(i,j,k,2)-abs(pFz(i,j,k,2)))*sum(wenop*pYg(i,j,k-2:k  ,n)) &
+                           &                        +0.5_WP*(pFz(i,j,k,2)+abs(pFz(i,j,k,2)))*sum(wenom*pYg(i,j,k-1:k+1,n))
+                        end do
                      end if
                      ! Momentum fluxes
                      pFz(i,j,k,5)=sum(pFz(i,j,k,1:2))*0.5_WP*sum(pUVW(i,j,k-1:k,1))
@@ -1579,26 +1656,37 @@ contains
                   ! Add pressure stress
                   !pFz(i,j,k,7)=pFz(i,j,k,7)-0.5_WP*sum(pVF(i,j,k-1:k,1)*pPL(i,j,k-1:k,1)+(1.0_WP-pVF(i,j,k-1:k,1))*pPG(i,j,k-1:k,1))
                   ! Velocity gradients at z-face
-                  gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
-                  gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
-                  gradU(3,1)=dzi*(pUVW(i,j,k,1)-pUVW(i,j,k-1,1))
-                  gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j,k-1,2)-pUVW(i-1,j,k-1,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
-                  gradU(2,2)=0.25_WP*dyi*(pUVW(i,j+1,k-1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
-                  gradU(3,2)=dzi*(pUVW(i,j,k,2)-pUVW(i,j,k-1,2))
-                  gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j,k-1,3)-pUVW(i-1,j,k-1,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
-                  gradU(2,3)=0.25_WP*dyi*(pUVW(i,j+1,k-1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
-                  gradU(3,3)=dzi*(pUVW(i,j,k,3)-pUVW(i,j,k-1,3))
-                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  dUdx(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  dUdx(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  dUdx(3,1)=dzi*(pUVW(i,j,k,1)-pUVW(i,j,k-1,1))
+                  dUdx(1,2)=0.25_WP*dxi*(pUVW(i+1,j,k-1,2)-pUVW(i-1,j,k-1,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  dUdx(2,2)=0.25_WP*dyi*(pUVW(i,j+1,k-1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  dUdx(3,2)=dzi*(pUVW(i,j,k,2)-pUVW(i,j,k-1,2))
+                  dUdx(1,3)=0.25_WP*dxi*(pUVW(i+1,j,k-1,3)-pUVW(i-1,j,k-1,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  dUdx(2,3)=0.25_WP*dyi*(pUVW(i,j+1,k-1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  dUdx(3,3)=dzi*(pUVW(i,j,k,3)-pUVW(i,j,k-1,3))
+                  div=dUdx(1,1)+dUdx(2,2)+dUdx(3,3)
                   ! Viscosities at z-face
                   visc_f=2.0_WP*product(pVisc(i,j,k-1:k,1))/(sum(pVisc(i,j,k-1:k,1))+tiny(1.0_WP))
                   beta_f=2.0_WP*product(pBeta(i,j,k-1:k,1))/(sum(pBeta(i,j,k-1:k,1))+tiny(1.0_WP))
                   ! Viscous stress at z-face
-                  pFz(i,j,k,5)=pFz(i,j,k,5)+visc_f*(gradU(1,3)+gradU(3,1))
-                  pFz(i,j,k,6)=pFz(i,j,k,6)+visc_f*(gradU(2,3)+gradU(3,2))
-                  pFz(i,j,k,7)=pFz(i,j,k,7)+visc_f*(gradU(3,3)+gradU(3,3))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
+                  pFz(i,j,k,5)=pFz(i,j,k,5)+visc_f*(dUdx(1,3)+dUdx(3,1))
+                  pFz(i,j,k,6)=pFz(i,j,k,6)+visc_f*(dUdx(2,3)+dUdx(3,2))
+                  pFz(i,j,k,7)=pFz(i,j,k,7)+visc_f*(dUdx(3,3)+dUdx(3,3))+(beta_f-2.0_WP/3.0_WP*visc_f)*div
                   ! Phasic heat diffusion flux (pure cells only)
                   if (all(pVF(i,j,k-1:k,1).gt.VFhi)) pFz(i,j,k,3)=pFz(i,j,k,3)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pTL(i,j,k,1)-pTL(i,j,k-1,1))
                   if (all(pVF(i,j,k-1:k,1).lt.VFlo)) pFz(i,j,k,4)=pFz(i,j,k,4)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pTG(i,j,k,1)-pTG(i,j,k-1,1))
+                  ! Phasic species diffusion flux (pure cells only, Le=1)
+                  if (all(pVF(i,j,k-1:k,1).gt.VFhi)) then
+                     do n=1,this%liq%ns-1
+                        pFz(i,j,k,this%Yl_lo+n-1)=pFz(i,j,k,this%Yl_lo+n-1)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pYl(i,j,k,n)-pYl(i,j,k-1,n))
+                     end do
+                  end if
+                  if (all(pVF(i,j,k-1:k,1).lt.VFlo)) then
+                     do n=1,this%gas%ns-1
+                        pFz(i,j,k,this%Yg_lo+n-1)=pFz(i,j,k,this%Yg_lo+n-1)+0.5_WP*sum(pDiff(i,j,k-1:k,1))*dzi*(pYg(i,j,k,n)-pYg(i,j,k-1,n))
+                     end do
+                  end if
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
@@ -1628,7 +1716,7 @@ contains
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pVisc,pBeta,pUVW!,pPL,pPG
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pVx,pVy,pVz
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pCL,pCG,pCLold,pCGold
-         real(WP), dimension(1:3,1:3) :: gradU
+         real(WP), dimension(1:3,1:3) :: dUdx
          real(WP) :: div,vol
          real(WP) :: Lvol_old,Lvol_new,Lvol_flux
          real(WP) :: Gvol_old,Gvol_new,Gvol_flux
@@ -1709,34 +1797,34 @@ contains
                   ! Divergence of conserved variable fluxes (7 components)
                   rhs(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
                   ! Velocity gradients at cell center
-                  gradU(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
-                  gradU(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
-                  gradU(3,1)=0.5_WP*dzi*(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
-                  gradU(1,2)=0.5_WP*dxi*(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
-                  gradU(2,2)=0.5_WP*dyi*(pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
-                  gradU(3,2)=0.5_WP*dzi*(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
-                  gradU(1,3)=0.5_WP*dxi*(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
-                  gradU(2,3)=0.5_WP*dyi*(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
-                  gradU(3,3)=0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
-                  div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+                  dUdx(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+                  dUdx(2,1)=0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+                  dUdx(3,1)=0.5_WP*dzi*(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+                  dUdx(1,2)=0.5_WP*dxi*(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+                  dUdx(2,2)=0.5_WP*dyi*(pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+                  dUdx(3,2)=0.5_WP*dzi*(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+                  dUdx(1,3)=0.5_WP*dxi*(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+                  dUdx(2,3)=0.5_WP*dyi*(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+                  dUdx(3,3)=0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+                  div=dUdx(1,1)+dUdx(2,2)+dUdx(3,3)
                   ! Pressure dilatation: split by VF between phasic energies - discontinuous
                   !rhs(i,j,k,3)=rhs(i,j,k,3)-(       pVF(i,j,k,1))*pPL(i,j,k,1)*div
                   !rhs(i,j,k,4)=rhs(i,j,k,4)-(1.0_WP-pVF(i,j,k,1))*pPG(i,j,k,1)*div
                   ! Viscous heating: τ:∇U, split by VF between phasic energies
                   rhs(i,j,k,3)=rhs(i,j,k,3)+(       pVF(i,j,k,1))*( &
-                  & (2.0_WP*pVisc(i,j,k,1)*gradU(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(1,1) &
-                  &+(2.0_WP*pVisc(i,j,k,1)*gradU(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(2,2) &
-                  &+(2.0_WP*pVisc(i,j,k,1)*gradU(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(3,3) &
-                  &+pVisc(i,j,k,1)*(gradU(2,1)+gradU(1,2))*(gradU(2,1)+gradU(1,2)) &
-                  &+pVisc(i,j,k,1)*(gradU(3,1)+gradU(1,3))*(gradU(3,1)+gradU(1,3)) &
-                  &+pVisc(i,j,k,1)*(gradU(3,2)+gradU(2,3))*(gradU(3,2)+gradU(2,3)))
+                  & (2.0_WP*pVisc(i,j,k,1)*dUdx(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(1,1) &
+                  &+(2.0_WP*pVisc(i,j,k,1)*dUdx(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(2,2) &
+                  &+(2.0_WP*pVisc(i,j,k,1)*dUdx(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(3,3) &
+                  &+pVisc(i,j,k,1)*(dUdx(2,1)+dUdx(1,2))*(dUdx(2,1)+dUdx(1,2)) &
+                  &+pVisc(i,j,k,1)*(dUdx(3,1)+dUdx(1,3))*(dUdx(3,1)+dUdx(1,3)) &
+                  &+pVisc(i,j,k,1)*(dUdx(3,2)+dUdx(2,3))*(dUdx(3,2)+dUdx(2,3)))
                   rhs(i,j,k,4)=rhs(i,j,k,4)+(1.0_WP-pVF(i,j,k,1))*( &
-                  & (2.0_WP*pVisc(i,j,k,1)*gradU(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(1,1) &
-                  &+(2.0_WP*pVisc(i,j,k,1)*gradU(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(2,2) &
-                  &+(2.0_WP*pVisc(i,j,k,1)*gradU(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*gradU(3,3) &
-                  &+pVisc(i,j,k,1)*(gradU(2,1)+gradU(1,2))*(gradU(2,1)+gradU(1,2)) &
-                  &+pVisc(i,j,k,1)*(gradU(3,1)+gradU(1,3))*(gradU(3,1)+gradU(1,3)) &
-                  &+pVisc(i,j,k,1)*(gradU(3,2)+gradU(2,3))*(gradU(3,2)+gradU(2,3)))
+                  & (2.0_WP*pVisc(i,j,k,1)*dUdx(1,1)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(1,1) &
+                  &+(2.0_WP*pVisc(i,j,k,1)*dUdx(2,2)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(2,2) &
+                  &+(2.0_WP*pVisc(i,j,k,1)*dUdx(3,3)+(pBeta(i,j,k,1)-2.0_WP/3.0_WP*pVisc(i,j,k,1))*div)*dUdx(3,3) &
+                  &+pVisc(i,j,k,1)*(dUdx(2,1)+dUdx(1,2))*(dUdx(2,1)+dUdx(1,2)) &
+                  &+pVisc(i,j,k,1)*(dUdx(3,1)+dUdx(1,3))*(dUdx(3,1)+dUdx(1,3)) &
+                  &+pVisc(i,j,k,1)*(dUdx(3,2)+dUdx(2,3))*(dUdx(3,2)+dUdx(2,3)))
                end do; end do; end do
             end do
             call this%amr%mfiter_destroy(mfi)
@@ -1751,6 +1839,7 @@ contains
          call this%amr%mfab_destroy(Vx)
          call this%amr%mfab_destroy(Vy)
          call this%amr%mfab_destroy(Vz)
+         call this%amr%mfab_destroy(gradU)
          do lvl=0,this%amr%clvl()
             call this%amr%mfab_destroy(Fx(lvl))
             call this%amr%mfab_destroy(Fy(lvl))
@@ -1774,14 +1863,21 @@ contains
          weno_weight=(1.0_WP-tanh((ratio-lambda)/delta))/3.0_WP+(1.0_WP-tanh((ratio-1.0_WP/lambda)/delta))/6.0_WP
       end function weno_weight
 
+      !> Minmod limiter
+      real(WP) function mmod(a,b)
+         implicit none
+         real(WP), intent(in) :: a,b
+         if (a*b.le.0.0_WP) then; mmod=0.0_WP; else if (abs(a).lt.abs(b)) then; mmod=a; else; mmod=b; end if
+      end function mmod
+
       !> Recursive subroutine that cuts a tet by grid planes to compute volume and Q fluxes
       recursive subroutine tet2flux(mytet,myind,myVflux,myQflux)
          use amrvof_geometry, only: cut_side,cut_v1,cut_v2,cut_vtet,cut_ntets,cut_nvert
          implicit none
          real(WP), dimension(3,4), intent(in) :: mytet
          integer,  dimension(3,4), intent(in) :: myind
-         real(WP), dimension(8),  intent(out) :: myVflux
-         real(WP), dimension(7),  intent(out) :: myQflux
+         real(WP), dimension(8),       intent(out) :: myVflux
+         real(WP), dimension(this%nQ), intent(out) :: myQflux
          integer :: dir,cut_ind,icase,n1,n2,v1,v2
          real(WP), dimension(4) :: dd
          real(WP), dimension(3,8) :: vert
@@ -1791,7 +1887,7 @@ contains
          integer,  dimension(3,4) :: newind
          real(WP), dimension(3) :: a,b,c
          real(WP), dimension(8) :: subVflux
-         real(WP), dimension(7) :: subQflux
+         real(WP), dimension(this%nQ) :: subQflux
          real(WP) :: xcut,ycut,zcut
          
          myVflux=0.0_WP
@@ -1871,8 +1967,8 @@ contains
          implicit none
          real(WP), dimension(3,4), intent(in) :: mytet
          integer,  intent(in) :: i0,j0,k0
-         real(WP), dimension(8),  intent(out) :: myVflux
-         real(WP), dimension(7),  intent(out) :: myQflux
+         real(WP), dimension(8),       intent(out) :: myVflux
+         real(WP), dimension(this%nQ), intent(out) :: myQflux
          integer :: icase,n1,v1,v2
          real(WP), dimension(4) :: dd
          real(WP), dimension(3,8) :: vert
@@ -1904,6 +2000,7 @@ contains
             myVflux(3:5)=vol_tot*bary_tot
             ! Q flux: all mass is liquid
             myQflux=vol_tot*pQold(i0,j0,k0,:)
+            call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
             return
          else if (pPLICold(i0,j0,k0,4).lt.-1.0e9_WP) then
             ! Pure gas
@@ -1911,6 +2008,7 @@ contains
             myVflux(6:8)=vol_tot*bary_tot
             ! Q flux: all mass is gas
             myQflux=vol_tot*pQold(i0,j0,k0,:)
+            call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
             return
          end if
 
@@ -1980,14 +2078,38 @@ contains
          if (VF0.ge.VFlo) then
             myQflux(1)=myVflux(1)*pQold(i0,j0,k0,1)/VF0
             myQflux(3)=myVflux(1)*pQold(i0,j0,k0,3)/VF0
+            if (this%liq%ns.gt.1) myQflux(this%Yl_lo:this%Yl_hi)=myVflux(1)*pQold(i0,j0,k0,this%Yl_lo:this%Yl_hi)/VF0
          end if
          if (VF0.le.VFhi) then
             myQflux(2)=myVflux(2)*pQold(i0,j0,k0,2)/(1.0_WP-VF0)
             myQflux(4)=myVflux(2)*pQold(i0,j0,k0,4)/(1.0_WP-VF0)
+            if (this%gas%ns.gt.1) myQflux(this%Yg_lo:this%Yg_hi)=myVflux(2)*pQold(i0,j0,k0,this%Yg_lo:this%Yg_hi)/(1.0_WP-VF0)
          end if
-         myQflux(5:7)=sum(myQflux(1:2))*pQold(i0,j0,k0,5:7)/max(sum(pQold(i0,j0,k0,1:2)),this%rho_floor)
+         !myQflux(5:7)=sum(myQflux(1:2))*pQold(i0,j0,k0,5:7)/max(sum(pQold(i0,j0,k0,1:2)),this%rho_floor)
+         call reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
          
       end subroutine tet2flux_plic
+
+      !> Conservative phase-split velocity reconstruction of the momentum flux (5:7)
+      subroutine reconstruct_momentum(i0,j0,k0,myVflux,myQflux)
+         implicit none
+         integer,  intent(in) :: i0,j0,k0
+         real(WP), dimension(8),       intent(in)    :: myVflux
+         real(WP), dimension(this%nQ), intent(inout) :: myQflux
+         real(WP), dimension(3) :: xmass,baryL,baryG,ucell,uL,uG
+         real(WP) :: mtot
+         integer  :: c
+         mtot =max(pQold(i0,j0,k0,1)+pQold(i0,j0,k0,2),this%rho_floor)
+         ucell=pQold(i0,j0,k0,5:7)/mtot
+         xmass=(pQold(i0,j0,k0,1)*pCLold(i0,j0,k0,1:3)+pQold(i0,j0,k0,2)*pCGold(i0,j0,k0,1:3))/mtot
+         if (myVflux(1).gt.tiny(1.0_WP)) then; baryL=myVflux(3:5)/myVflux(1); else; baryL=xmass; end if
+         if (myVflux(2).gt.tiny(1.0_WP)) then; baryG=myVflux(6:8)/myVflux(2); else; baryG=xmass; end if
+         do c=1,3
+            uL(c)=ucell(c)+sum(pGradU(i0,j0,k0,3*c-2:3*c)*(baryL-xmass))
+            uG(c)=ucell(c)+sum(pGradU(i0,j0,k0,3*c-2:3*c)*(baryG-xmass))
+         end do
+         myQflux(5:7)=myQflux(1)*uL+myQflux(2)*uG
+      end subroutine reconstruct_momentum
 
       !> RK2 vertex projection back in time
       function project(p1,mydt) result(p2)
@@ -2084,8 +2206,12 @@ contains
             ! Loop over grown tiles
             bx=mfi%growntilebox(this%nover)
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               if      (pVF(i,j,k,1).lt.VFlo) then; pQ(i,j,k,1)=0.0_WP; pQ(i,j,k,3)=0.0_WP
-               else if (pVF(i,j,k,1).gt.VFhi) then; pQ(i,j,k,2)=0.0_WP; pQ(i,j,k,4)=0.0_WP
+               if (pVF(i,j,k,1).lt.VFlo) then
+                  pQ(i,j,k,1)=0.0_WP; pQ(i,j,k,3)=0.0_WP
+                  if (this%liq%ns.gt.1) pQ(i,j,k,this%Yl_lo:this%Yl_hi)=0.0_WP
+               else if (pVF(i,j,k,1).gt.VFhi) then
+                  pQ(i,j,k,2)=0.0_WP; pQ(i,j,k,4)=0.0_WP
+                  if (this%gas%ns.gt.1) pQ(i,j,k,this%Yg_lo:this%Yg_hi)=0.0_WP
                end if
             end do; end do; end do
          end do
@@ -2094,17 +2220,19 @@ contains
    end subroutine clean_Q
 
    !> Apply relaxation to mixture cells
-   subroutine apply_relax(this,time)
+   subroutine apply_relax(this,dt,time)
       use mpi_f08, only: MPI_Wtime
       use amrvof_geometry, only: get_plane_dist,cut_hex_vol
       implicit none
       class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: dt
       real(WP), intent(in) :: time
       integer :: lvl,i,j,k
       real(WP) :: t0
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pCL,pCG,pCurv,pPLIC
+      logical :: oldmix,newmix
       real(WP) :: dx,dy,dz,cell_vol,vol_liq,vol_gas
       real(WP), dimension(3) :: lo,hi,bary_liq,bary_gas
       real(WP), dimension(3,8) :: hex
@@ -2128,13 +2256,43 @@ contains
          pCG  =>this%CG%dataptr(mfi)
          pCurv=>this%curv%dataptr(mfi)
          pPLIC=>this%plic%dataptr(mfi)
-         ! Loop over all cells
-         bx=mfi%growntilebox(this%nover)
+         ! Loop over valid cells
+         bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! Only relax mixture cells
-            if (pVF(i,j,k,1).lt.VFlo.or.pVF(i,j,k,1).gt.VFhi) cycle
+
+            ! Check if mixture cell prior to relaxation
+            oldmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
             ! Apply user-provided relaxation model (modifies VF and Q)
-            call this%relax(VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
+            call this%relax%apply(dt=dt,VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
+            ! Check if mixture cell after relaxation
+            newmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
+
+            ! If not mixture cells, clean up and cycle
+            if (.not.newmix) then
+               if (pVF(i,j,k,1).lt.VFlo) then
+                  ! Pure gas
+                  pVF(i,j,k,1)=0.0_WP
+                  pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pQ(i,j,k,1)=0.0_WP
+                  pQ(i,j,k,3)=0.0_WP
+                  if (this%liq%ns.gt.1) pQ(i,j,k,this%Yl_lo:this%Yl_hi)=0.0_WP
+                  pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,-1.0e10_WP]
+               else if (pVF(i,j,k,1).gt.VFhi) then
+                  ! Pure liquid
+                  pVF(i,j,k,1)=1.0_WP
+                  pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
+                  pQ(i,j,k,2)=0.0_WP
+                  pQ(i,j,k,4)=0.0_WP
+                  if (this%gas%ns.gt.1) pQ(i,j,k,this%Yg_lo:this%Yg_hi)=0.0_WP
+                  pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,+1.0e10_WP]
+               end if
+               cycle
+            end if
+
+            ! If mixture cell, post-process PLIC and barycenters
+            if (.not.oldmix) pPLIC(i,j,k,1:3)=[1.0_WP,0.0_WP,0.0_WP]
             ! Adjust PLIC plane to match new VF
             lo=[this%amr%xlo+real(i  ,WP)*dx,this%amr%ylo+real(j  ,WP)*dy,this%amr%zlo+real(k  ,WP)*dz]
             hi=[this%amr%xlo+real(i+1,WP)*dx,this%amr%ylo+real(j+1,WP)*dy,this%amr%zlo+real(k+1,WP)*dz]
@@ -2154,27 +2312,13 @@ contains
             pVF(i,j,k,1)=vol_liq/cell_vol
             pCL(i,j,k,1:3)=bary_liq
             pCG(i,j,k,1:3)=bary_gas
-            ! Ensure consistency with modified VF
-            if (pVF(i,j,k,1).lt.VFlo) then
-               ! Pure liquid
-               pVF(i,j,k,1)=0.0_WP
-               pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pQ(i,j,k,1)=0.0_WP
-               pQ(i,j,k,3)=0.0_WP
-               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,-1.0e10_WP]
-            else if (pVF(i,j,k,1).gt.VFhi) then
-               ! Pure gas
-               pVF(i,j,k,1)=1.0_WP
-               pCL(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pCG(i,j,k,1:3)=[this%amr%xlo+(real(i,WP)+0.5_WP)*dx,this%amr%ylo+(real(j,WP)+0.5_WP)*dy,this%amr%zlo+(real(k,WP)+0.5_WP)*dz]
-               pQ(i,j,k,2)=0.0_WP
-               pQ(i,j,k,4)=0.0_WP
-               pPLIC(i,j,k,:)=[0.0_WP,0.0_WP,0.0_WP,+1.0e10_WP]
-            end if
+
          end do; end do; end do
       end do
       call this%amr%mfiter_destroy(mfi)
+      ! Sync and apply BC
+      call this%VF%average_down(); call this%fill(lvl=this%amr%maxlvl,time=time)
+      call this%Q%average_down(); call this%Q%fill(time=time)
       ! End timer
       this%wt_relax=this%wt_relax+(MPI_Wtime()-t0)
    end subroutine apply_relax
@@ -2393,8 +2537,8 @@ contains
          type(amrex_box) :: bx
          type(amrex_imultifab) :: mask
          integer, dimension(:,:,:,:), contiguous, pointer :: pMask
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pRHOL,pRHOG,pIL,pIG,pPL,pPG,pTL,pTG
-         integer :: i,j,k
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pRHOL,pRHOG,pIL,pIG,pPL,pPG,pTL,pTG,pYl,pYg
+         integer :: i,j,k,n
          ! Initialize extrema
          this%RHOLmin=huge(1.0_WP); this%RHOLmax=-huge(1.0_WP); this%RHOGmin=huge(1.0_WP); this%RHOGmax=-huge(1.0_WP)
          this%ILmin=huge(1.0_WP); this%ILmax=-huge(1.0_WP); this%IGmin=huge(1.0_WP); this%IGmax=-huge(1.0_WP)
@@ -2402,6 +2546,8 @@ contains
          this%TLmin=huge(1.0_WP); this%TLmax=-huge(1.0_WP); this%TGmin=huge(1.0_WP); this%TGmax=-huge(1.0_WP)
          this%Cmin=huge(1.0_WP); this%Cmax=-huge(1.0_WP)
          this%dPmax=0.0_WP
+         if (this%liq%ns.gt.1) then; this%Ylmin=huge(1.0_WP); this%Ylmax=-huge(1.0_WP); end if
+         if (this%gas%ns.gt.1) then; this%Ygmin=huge(1.0_WP); this%Ygmax=-huge(1.0_WP); end if
          ! Traverse levels
          do lvl=0,this%amr%clvl()
             ! Velocity norm 0
@@ -2424,6 +2570,8 @@ contains
                pIL=>this%IL%mf(lvl)%dataptr(mfi); pIG=>this%IG%mf(lvl)%dataptr(mfi)
                pPL=>this%PL%mf(lvl)%dataptr(mfi); pPG=>this%PG%mf(lvl)%dataptr(mfi)
                pTL=>this%TL%mf(lvl)%dataptr(mfi); pTG=>this%TG%mf(lvl)%dataptr(mfi)
+               if (this%liq%ns.gt.1) pYl=>this%Yl%mf(lvl)%dataptr(mfi)
+               if (this%gas%ns.gt.1) pYg=>this%Yg%mf(lvl)%dataptr(mfi)
                if (lvl.lt.this%amr%clvl()) pMask=>mask%dataptr(mfi)
                ! Loop over interior tiles
                bx=mfi%tilebox()
@@ -2436,6 +2584,9 @@ contains
                      this%ILmin  =min(this%ILmin  ,pIL  (i,j,k,1)); this%ILmax  =max(this%ILmax  ,pIL  (i,j,k,1))
                      this%PLmin  =min(this%PLmin  ,pPL  (i,j,k,1)); this%PLmax  =max(this%PLmax  ,pPL  (i,j,k,1))
                      this%TLmin  =min(this%TLmin  ,pTL  (i,j,k,1)); this%TLmax  =max(this%TLmax  ,pTL  (i,j,k,1))
+                     do n=1,this%liq%ns-1
+                        this%Ylmin(n)=min(this%Ylmin(n),pYl(i,j,k,n)); this%Ylmax(n)=max(this%Ylmax(n),pYl(i,j,k,n))
+                     end do
                   end if
                   ! Gas variables
                   if (pVF(i,j,k,1).le.VFhi) then
@@ -2443,6 +2594,9 @@ contains
                      this%IGmin  =min(this%IGmin  ,pIG  (i,j,k,1)); this%IGmax  =max(this%IGmax  ,pIG  (i,j,k,1))
                      this%PGmin  =min(this%PGmin  ,pPG  (i,j,k,1)); this%PGmax  =max(this%PGmax  ,pPG  (i,j,k,1))
                      this%TGmin  =min(this%TGmin  ,pTG  (i,j,k,1)); this%TGmax  =max(this%TGmax  ,pTG  (i,j,k,1))
+                     do n=1,this%gas%ns-1
+                        this%Ygmin(n)=min(this%Ygmin(n),pYg(i,j,k,n)); this%Ygmax(n)=max(this%Ygmax(n),pYg(i,j,k,n))
+                     end do
                   end if
                   ! Pressure gap in mixed cells
                   if (pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi) then
@@ -2463,6 +2617,14 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%PGmin  ,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr); call MPI_ALLREDUCE(MPI_IN_PLACE,this%PGmax  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%TGmin  ,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr); call MPI_ALLREDUCE(MPI_IN_PLACE,this%TGmax  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%dPmax  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         if (this%liq%ns.gt.1) then
+            call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ylmin,this%liq%ns-1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ylmax,this%liq%ns-1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         end if
+         if (this%gas%ns.gt.1) then
+            call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ygmin,this%gas%ns-1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,this%Ygmax,this%gas%ns-1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+         end if
       end block phasic_extrema
 
       ! Kinetic energy integral: 0.5 * rho * (U^2 + V^2 + W^2) * dV
