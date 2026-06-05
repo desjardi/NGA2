@@ -1,5 +1,5 @@
-!> Calorically perfect ideal-gas EOS (pure substance, ns=1).
-!> Parameters: gamma, cv, q (energy of formation), qp (entropy of formation).
+!> Calorically perfect ideal-gas EOS (pure substance, ns=1)
+!> Parameters: gamma, cv, q (energy of formation), qp (entropy of formation)
 module ideal_gas_class
    use precision,      only: WP
    use material_class, only: material
@@ -16,7 +16,8 @@ module ideal_gas_class
       real(WP) :: q     = 0.0_WP
       real(WP) :: qp    = 0.0_WP
    contains
-      procedure :: initialize              => ig_initialize
+      procedure, private :: ig_initialize
+      generic   :: initialize              => ig_initialize
       procedure :: get_p_from_rho_e        => ig_get_p_from_rho_e
       procedure :: get_T_from_p_rho        => ig_get_T_from_p_rho
       procedure :: get_c_from_p_rho        => ig_get_c_from_p_rho

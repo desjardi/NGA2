@@ -2,6 +2,7 @@ f90EXE_sources += random.f90 precision_$(PREC).f90 string.f90 param.f90 messager
 f90EXE_sources += parallel.f90 mathtools.f90 inputfile_class.f90 filesys.f90 polygon_class.f90 quicksort.f90 binary_search.f90 timer_class.f90 integrator.f90 avl_trees.f90
 f90EXE_sources += surfmesh_class.f90 partmesh_class.f90
 f90EXE_sources += resource_tracker.f90
+f90EXE_sources += material_class.f90 thermorelax_class.f90
 
 cEXE_sources += c_filesys.c
 
