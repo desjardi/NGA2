@@ -1,0 +1,5 @@
+f90EXE_sources += material_class.f90 ideal_gas_class.f90 stiffened_gas_class.f90
+f90EXE_sources += thermorelax_class.f90 relax_ig_sg_class.f90
+
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/thermo
+VPATH_LOCATIONS   += $(NGA_HOME)/src/thermo

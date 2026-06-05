@@ -3,3 +3,8 @@ f90EXE_sources += amrflow_class.f90 amrscalar_class.f90 amrincomp_class.f90 amrc
 
 INCLUDE_LOCATIONS += $(NGA_HOME)/src/amrsolvers
 VPATH_LOCATIONS   += $(NGA_HOME)/src/amrsolvers
+
+# Thermo (material EOS used by amrcomp)
+f90EXE_sources += material_class.f90 ideal_gas_class.f90 stiffened_gas_class.f90 thermorelax_class.f90 relax_ig_sg_class.f90
+INCLUDE_LOCATIONS += $(NGA_HOME)/src/thermo
+VPATH_LOCATIONS   += $(NGA_HOME)/src/thermo

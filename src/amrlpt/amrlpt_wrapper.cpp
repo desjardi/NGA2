@@ -421,9 +421,16 @@ double amrlpt_read_plotfile_time(const char* basedir)
 // Restart: read back a particle checkpoint written by amrlpt_write.
 // -----------------------------------------------------------------------
 
-void amrlpt_read(PC* pc, const char* dir, const char* name)
+void amrlpt_read(PC* pc, const char* fullpath)
 {
-    pc->Restart(std::string(dir), std::string(name));
+    // Mirror amrlpt_write: split a single fullpath into (parent, leaf) so the
+    // ABI matches the Fortran caller, which passes one path argument.
+    std::string path(fullpath);
+    while (!path.empty() && path.back() == '/') path.pop_back();
+    auto pos = path.rfind('/');
+    std::string parent = (pos != std::string::npos) ? path.substr(0, pos) : std::string(".");
+    std::string leaf   = (pos != std::string::npos) ? path.substr(pos+1) : path;
+    pc->Restart(parent, leaf);
 }
 
 // -----------------------------------------------------------------------

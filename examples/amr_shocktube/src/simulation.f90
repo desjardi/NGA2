@@ -1,14 +1,17 @@
 !> 1D multiphase shock tube simulation with amr code
 module simulation
-   use precision,         only: WP
-   use string,            only: str_medium
-   use amrgrid_class,     only: amrgrid
-   use amrmpcomp_class,   only: amrmpcomp
-   use amrviz_class,      only: amrviz
-   use amrdata_class,     only: amrdata
-   use timetracker_class, only: timetracker
-   use event_class,       only: event
-   use monitor_class,     only: monitor
+   use precision,           only: WP
+   use string,              only: str_medium
+   use amrgrid_class,       only: amrgrid
+   use amrmpcomp_class,     only: amrmpcomp
+   use amrviz_class,        only: amrviz
+   use amrdata_class,       only: amrdata
+   use timetracker_class,   only: timetracker
+   use event_class,         only: event
+   use monitor_class,       only: monitor
+   use stiffened_gas_class, only: stiffened_gas
+   use ideal_gas_class,     only: ideal_gas
+   use relax_ig_sg_class,   only: relax_ig_sg
    implicit none
    private
 
@@ -29,9 +32,12 @@ module simulation
    !> Simulation monitoring
    type(monitor) :: mfile,consfile,cflfile,gridfile,tfile
 
-   !> Stiffened gas EOS parameters (liquid and gas)
-   real(WP) :: GammaL,PinfL,CvL
-   real(WP) :: GammaG,PinfG,CvG
+   !> Materials
+   type(stiffened_gas), target :: water
+   type(ideal_gas),     target :: air
+
+   !> Relaxation model
+   type(relax_ig_sg), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG,pG_init            !< Gas state (right side)
@@ -54,108 +60,6 @@ contains
       real(WP) :: G
       G=x_int-xyz(1)
    end function planar_levelset
-
-   !> Liquid EOS: P=f(RHO,I) - Stiffened gas
-   pure real(WP) function get_PL(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_PL=RHO*I*(GammaL-1.0_WP)-GammaL*PinfL
-   end function get_PL
-   !> Liquid EOS: T=f(RHO,P)
-   pure real(WP) function get_TL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_TL=(P+PinfL)/(CvL*RHO*(GammaL-1.0_WP))
-   end function get_TL
-   !> Liquid EOS: C=f(RHO,P)
-   pure real(WP) function get_CL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_CL=sqrt(max(0.0_WP,GammaL*(P+PinfL)/RHO))
-   end function get_CL
-   !> Liquid EOS: I=f(RHO,P) (used for initialization)
-   pure real(WP) function get_IL(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_IL=(P+GammaL*PinfL)/(RHO*(GammaL-1.0_WP))
-   end function get_IL
-
-   !> Gas EOS: P=f(RHO,I) - Ideal gas
-   pure real(WP) function get_PG(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_PG=RHO*I*(GammaG-1.0_WP)-GammaG*PinfG
-   end function get_PG
-   !> Gas EOS: T=f(RHO,P)
-   pure real(WP) function get_TG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_TG=(P+PinfG)/(CvG*RHO*(GammaG-1.0_WP))
-   end function get_TG
-   !> Gas EOS: C=f(RHO,P)
-   pure real(WP) function get_CG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_CG=sqrt(max(0.0_WP,GammaG*(P+PinfG)/RHO))
-   end function get_CG
-   !> Gas EOS: I=f(RHO,P) (used for initialization)
-   pure real(WP) function get_IG(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_IG=(P+GammaG*PinfG)/(RHO*(GammaG-1.0_WP))
-   end function get_IG
-
-   !> Generalized mechanical relaxation for stiffened gas EOS pair
-   !> Solves quadratic for equilibrium pressure Peq where PL+Pjump=PG=Peq,
-   !> then adjusts VF and internal energies via p*dV work exchange.
-   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:7)
-   !> Enforces pressure jump provided in Pjump
-   subroutine P_relax_generalized(VF,Q,Pjump)
-      use amrmpcomp_class, only: VFlo,VFhi
-      implicit none
-      real(WP), intent(inout) :: VF
-      real(WP), dimension(:), intent(inout) :: Q
-      real(WP), intent(in) :: Pjump
-      real(WP) :: PG,PL,ZG,ZL,Pint,cJ
-      real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
-      real(WP), parameter :: RHOGmin=1.0e-2_WP
-      real(WP), parameter :: phist=1.0_WP,phi0=0.0_WP   !< Temporal weighting, phist=1 should yield best results
-      ! Skip relaxation for the first few timesteps to allow pressure to stabilize (since IC are not in mechanical equilibrium)
-      if (time%t.lt.5.0e-6_WP) return
-      ! Skip if any conserved quantity is non-positive (EOS undefined)
-      if (any(Q(1:4).le.0.0_WP)) return
-      ! Skip near-pure-liquid cells (gas density too low)
-      if (Q(2)/(1.0_WP-VF).lt.RHOGmin) return
-      ! Get phasic pressures
-      PL=get_PL(RHO=Q(1)/(       VF),I=Q(3)/Q(1))
-      PG=get_PG(RHO=Q(2)/(1.0_WP-VF),I=Q(4)/Q(2))
-      ! Get phasic impedances
-      ZL=Q(1)/(       VF)*get_CL(RHO=Q(1)/(       VF),P=PL)**2
-      ZG=Q(2)/(1.0_WP-VF)*get_CG(RHO=Q(2)/(1.0_WP-VF),P=PG)**2
-      cJ=ZL/(ZG+ZL)
-      ! Calculate model interface pressure
-      Pint=(ZG*PL+ZL*PG)/(ZG+ZL)
-      ! Setup quadratic problem
-      n1=VF*phist
-      n0=VF*(phi0*Pint-phist*cJ*pjump)+Q(3)
-      d1=phist+1.0_WP/(GammaL-1.0_WP)
-      d0=phi0*Pint-phist*cJ*pjump+GammaL/(GammaL-1.0_WP)*PinfL
-      a=d1*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n1*(-1.0_WP/(GammaG-1.0_WP)-phist)
-      b=d1*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n1*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)+d0*(1.0_WP/(GammaG-1.0_WP)+phist*VF)+n0*(-1.0_WP/(GammaG-1.0_WP)-phist)
-      d=d0*((GammaG*PinfG-pjump)/(GammaG-1.0_WP)-Q(4)+VF*(phi0*Pint-phist*cJ*pjump))+n0*(-(GammaG*PinfG-pjump)/(GammaG-1.0_WP)-phi0*Pint+phist*cJ*pjump)
-      ! Get equilibrium pressure
-      if (b**2-4.0_WP*a*d.lt.0.0_WP) return
-      Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
-      ! Check if pressure is sound
-      if (Peq.le.-PinfL.or.Peq-Pjump.le.-PinfG) return
-      ! Get equilibrium volume fraction
-      VFeq=(n1*Peq+n0)/(d1*Peq+d0)
-      if (VFeq.lt.VFlo.or.VFeq.gt.VFhi) return
-      ! Adjust conserved quantities
-      Q(3)=Q(3)-(phi0*Pint+phist*Peq)*(VFeq-VF)
-      Q(4)=Q(4)+(phi0*Pint+phist*Peq)*(VFeq-VF)
-      VF=VFeq
-   end subroutine P_relax_generalized
 
    !> Set viscosities to zero
    subroutine get_viscosities()
@@ -187,8 +91,8 @@ contains
       ! Get mesh size
       dx=solver%amr%dx(lvl); dy=solver%amr%dy(lvl); dz=solver%amr%dz(lvl)
       ! Get internal energies
-      IEL=get_IL(rhoL,pL_init)
-      IEG=get_IG(rhoG,pG_init)
+      IEL=water%get_e_from_p_rho(p=pL_init,rho=rhoL,y=[1.0_WP])
+      IEG=air%get_e_from_p_rho  (p=pG_init,rho=rhoG,y=[1.0_WP])
       ! Use passed ba/dm since grid is being constructed
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
       do while (mfi%next())
@@ -236,15 +140,18 @@ contains
          use messager, only: log
          use string,   only: str_long
          character(len=str_long) :: message
-         ! Gas EoS parameters (ideal gas: Pinf=0)
+         real(WP) :: GammaL,PinfL,CvL,GammaG,CvG
+         ! Gas EoS parameters (ideal gas)
          call param_read('GammaG',GammaG)
-         PinfG=0.0_WP
          ! Liquid EoS parameters (stiffened gas)
          call param_read('GammaL',GammaL)
          call param_read('PinfL',PinfL)
          ! Specific heats
          call param_read('CvG',CvG)
          call param_read('CvL',CvL)
+         ! Build materials
+         call air%initialize  (gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='air')
+         call water%initialize(gamma=GammaL,pinf=PinfL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
          ! Gas state (right side)
          call param_read('Gas density',rhoG)
          call param_read('Gas pressure',pG_init)
@@ -254,8 +161,7 @@ contains
          ! Interface location
          call param_read('Interface location',x_int)
          ! Log
-         write(message,'("[Gas]    GammaG=",es12.5," PinfG=",es12.5," CvG=",es12.5)') GammaG,PinfG,CvG; call log(message)
-         write(message,'("[Liquid] GammaL=",es12.5," PinfL=",es12.5," CvL=",es12.5)') GammaL,PinfL,CvL; call log(message)
+         call water%print(); call air%print()
          write(message,'("[Gas]    rhoG=",es12.5," pG=",es12.5)') rhoG,pG_init; call log(message)
          write(message,'("[Liquid] rhoL=",es12.5," pL=",es12.5)') rhoL,pL_init; call log(message)
          write(message,'("[Interface] x_int=",es12.5)') x_int; call log(message)
@@ -299,16 +205,13 @@ contains
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrmpcomp_class,  only: BC_GAS,BC_LIQ
          use amrdata_class,    only: interp_face_lin
-         ! Create flow solver
-         call fs%initialize(amr=amr,name='shocktube')
+         ! Assign materials and create flow solver
+         fs%liq=>water; fs%gas=>air; call fs%initialize(amr=amr,name='shocktube')
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          if (amr%ny.eq.1) fs%interp_vel=interp_face_lin
-         ! Provide thermodynamic model (6 EOS pointers)
-         fs%getPL=>get_PL; fs%getCL=>get_CL; fs%getTL=>get_TL
-         fs%getPG=>get_PG; fs%getCG=>get_CG; fs%getTG=>get_TG
          ! Provide pressure relaxation model
-         fs%relax=>P_relax_generalized
+         call relax_model%initialize(gas=air,liq=water); fs%relax=>relax_model
          ! Set initial conditions
          fs%user_init=>shocktube_init
          ! Set BCs: outflow (foextrap) on both x boundaries
@@ -490,7 +393,7 @@ contains
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
          ! Get most up-to-date pressure
-         call fs%apply_relax(time=time%tmid)
+         if (time%t.ge.5.0e-6_WP) call fs%apply_relax(dt=0.5_WP*time%dt,time=time%tmid)
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
@@ -513,7 +416,7 @@ contains
          ! Rebuild PLIC
          call fs%build_plic(time=time%t)
          ! Get most up-to-date pressure
-         call fs%apply_relax(time=time%t)
+         if (time%t.ge.5.0e-6_WP) call fs%apply_relax(dt=time%dt,time=time%t)
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
@@ -681,6 +584,9 @@ contains
       call dQdt%finalize()
       call Umag%finalize()
       call Mach%finalize()
+      ! Finalize materials
+      call water%finalize()
+      call air%finalize()
       ! Finalize visualization
       call viz%finalize()
       call viz_evt%finalize()

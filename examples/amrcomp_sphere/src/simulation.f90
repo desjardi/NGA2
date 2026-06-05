@@ -1,13 +1,14 @@
 !> AMR compressible sphere test case with shock initialization
 module simulation
-   use precision,         only: WP
-   use amrgrid_class,     only: amrgrid
-   use amrcomp_class,     only: amrcomp
-   use amrviz_class,      only: amrviz
-   use amrdata_class,     only: amrdata
-   use timetracker_class, only: timetracker
-   use event_class,       only: event
-   use monitor_class,     only: monitor
+   use precision,           only: WP
+   use amrgrid_class,       only: amrgrid
+   use amrcomp_class,       only: amrcomp
+   use amrviz_class,        only: amrviz
+   use amrdata_class,       only: amrdata
+   use timetracker_class,   only: timetracker
+   use event_class,         only: event
+   use monitor_class,       only: monitor
+   use stiffened_gas_class, only: stiffened_gas
    implicit none
    private
    
@@ -37,8 +38,8 @@ module simulation
    !> Simulation monitoring
    type(monitor) :: mfile,consfile,cflfile,gridfile
    
-   !> Stiffened gas EOS parameters
-   real(WP) :: Gamma,Pinf,Cv
+   !> Material
+   type(stiffened_gas), target :: fluid
 
    !> Flow parameters
    real(WP) :: M2,Xs                  !< Post-shock Mach and shock location
@@ -75,34 +76,6 @@ contains
       if (amr%nz.eq.1) G=sqrt(xyz(1)**2+xyz(2)**2)-0.5_WP ! Enable 2D case
    end function sphere_levelset
 
-   !> P=EOS(RHO,I) - Stiffened gas
-   pure real(WP) function get_P(RHO,I)
-      implicit none
-      real(WP), intent(in) :: RHO,I
-      get_P=RHO*I*(Gamma-1.0_WP)-Gamma*Pinf
-   end function get_P
-   
-   !> T=f(RHO,P)
-   pure real(WP) function get_T(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_T=(P+Pinf)/(Cv*RHO*(Gamma-1.0_WP))
-   end function get_T
-   
-   !> C=f(RHO,P) - Speed of sound
-   pure real(WP) function get_C(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_C=sqrt(Gamma*(P+Pinf)/RHO)
-   end function get_C
-
-   !> I=EOS(RHO,P)
-   pure real(WP) function get_I(RHO,P)
-      implicit none
-      real(WP), intent(in) :: RHO,P
-      get_I=(P+Gamma*Pinf)/(RHO*(Gamma-1.0_WP))
-   end function get_I
-
    !> Compute viscosity using Sutherland's law, zero bulk viscosity, and set diffusivity based on Prandtl number
    subroutine get_viscosities()
       use amrex_amr_module, only: amrex_mfiter,amrex_box
@@ -134,7 +107,7 @@ contains
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Heat diffusivity: k = Cp*mu/Pr = Cv*Gamma*mu/Pr
-               pDiff(i,j,k,1)=Gamma*Cv*pVisc(i,j,k,1)/Prandtl
+               pDiff(i,j,k,1)=fluid%gamma*fluid%cv*pVisc(i,j,k,1)/Prandtl
                ! Apply sponge layer viscosity
                r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
@@ -176,7 +149,7 @@ contains
             rho=rho1+(rho2-rho1)*H
             U=u1+(u2-u1)*H
             P=p1+(p2-p1)*H
-            IE=get_I(rho,P)
+            IE=fluid%get_e_from_p_rho(p=P,rho=rho,y=[1.0_WP])
             ! Set conserved variables
             pQ(i,:,:,1)=rho
             pQ(i,:,:,2)=rho*U
@@ -216,7 +189,7 @@ contains
                p(i,j,k,2)=rho2*u2
                p(i,j,k,3)=0.0_WP
                p(i,j,k,4)=0.0_WP
-               p(i,j,k,5)=rho2*get_I(rho2,p2)
+               p(i,j,k,5)=rho2*fluid%get_e_from_p_rho(p=p2,rho=rho2,y=[1.0_WP])
             end do; end do; end do
          end select
       end select
@@ -342,9 +315,9 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
+         real(WP) :: Gamma,Cv
          ! EoS parameters
          call param_read('Gamma',Gamma)
-         Pinf=0.0_WP
          ! Shock parameters (input is M2, post-shock lab Mach)
          call param_read('Mach number',M2)
          call param_read('Shock location',Xs)
@@ -368,6 +341,8 @@ contains
          u1=0.0_WP
          ! Cv from T2=1
          Cv=p2/(rho2*(Gamma-1.0_WP))
+         ! Build material
+         call fluid%initialize(gamma=Gamma,pinf=0.0_WP,cv=Cv,q=0.0_WP,qp=0.0_WP,name='fluid')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -378,7 +353,7 @@ contains
          write(message,'("[Shock Mach]      Ms=",es12.5)') Ms; call log(message)
          write(message,'("[Pre-shock]  rho1=",es12.5," p1=",es12.5)') rho1,p1; call log(message)
          write(message,'("[Post-shock] rho2=",es12.5," p2=",es12.5)') rho2,p2; call log(message)
-         write(message,'("[Cv=",es12.5,"]")') Cv; call log(message)
+         call fluid%print()
       end block init_eos_and_flow
       
       ! Initialize AMR grid
@@ -414,19 +389,15 @@ contains
       create_solver: block
          use amrex_amr_module, only: amrex_bc_ext_dir,amrex_bc_foextrap
          use amrdata_class, only: interp_face_lin
-         ! Create flow solver
+         ! Assign material and create flow solver
          call param_read('Use projection',fs%use_projection)
-         call fs%initialize(amr=amr)
+         fs%mat=>fluid; call fs%initialize(amr=amr)
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Set pressure convergence
          fs%psolver%max_iter=20
          fs%psolver%tol_rel=1.0e-5_WP
          fs%psolver%verbose=2
-         ! Provide thermodynamic model
-         fs%getP=>get_P
-         fs%getC=>get_C
-         fs%getT=>get_T
          ! Set initial conditions
          fs%user_init=>shock_init
          ! Set boundary conditions
@@ -751,6 +722,8 @@ contains
       call VF%finalize()
       call Umag%finalize()
       call Mach%finalize()
+      ! Finalize material
+      call fluid%finalize()
       ! Finalize visualization
       call viz%finalize()
       call viz_evt%finalize()

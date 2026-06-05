@@ -279,6 +279,13 @@ module amrlpt_class
       !> Overlap size
       integer :: nover=2
 
+      !> Maximum AMR level particles are allowed on (cap passed to AMReX
+      !> Redistribute as lev_max). Particles span levels [0, maxlvl] and AMReX
+      !> places each at the finest level covering its position. Defaults to
+      !> amr%maxlvl in initialize — set lower to keep particles below a
+      !> chosen refinement.
+      integer :: maxlvl=0
+
       !> Filter width
       real(WP) :: filter_width=0.0_WP
 
@@ -588,6 +595,8 @@ contains
       if (present(name)) this%name=trim(adjustl(name))
       ! Point to amr
       this%amr=>amr
+      ! Default level cap: allow particles up to the AMR grid's max refinement
+      this%maxlvl=amr%maxlvl
       ! Create particle container
       call amrlpt_new_pc(this%pc,this%amr%amrcore)
       ! Initialize VF field
@@ -1489,9 +1498,9 @@ contains
       class(amrlpt), intent(inout) :: this
       integer, intent(in), optional :: minlvl,maxlvl,nover
       integer :: lmin,lmax,no
-      lmin= 0; if (present(minlvl)) lmin=minlvl
-      lmax=-1; if (present(maxlvl)) lmax=maxlvl
-      no  = 0; if (present(nover))  no  =nover
+      lmin=0;           if (present(minlvl)) lmin=minlvl
+      lmax=this%maxlvl; if (present(maxlvl)) lmax=maxlvl
+      no  =0;           if (present(nover))  no  =nover
       call amrlpt_redistribute(this%pc,lmin,lmax,no)
       call amrlpt_total_np(this%pc,this%np)
    end subroutine redistribute
@@ -2138,16 +2147,25 @@ contains
       implicit none
       class(amrlpt), intent(inout) :: this
       character(len=*), intent(in) :: dirname
-      call amrlpt_write(this%pc,trim(dirname)//c_null_char,1_c_int)
+      call amrlpt_write(this%pc,trim(dirname)//'/particles'//c_null_char,1_c_int)
    end subroutine write
 
-   !> Read AMReX checkpoint for particles from dirname
+   !> Read AMReX checkpoint for particles from dirname.
+   !> The amrgrid must already have been rebuilt via amr%init_from_checkpoint
+   !> before calling this. Syncs the particle container's BA/DM to the restored
+   !> grid before AMReX Restart so particles land on the right ranks.
    subroutine read(this,dirname)
       implicit none
       class(amrlpt), intent(inout) :: this
       character(len=*), intent(in) :: dirname
-      call amrlpt_read(this%pc,trim(dirname)//c_null_char)
-      call amrlpt_redistribute(this%pc,0,-1,0)
+      integer :: lvl
+      ! Sync particle container's BA/DM to the restored grid
+      do lvl=0,this%amr%clvl()
+         call this%set_particle_ba(lvl,this%amr%get_boxarray(lvl))
+         call this%set_particle_dm(lvl,this%amr%get_distromap(lvl))
+      end do
+      call amrlpt_read(this%pc,trim(dirname)//'/particles'//c_null_char)
+      call amrlpt_redistribute(this%pc,0,this%maxlvl,0)
       call amrlpt_total_np(this%pc,this%np)
       call this%update_VF()
    end subroutine read
