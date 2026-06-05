@@ -73,11 +73,6 @@ module amrmg_class
       type(amrex_multigrid), private :: multigrid
       ! Internal solution storage for incremental solves
       type(amrdata) :: sol
-      ! PCG work arrays (only used when outer_solver == amrmg_outer_pcg_mlmg)
-      type(amrdata) :: pcg_r   !< Residual r = b - A*x
-      type(amrdata) :: pcg_z   !< Preconditioned residual z = M^{-1}*r
-      type(amrdata) :: pcg_p   !< Search direction p
-      type(amrdata) :: pcg_q   !< q = A*p
    contains
       procedure :: initialize
       procedure :: setup
@@ -144,12 +139,6 @@ contains
 
       ! Initialize internal solution storage
       call this%sol%initialize(amr,name='sol',ncomp=1,ng=1,interp=interp_none); call this%sol%register()
-
-      ! PCG work amrdata - unregistered
-      call this%pcg_r%initialize(amr,name='pcg_r',ncomp=1,ng=1,interp=interp_none)
-      call this%pcg_z%initialize(amr,name='pcg_z',ncomp=1,ng=1,interp=interp_none)
-      call this%pcg_p%initialize(amr,name='pcg_p',ncomp=1,ng=1,interp=interp_none)
-      call this%pcg_q%initialize(amr,name='pcg_q',ncomp=1,ng=1,interp=interp_none)
 
       ! Log setup info
       if (type .eq. amrmg_cstcoef) then
@@ -234,16 +223,6 @@ contains
          end block varcoef_setup
       end select
 
-      ! PCG work arrays: only allocate if using PCG outer solver
-      if (this%outer_solver.eq.amrmg_outer_pcg_mlmg) then
-         do lev=0,this%amr%clvl()
-            call this%pcg_r%reset_level(lev,ba(lev),dm(lev))
-            call this%pcg_z%reset_level(lev,ba(lev),dm(lev))
-            call this%pcg_p%reset_level(lev,ba(lev),dm(lev))
-            call this%pcg_q%reset_level(lev,ba(lev),dm(lev))
-         end do
-      end if
-
       this%setup_done = .true.
    end subroutine setup
 
@@ -309,8 +288,10 @@ contains
          pcg_solve: block
             use amrex_interface, only: amrmlmg_dot_composite
             use iso_c_binding,   only: c_ptr
+            use amrdata_class,   only: interp_none
             real(WP) :: rho, rho_new, alpha, beta, pq, rnorm, rnorm0, rnorm_prev, pcg_dummy
             integer  :: iter, lev
+            type(amrdata) :: pcg_r, pcg_z, pcg_p, pcg_q  !< Per-solve scratch (track current grid)
             type(amrex_multifab), dimension(:), allocatable :: resmf, zmf, pmf, qmf
             type(c_ptr), dimension(:), allocatable :: mf1_ptrs, mf2_ptrs, ba_ptrs
             integer, dimension(:), allocatable :: rr_flat
@@ -319,14 +300,21 @@ contains
 
             nlevs = this%amr%clvl() + 1
 
+            ! Allocate PCG work arrays as local scratch on the current grid and zero
+            ! them (reset only builds, leaving memory uninitialized/snan in debug builds)
+            call pcg_r%initialize(this%amr,name='pcg_r',ncomp=1,ng=1,interp=interp_none); call pcg_r%reset(); call pcg_r%setval(0.0_WP)
+            call pcg_z%initialize(this%amr,name='pcg_z',ncomp=1,ng=1,interp=interp_none); call pcg_z%reset(); call pcg_z%setval(0.0_WP)
+            call pcg_p%initialize(this%amr,name='pcg_p',ncomp=1,ng=1,interp=interp_none); call pcg_p%reset(); call pcg_p%setval(0.0_WP)
+            call pcg_q%initialize(this%amr,name='pcg_q',ncomp=1,ng=1,interp=interp_none); call pcg_q%reset(); call pcg_q%setval(0.0_WP)
+
             ! Build helper multifab arrays for pcg vectors
             allocate(resmf(0:this%amr%clvl()), zmf(0:this%amr%clvl()))
             allocate(pmf(0:this%amr%clvl()),   qmf(0:this%amr%clvl()))
             do lev=0,this%amr%clvl()
-               resmf(lev)=this%pcg_r%mf(lev)
-               zmf(lev)=this%pcg_z%mf(lev)
-               pmf(lev)=this%pcg_p%mf(lev)
-               qmf(lev)=this%pcg_q%mf(lev)
+               resmf(lev)=pcg_r%mf(lev)
+               zmf(lev)=pcg_z%mf(lev)
+               pmf(lev)=pcg_p%mf(lev)
+               qmf(lev)=pcg_q%mf(lev)
             end do
 
             ! Prepare pointer arrays for composite dot
@@ -351,7 +339,7 @@ contains
             call this%multigrid%comp_residual(resmf, sol, rhsmf)
 
             ! --- z = M^{-1} r (1 V-cycle): zero first, then set BCs, then solve ---
-            call this%pcg_z%setval(0.0_WP)
+            call pcg_z%setval(0.0_WP)
             do lev=0,this%amr%clvl()
                select case (this%type)
                 case (amrmg_cstcoef); call this%poisson%set_level_bc(lev, zmf(lev))
@@ -361,19 +349,19 @@ contains
             pcg_dummy = this%multigrid%solve(zmf, resmf, 0.0_WP, 0.0_WP)
 
             ! --- p = z ---
-            call this%pcg_p%copy(src=this%pcg_z)
+            call pcg_p%copy(src=pcg_z)
 
             ! --- rho = <r, z> ---
             do lev=0,this%amr%clvl()
-               mf1_ptrs(lev) = this%pcg_r%mf(lev)%p
-               mf2_ptrs(lev) = this%pcg_z%mf(lev)%p
+               mf1_ptrs(lev) = pcg_r%mf(lev)%p
+               mf2_ptrs(lev) = pcg_z%mf(lev)%p
             end do
             rho = amrmlmg_dot_composite(mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat, nlevs)
 
             ! --- Initial residual norm for convergence test ---
             do lev=0,this%amr%clvl()
-               mf1_ptrs(lev) = this%pcg_r%mf(lev)%p
-               mf2_ptrs(lev) = this%pcg_r%mf(lev)%p
+               mf1_ptrs(lev) = pcg_r%mf(lev)%p
+               mf2_ptrs(lev) = pcg_r%mf(lev)%p
             end do
             rnorm0 = sqrt(amrmlmg_dot_composite(mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat, nlevs))
             if (rnorm0.eq.0.0_WP) then
@@ -383,27 +371,27 @@ contains
                rnorm_prev = rnorm0
                pcg_iter: do iter = 1, this%max_iter
                   ! --- q = A*p ---
-                  call this%pcg_z%setval(0.0_WP)
+                  call pcg_z%setval(0.0_WP)
                   call this%multigrid%comp_residual(qmf, pmf, zmf)  ! q = -A*p
-                  call this%pcg_q%mult(-1.0_WP)                     ! q = A*p
+                  call pcg_q%mult(-1.0_WP)                     ! q = A*p
 
                   ! --- alpha = rho / <p, q> ---
                   do lev=0,this%amr%clvl()
-                     mf1_ptrs(lev) = this%pcg_p%mf(lev)%p
-                     mf2_ptrs(lev) = this%pcg_q%mf(lev)%p
+                     mf1_ptrs(lev) = pcg_p%mf(lev)%p
+                     mf2_ptrs(lev) = pcg_q%mf(lev)%p
                   end do
                   pq = amrmlmg_dot_composite(mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat, nlevs)
                   if (abs(pq).lt.tiny(pq)) exit
                   alpha = rho / pq
 
                   ! --- x += alpha*p, r -= alpha*q ---
-                  call this%sol%saxpy(a=alpha, src=this%pcg_p)
-                  call this%pcg_r%saxpy(a=-alpha, src=this%pcg_q)
+                  call this%sol%saxpy(a=alpha, src=pcg_p)
+                  call pcg_r%saxpy(a=-alpha, src=pcg_q)
 
                   ! --- Convergence check ---
                   do lev=0,this%amr%clvl()
-                     mf1_ptrs(lev) = this%pcg_r%mf(lev)%p
-                     mf2_ptrs(lev) = this%pcg_r%mf(lev)%p
+                     mf1_ptrs(lev) = pcg_r%mf(lev)%p
+                     mf2_ptrs(lev) = pcg_r%mf(lev)%p
                   end do
                   rnorm = sqrt(amrmlmg_dot_composite(mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat, nlevs))
                   this%niter = iter; this%res = rnorm
@@ -411,7 +399,7 @@ contains
                   if (rnorm.le.this%tol_abs .or. rnorm/rnorm0.le.this%tol_rel) exit
 
                   ! --- z = M^{-1} r ---
-                  call this%pcg_z%setval(0.0_WP)
+                  call pcg_z%setval(0.0_WP)
                   do lev=0,this%amr%clvl()
                      select case (this%type)
                       case (amrmg_cstcoef); call this%poisson%set_level_bc(lev, zmf(lev))
@@ -422,8 +410,8 @@ contains
 
                   ! --- rho_new = <r, z> ---
                   do lev=0,this%amr%clvl()
-                     mf1_ptrs(lev) = this%pcg_r%mf(lev)%p
-                     mf2_ptrs(lev) = this%pcg_z%mf(lev)%p
+                     mf1_ptrs(lev) = pcg_r%mf(lev)%p
+                     mf2_ptrs(lev) = pcg_z%mf(lev)%p
                   end do
                   rho_new = amrmlmg_dot_composite(mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat, nlevs)
                   if (abs(rho).lt.tiny(rho)) exit
@@ -437,7 +425,7 @@ contains
                   rho = rho_new
 
                   ! --- p = z + beta*p ---
-                  call this%pcg_p%lincomb(a=1.0_WP, src1=this%pcg_z, b=beta, src2=this%pcg_p)
+                  call pcg_p%lincomb(a=1.0_WP, src1=pcg_z, b=beta, src2=pcg_p)
                end do pcg_iter
                ! Fill sol ghost cells: applyBC side effect of comp_residual
                ! PCG's saxpy updates leave ghost cells inconsistent; this corrects them.
@@ -449,6 +437,8 @@ contains
             call this%multigrid%set_fixed_iter(0)
             call this%multigrid%set_max_iter(this%max_iter)
             deallocate(resmf, zmf, pmf, qmf, mf1_ptrs, mf2_ptrs, ba_ptrs, rr_flat)
+            ! Release PCG scratch
+            call pcg_r%finalize(); call pcg_z%finalize(); call pcg_p%finalize(); call pcg_q%finalize()
          end block pcg_solve
 
       end select
@@ -689,10 +679,6 @@ contains
       class(amrmg), intent(inout) :: this
       if (this%setup_done) call this%destroy()
       call this%sol%finalize()
-      call this%pcg_r%finalize()
-      call this%pcg_z%finalize()
-      call this%pcg_p%finalize()
-      call this%pcg_q%finalize()
       nullify(this%amr)
       this%type = -1
    end subroutine finalize

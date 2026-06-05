@@ -61,11 +61,11 @@ Sutherland temperature: 0.073
 ###########################################
 
 # Time integration
-Max dt:   1e-3
+Max dt:   2e-3
 Max CFL:  0.75
 Max time: 15
 
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      restart/impact_1.00000E+01
+Restart from:      !restart/impact_1.00000E+01
