@@ -734,8 +734,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
          ! Add surface tension term
@@ -757,8 +757,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=time%dt)
          ! Add surface tension term

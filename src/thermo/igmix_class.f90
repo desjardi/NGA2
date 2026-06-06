@@ -59,31 +59,15 @@ contains
       this%species_names=species_names
    end subroutine igmix_initialize
 
-   !> Mixture parameters: mass-fraction-weighted averages over species
-   pure subroutine mix_coeffs(this,y,cv_mix,cp_mix,R_mix,gamma_mix,q_mix,qp_mix)
-      class(igmix),                     intent(in)  :: this
-      real(WP), dimension(:),           intent(in)  :: y
-      real(WP), optional,               intent(out) :: cv_mix,cp_mix,R_mix,gamma_mix,q_mix,qp_mix
-      real(WP) :: c,p,qx,qpx
-      c =sum(y(1:this%ns)*this%cv(1:this%ns))
-      p =sum(y(1:this%ns)*this%cp(1:this%ns))
-      qx =sum(y(1:this%ns)*this%q (1:this%ns))
-      qpx=sum(y(1:this%ns)*this%qp(1:this%ns))
-      if (present(cv_mix))    cv_mix   =c
-      if (present(cp_mix))    cp_mix   =p
-      if (present(R_mix))     R_mix    =p-c
-      if (present(gamma_mix)) gamma_mix=p/c
-      if (present(q_mix))     q_mix    =qx
-      if (present(qp_mix))    qp_mix   =qpx
-   end subroutine mix_coeffs
-
    real(WP) function igmix_get_p_from_rho_e(this,rho,e,y) result(p)
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: gam,qm
-      call mix_coeffs(this,y,gamma_mix=gam,q_mix=qm)
-      p=(gam-1.0_WP)*rho*(e-qm)
+      real(WP) :: Rm,cvm,qm
+      Rm =sum(y(1:this%ns)*this%R (1:this%ns))
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
+      p=Rm*rho*(e-qm)/cvm
    end function igmix_get_p_from_rho_e
 
    real(WP) function igmix_get_T_from_p_rho(this,p,rho,y) result(T)
@@ -91,7 +75,7 @@ contains
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
       real(WP) :: Rm
-      call mix_coeffs(this,y,R_mix=Rm)
+      Rm=sum(y(1:this%ns)*this%R(1:this%ns))
       T=p/(rho*Rm)
    end function igmix_get_T_from_p_rho
 
@@ -99,18 +83,21 @@ contains
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: gam
-      call mix_coeffs(this,y,gamma_mix=gam)
-      c=sqrt(max(0.0_WP,gam*p/rho))
+      real(WP) :: cvm,cpm
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      cpm=sum(y(1:this%ns)*this%cp(1:this%ns))
+      c=sqrt(max(0.0_WP,cpm/cvm*p/rho))
    end function igmix_get_c_from_p_rho
 
    real(WP) function igmix_get_e_from_p_rho(this,p,rho,y) result(e)
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: gam,qm
-      call mix_coeffs(this,y,gamma_mix=gam,q_mix=qm)
-      e=p/((gam-1.0_WP)*rho)+qm
+      real(WP) :: Rm,cvm,qm
+      Rm =sum(y(1:this%ns)*this%R (1:this%ns))
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
+      e=cvm*p/(Rm*rho)+qm
    end function igmix_get_e_from_p_rho
 
    real(WP) function igmix_get_e_from_p_T(this,p,T,y) result(e)
@@ -118,7 +105,8 @@ contains
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
       real(WP) :: cvm,qm
-      call mix_coeffs(this,y,cv_mix=cvm,q_mix=qm)
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
       e=cvm*T+qm
    end function igmix_get_e_from_p_T
 
@@ -127,7 +115,7 @@ contains
       real(WP), intent(in) :: rho,T
       real(WP), dimension(:), intent(in) :: y
       real(WP) :: Rm
-      call mix_coeffs(this,y,R_mix=Rm)
+      Rm=sum(y(1:this%ns)*this%R(1:this%ns))
       p=rho*Rm*T
    end function igmix_get_p_from_rho_T
 
@@ -136,7 +124,7 @@ contains
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
       real(WP) :: Rm
-      call mix_coeffs(this,y,R_mix=Rm)
+      Rm=sum(y(1:this%ns)*this%R(1:this%ns))
       rho=p/(Rm*T)
    end function igmix_get_rho_from_p_T
 
@@ -145,7 +133,8 @@ contains
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
       real(WP) :: cpm,qm
-      call mix_coeffs(this,y,cp_mix=cpm,q_mix=qm)
+      cpm=sum(y(1:this%ns)*this%cp(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
       h=cpm*T+qm
    end function igmix_get_h_from_p_T
 
@@ -154,10 +143,8 @@ contains
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: ysum,xRsum,xn,pn,Rn
+      real(WP) :: xRsum,xn,pn,Rn
       integer :: n
-      ysum =sum(y(1:this%ns))
-      ! Mole fractions weighted by R: x_n = (y_n*R_n) / sum_k (y_k*R_k)
       xRsum=0.0_WP
       do n=1,this%ns
          xRsum=xRsum+y(n)*this%R(n)
@@ -183,26 +170,31 @@ contains
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: gam
-      call mix_coeffs(this,y,gamma_mix=gam)
-      gruneisen=gam-1.0_WP
+      real(WP) :: Rm,cvm
+      Rm =sum(y(1:this%ns)*this%R (1:this%ns))
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      gruneisen=Rm/cvm
    end function igmix_get_gruneisen_from_rho_e
 
    real(WP) function igmix_get_rhoe_from_p_rho(this,p,rho,y) result(rhoe)
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: gam,qm
-      call mix_coeffs(this,y,gamma_mix=gam,q_mix=qm)
-      rhoe=p/(gam-1.0_WP)+rho*qm
+      real(WP) :: Rm,cvm,qm
+      Rm =sum(y(1:this%ns)*this%R (1:this%ns))
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
+      rhoe=cvm*p/Rm+rho*qm
    end function igmix_get_rhoe_from_p_rho
 
    real(WP) function igmix_get_rhoe_from_p_T(this,p,T,y) result(rhoe)
       class(igmix), intent(in) :: this
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: cvm,Rm,qm
-      call mix_coeffs(this,y,cv_mix=cvm,R_mix=Rm,q_mix=qm)
+      real(WP) :: Rm,cvm,qm
+      Rm =sum(y(1:this%ns)*this%R (1:this%ns))
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
       rhoe=p*(cvm*T+qm)/(Rm*T)
    end function igmix_get_rhoe_from_p_T
 
