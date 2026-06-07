@@ -83,6 +83,8 @@ module simulation
    !> Tagging parameter
    real(WP) :: Re_tag=huge(1.0_WP)
    real(WP) :: Rho_tag=huge(1.0_WP)
+   real(WP) :: P_tag=huge(1.0_WP)
+   real(WP) :: Ducros_tag=huge(1.0_WP)
 
 contains
 
@@ -278,11 +280,12 @@ contains
       end select
    end subroutine shock_dirichlet
 
-   !> Tagger based on velocity and density laplacians
+   !> Tagger based on SGS Reynolds number, density/pressure errors, Ducros sensor
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
       use amrgrid_class,    only: SETtag
+      use amrtag,           only: lap_error,grd_error
       class(amrmpcomp), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -291,16 +294,21 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       character(kind=c_char), dimension(:,:,:,:), contiguous, pointer :: tagarr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ
-      real(WP) :: dx,dy,dz,dxi2,dyi2,dzi2,delta,delta2
-      real(WP) ::  rho_cc, rho_xp, rho_xm, rho_yp, rho_ym, rho_zp, rho_zm
-      real(WP) :: irho_cc,irho_xp,irho_xm,irho_yp,irho_ym,irho_zp,irho_zm
-      real(WP) :: lapU,lapV,lapW,u_sgs,Re,lapRHO,avgRHO,r_cyl
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pPL,pVF,pUVW,pC
+      real(WP) :: dx,dy,dz,dxi,dyi,dzi,dxi2,dyi2,dzi2,delta,delta2
+      real(WP) :: rho_cc,rho_xp,rho_xm,rho_yp,rho_ym,rho_zp,rho_zm
+      real(WP) :: lapU,lapV,lapW,u_sgs,Re
+      real(WP) :: divu,vortx,vorty,vortz,vort,Ducros,Deps
+      real(WP) :: r_cyl
+      logical  :: in_zone
       integer :: i,j,k
+      real(WP), parameter :: Reps=1.0e-2_WP
+      real(WP), parameter :: Peps=1.0e-2_WP
+      real(WP), parameter :: Cduc=0.05_WP
       ! Get mesh size
-      dx=solver%amr%dx(lvl); dxi2=1.0_WP/dx**2
-      dy=solver%amr%dy(lvl); dyi2=1.0_WP/dy**2
-      dz=solver%amr%dz(lvl); dzi2=1.0_WP/dz**2
+      dx=solver%amr%dx(lvl); dxi=1.0_WP/dx; dxi2=1.0_WP/dx**2
+      dy=solver%amr%dy(lvl); dyi=1.0_WP/dy; dyi2=1.0_WP/dy**2
+      dz=solver%amr%dz(lvl); dzi=1.0_WP/dz; dzi2=1.0_WP/dz**2
       delta=solver%amr%min_meshsize(lvl); delta2=delta**2
       ! Recast tags
       tags=tags_ptr
@@ -309,34 +317,47 @@ contains
       do while (mfi%next())
          ! Get pointers to data
          tagarr=>tags%dataPtr(mfi)
-         pQ=>solver%Q%mf(lvl)%dataptr(mfi)
+         pQ  =>solver%Q%mf(lvl)%dataptr(mfi)
+         pPL =>solver%PL%mf(lvl)%dataptr(mfi)
+         pVF =>solver%VF%mf(lvl)%dataptr(mfi)
+         pUVW=>solver%UVW%mf(lvl)%dataptr(mfi)
+         pC  =>solver%C%mf(lvl)%dataptr(mfi)
          ! Loop over tile
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-            ! First compute radial location to compare with sponge
+            ! Refinement zone: away from sponge unless below maxlvl-1
             r_cyl=sqrt((solver%amr%ylo+(real(j,WP)+0.5_WP)*dy)**2+(solver%amr%zlo+(real(k,WP)+0.5_WP)*dz)**2)
-            ! Get local densities and their inverse
-            rho_cc=max(sum(pQ(i  ,j  ,k  ,1:2)),solver%rho_floor); irho_cc=1.0_WP/rho_cc
-            rho_xp=max(sum(pQ(i+1,j  ,k  ,1:2)),solver%rho_floor); irho_xp=1.0_WP/rho_xp
-            rho_xm=max(sum(pQ(i-1,j  ,k  ,1:2)),solver%rho_floor); irho_xm=1.0_WP/rho_xm
-            rho_yp=max(sum(pQ(i  ,j+1,k  ,1:2)),solver%rho_floor); irho_yp=1.0_WP/rho_yp
-            rho_ym=max(sum(pQ(i  ,j-1,k  ,1:2)),solver%rho_floor); irho_ym=1.0_WP/rho_ym
-            rho_zp=max(sum(pQ(i  ,j  ,k+1,1:2)),solver%rho_floor); irho_zp=1.0_WP/rho_zp
-            rho_zm=max(sum(pQ(i  ,j  ,k-1,1:2)),solver%rho_floor); irho_zm=1.0_WP/rho_zm
-            ! Compute Laplacian of each velocity component
-            lapU=(pQ(i+1,j,k,5)*irho_xp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i-1,j,k,5)*irho_xm)*dxi2+(pQ(i,j+1,k,5)*irho_yp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i,j-1,k,5)*irho_ym)*dyi2+(pQ(i,j,k+1,5)*irho_zp-2.0_WP*pQ(i,j,k,5)*irho_cc+pQ(i,j,k-1,5)*irho_zm)*dzi2
-            lapV=(pQ(i+1,j,k,6)*irho_xp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i-1,j,k,6)*irho_xm)*dxi2+(pQ(i,j+1,k,6)*irho_yp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i,j-1,k,6)*irho_ym)*dyi2+(pQ(i,j,k+1,6)*irho_zp-2.0_WP*pQ(i,j,k,6)*irho_cc+pQ(i,j,k-1,6)*irho_zm)*dzi2
-            lapW=(pQ(i+1,j,k,7)*irho_xp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i-1,j,k,7)*irho_xm)*dxi2+(pQ(i,j+1,k,7)*irho_yp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i,j-1,k,7)*irho_ym)*dyi2+(pQ(i,j,k+1,7)*irho_zp-2.0_WP*pQ(i,j,k,7)*irho_cc+pQ(i,j,k-1,7)*irho_zm)*dzi2
-            ! Estimate sgs velocity from Laplacian
+            in_zone=(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)
+
+            ! Mixture density laplacian error
+            rho_cc=sum(pQ(i  ,j,  k,  1:2))
+            rho_xp=sum(pQ(i+1,j,  k,  1:2)); rho_xm=sum(pQ(i-1,j,  k,  1:2))
+            rho_yp=sum(pQ(i,  j+1,k,  1:2)); rho_ym=sum(pQ(i,  j-1,k,  1:2))
+            rho_zp=sum(pQ(i,  j,  k+1,1:2)); rho_zm=sum(pQ(i,  j,  k-1,1:2))
+            if (lap_error(rho_cc,rho_xm,rho_xp,rho_ym,rho_yp,rho_zm,rho_zp,Reps).gt.Rho_tag.and.in_zone) tagarr(i,j,k,1)=SETtag
+
+            ! Liquid pressure gradient
+            if (pVF(i,j,k,1).gt.0.0_WP) then
+               if (grd_error(pPL(i,j,k,1),pPL(i-1,j,k,1),pPL(i+1,j,k,1),pPL(i,j-1,k,1),pPL(i,j+1,k,1),pPL(i,j,k-1,1),pPL(i,j,k+1,1),Peps).gt.P_tag.and.in_zone) tagarr(i,j,k,1)=SETtag
+            end if
+
+            ! SGS cell Reynolds number
+            lapU=(pUVW(i+1,j,k,1)-2.0_WP*pUVW(i,j,k,1)+pUVW(i-1,j,k,1))*dxi2+(pUVW(i,j+1,k,1)-2.0_WP*pUVW(i,j,k,1)+pUVW(i,j-1,k,1))*dyi2+(pUVW(i,j,k+1,1)-2.0_WP*pUVW(i,j,k,1)+pUVW(i,j,k-1,1))*dzi2
+            lapV=(pUVW(i+1,j,k,2)-2.0_WP*pUVW(i,j,k,2)+pUVW(i-1,j,k,2))*dxi2+(pUVW(i,j+1,k,2)-2.0_WP*pUVW(i,j,k,2)+pUVW(i,j-1,k,2))*dyi2+(pUVW(i,j,k+1,2)-2.0_WP*pUVW(i,j,k,2)+pUVW(i,j,k-1,2))*dzi2
+            lapW=(pUVW(i+1,j,k,3)-2.0_WP*pUVW(i,j,k,3)+pUVW(i-1,j,k,3))*dxi2+(pUVW(i,j+1,k,3)-2.0_WP*pUVW(i,j,k,3)+pUVW(i,j-1,k,3))*dyi2+(pUVW(i,j,k+1,3)-2.0_WP*pUVW(i,j,k,3)+pUVW(i,j,k-1,3))*dzi2
             u_sgs=0.2_WP*sqrt(lapU**2+lapV**2+lapW**2)*delta2
-            ! Calculate cell Reynolds number and tag if too large
             Re=Reynolds*u_sgs*delta
-            if (Re.gt.Re_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
-            ! Compute normalized Laplacian of mixture density and tag if too large
-            lapRHO=(rho_xp-2.0_WP*rho_cc+rho_xm)*dxi2+(rho_yp-2.0_WP*rho_cc+rho_ym)*dyi2+(rho_zp-2.0_WP*rho_cc+rho_zm)*dzi2
-            avgRHO=(rho_cc+rho_xp+rho_xm+rho_yp+rho_ym+rho_zp+rho_zm)/7.0_WP
-            lapRHO=abs(lapRHO)*delta2/avgRHO
-            if (lapRHO.gt.Rho_tag.and.(r_cyl.lt.R_spg+L_spg.or.lvl.lt.solver%amr%maxlvl-1)) tagarr(i,j,k,1)=SETtag
+            if (Re.gt.Re_tag.and.in_zone) tagarr(i,j,k,1)=SETtag
+
+            ! Ducros compression switch
+            divu =0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))+0.5_WP*dyi*(pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))+0.5_WP*dzi*(pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+            vortx=0.5_WP*dyi*(pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))-0.5_WP*dzi*(pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+            vorty=0.5_WP*dzi*(pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))-0.5_WP*dxi*(pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+            vortz=0.5_WP*dxi*(pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))-0.5_WP*dyi*(pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+            vort=sqrt(vortx**2+vorty**2+vortz**2)
+            Deps=(Cduc*pC(i,j,k,1)/delta)**2
+            Ducros=divu**2/max(divu**2+vort**2+Deps,tiny(1.0_WP))
+            if (divu.lt.0.0_WP.and.Ducros.gt.Ducros_tag.and.in_zone) tagarr(i,j,k,1)=SETtag
          end do; end do; end do
       end do
       call solver%amr%mfiter_destroy(mfi)
@@ -543,8 +564,10 @@ contains
          call param_read('Regrid nsteps',regrid_evt%nper)
          ! Set case-specific tagging
          fs%user_tagging=>my_tagger
-         call param_read('Tagging Re',Re_tag)
-         call param_read('Tagging Rho',Rho_tag)
+         call param_read('Tag Reynolds value',Re_tag)
+         call param_read('Tag density error' ,Rho_tag)
+         call param_read('Tag pressure error',P_tag)
+         call param_read('Tag Ducros value',Ducros_tag)
          ! Build the grid
          if (restarted) then
             ! Restore grid hierarchy from checkpoint
