@@ -11,7 +11,7 @@ module simulation
    use monitor_class,     only: monitor
    use amrio_class,       only: amrio
    use nasg_class,        only: nasg
-   use ideal_gas_class,   only: ideal_gas
+   use igmix_class,       only: igmix
    use my_relax_class,    only: my_relax
    implicit none
    private
@@ -41,11 +41,12 @@ module simulation
    real(WP) :: restart_time
    
    !> Simulation monitoring
-   type(monitor) :: mfile,consfile,cflfile,gridfile,tfile
+   type(monitor) :: mfile,consfile,cflfile,gridfile,tfile,vaporfile
    
    !> Materials
-   type(nasg),      target :: water
-   type(ideal_gas), target :: air
+   type(nasg),  target :: water
+   type(igmix), target :: gas
+   integer, parameter :: indV=1,indA=2 !< Gas species indices in the mixture (1=vapor, 2=air)
 
    !> Relaxation model
    type(my_relax), target :: relax_model
@@ -158,9 +159,9 @@ contains
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Gas heat diffusivity: k=Cv*Gamma*mu/Pr
-               k_g=air%gamma*air%cv*mu_g/Prandtl
+               k_g=gas%cp(indA)*mu_g/Prandtl
                ! Liquid heat diffusivity from ratio
-               k_l=diff_ratio*air%gamma*air%cv/(Reynolds*Prandtl)
+               k_l=diff_ratio*gas%cp(indA)/(Reynolds*Prandtl)
                ! Mixture diffusivity
                !pDiff(i,j,k,1)=pVF(i,j,k,1)*k_l+(1.0_WP-pVF(i,j,k,1))*k_g ! Arithmetic averaging
                pDiff(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(k_l,myeps)+(1.0_WP-pVF(i,j,k,1))/max(k_g,myeps)) ! Harmonic averaging
@@ -178,7 +179,7 @@ contains
          call amr%mfiter_destroy(mfi)
       end do
    end subroutine get_viscosities
-   
+
    !> User init callback - set Q and VF/barycenters for a drop moving into a static shock
    subroutine shockdrop_init(solver,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_boxarray,amrex_distromap,amrex_mfiter,amrex_box
@@ -194,13 +195,15 @@ contains
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF,pCL,pCG
       real(WP), dimension(3) :: BL,BG
-      real(WP) :: dx,dy,dz,myVF,IEL,x_cc,rhoG,pG,uG,H
+      real(WP) :: dx,dy,dz,myVF,IEL,x_cc,rhoG,pG,uG,H,yg(2)
       integer :: i,j,k
       integer, parameter :: nref=3
       ! Get mesh size
       dx=solver%amr%dx(lvl); dy=solver%amr%dy(lvl); dz=solver%amr%dz(lvl)
       ! Get internal energy of liquid
       IEL=water%get_e_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP])
+      ! Pre-shock gas composition: pure air (no vapor)
+      yg(indV)=0.0_WP; yg(indA)=1.0_WP
       ! Use passed ba/dm since grid is being constructed
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
       do while (mfi%next())
@@ -235,10 +238,11 @@ contains
             pQ(i,j,k,1)=(       myVF)*rhoL1
             pQ(i,j,k,2)=(1.0_WP-myVF)*rhoG
             pQ(i,j,k,3)=pQ(i,j,k,1)*IEL
-            pQ(i,j,k,4)=pQ(i,j,k,2)*air%get_e_from_p_rho(p=pG,rho=rhoG,y=[1.0_WP])
+            pQ(i,j,k,4)=pQ(i,j,k,2)*gas%get_e_from_p_rho(p=pG,rho=rhoG,y=yg)
             pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*uG
             pQ(i,j,k,6)=0.0_WP
             pQ(i,j,k,7)=0.0_WP
+            pQ(i,j,k,solver%Yg_lo:solver%Yg_hi)=0.0_WP   ! vapor partial density (Yv=0)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
@@ -255,6 +259,7 @@ contains
       character(len=1), intent(in) :: comp
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
+      real(WP) :: yg(2)
       select case (face)
        case (2)  ! X-HIGH: Dirichlet inflow with pre-shock state (gas only, no liquid)
          select case (comp)
@@ -267,14 +272,16 @@ contains
                p(i,j,k,1)=0.0_WP
             end do; end do; end do
           case ('Q')  ! Cell-centered Q in pre-shock gas
+            yg(indV)=0.0_WP; yg(indA)=1.0_WP   ! pre-shock gas is pure air
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,1)=0.0_WP                  ! No liquid
                p(i,j,k,2)=rhoG1                   ! Gas density
                p(i,j,k,3)=0.0_WP                  ! No liquid energy
-               p(i,j,k,4)=rhoG1*air%get_e_from_p_rho(p=pG1,rho=rhoG1,y=[1.0_WP]) ! Gas internal energy
+               p(i,j,k,4)=rhoG1*gas%get_e_from_p_rho(p=pG1,rho=rhoG1,y=yg) ! Gas internal energy
                p(i,j,k,5)=rhoG1*u1                ! X-momentum
                p(i,j,k,6)=0.0_WP
                p(i,j,k,7)=0.0_WP
+               p(i,j,k,solver%Yg_lo:solver%Yg_hi)=0.0_WP   ! vapor partial density (Yv=0)
             end do; end do; end do
          end select
       end select
@@ -400,6 +407,7 @@ contains
          character(len=str_long) :: message
          real(WP) :: A,B,C
          real(WP) :: GammaL,PinfL,bL,CvL
+         real(WP) :: GammaV,cvV,qV,qpV
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
          ! Gas EoS parameters (ideal gas)
@@ -450,8 +458,13 @@ contains
          rhoL1=(pL1+PinfL)/((GammaL-1.0_WP)*CvL*T_G+bL*(pL1+PinfL))
          density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
          ML=1.0_WP/sqrt(GammaL*(pL1+PinfL)/(rhoL1*(1.0_WP-bL*rhoL1)))     ! diagnostic liquid Mach (Deltau=1)
-         ! Build materials
-         call air%initialize  (gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='air')
+         ! Vapor EoS (NASG-fit vapor species; matters for phase change, inert at Yv=0)
+         call param_read('GammaV',GammaV)
+         call param_read('Vapor cv',cvV)
+         call param_read('Vapor q',qV)
+         call param_read('Vapor qp',qpV)
+         ! Build materials: gas = [vapor, air] ideal-gas mixture (indV=1, indA=2)
+         call gas%initialize(gamma=[GammaV,GammaG],cv=[cvV,CvG],q=[qV,0.0_WP],qp=[qpV,0.0_WP],species_names=[character(len=5)::'vapor','air'],name='gas')
          call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
@@ -467,7 +480,7 @@ contains
          write(message,'("[Post-shock] rhoG2=",es12.5," pG2=",es12.5)') rhoG2,pG2; call log(message)
          write(message,'("[Liquid] rhoL1=",es12.5," pL1=",es12.5," ML=",es12.5)') rhoL1,pL1,ML; call log(message)
          write(message,'("[Temp]   TL=",es12.5," TG=",es12.5)') water%get_T_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP]),T_G; call log(message)
-         call water%print(); call air%print()
+         call water%print(); call gas%print()
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
          write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
       end block init_eos_and_flow
@@ -504,13 +517,13 @@ contains
          use amrdata_class,    only: interp_face_lin
          use messager,         only: die
          ! Assign materials and create flow solver
-         fs%liq=>water; fs%gas=>air; call fs%initialize(amr=amr,name='impact')
+         fs%liq=>water; fs%gas=>gas; call fs%initialize(amr=amr,name='impact')
          ! Set surface tension coefficient
          fs%sigma=1.0_WP/Weber
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
-         call relax_model%initialize(gas=air,liq=water); fs%relax=>relax_model
+         call relax_model%initialize(liq=water,gas=gas,indV=indV,indA=indA); fs%relax=>relax_model
          relax_model%model=1 ! 1=Prelax (mechanical only) for careful NASG deployment; 2=pT
          ! Set initial conditions
          fs%user_init=>shockdrop_init
@@ -555,9 +568,9 @@ contains
       ! Initialize workspaces
       create_workspace: block
          use amrdata_class, only: interp_none
-         call dQdt%initialize(amr,name='dQdt',ncomp=7,ng=0,interp=interp_none); call dQdt%register()
-         call Umag%initialize(amr,name='Umag',ncomp=1,ng=0,interp=interp_none); call Umag%register()
-         call Mach%initialize(amr,name='Mach',ncomp=1,ng=0,interp=interp_none); call Mach%register()
+         call dQdt%initialize(amr,name='dQdt',ncomp=fs%nQ,ng=0,interp=interp_none); call dQdt%register()
+         call Umag%initialize(amr,name='Umag',ncomp=1    ,ng=0,interp=interp_none); call Umag%register()
+         call Mach%initialize(amr,name='Mach',ncomp=1    ,ng=0,interp=interp_none); call Mach%register()
       end block create_workspace
 
       ! Initialize regridding
@@ -617,6 +630,7 @@ contains
          ! Create visualization object
          call viz%initialize(amr,'impact',use_hdf5=.false.)
          call viz%add_scalar(fs%VF,1,'VF')
+         call viz%add_scalar(fs%Yg,1,'Yv')
          call viz%add_scalar(fs%RHOL,1,'RHOL')
          call viz%add_scalar(fs%RHOG,1,'RHOG')
          call viz%add_scalar(fs%PL,1,'PL')
@@ -693,7 +707,16 @@ contains
          call consfile%add_column(fs%Qint(6),'V Momentum')
          call consfile%add_column(fs%Qint(7),'W Momentum')
          call consfile%add_column(fs%rhoKint,'Kinetic energy')
+         call consfile%add_column(fs%Qint(fs%Yg_lo),'Vapor Mass')
          call consfile%write()
+         ! Create vapor monitor: total vapor mass (integral) + vapor mass-fraction extremes
+         vaporfile=monitor(amRoot=amr%amRoot,name='vapor')
+         call vaporfile%add_column(time%n,'Timestep number')
+         call vaporfile%add_column(time%t,'Time')
+         call vaporfile%add_column(fs%Qint(fs%Yg_lo),'Vapor mass')
+         call vaporfile%add_column(fs%Ygmin(1),'Yv min')
+         call vaporfile%add_column(fs%Ygmax(1),'Yv max')
+         call vaporfile%write()
          ! Create grid monitor
          gridfile=monitor(amRoot=amr%amRoot,name='grid')
          call gridfile%add_column(time%n,'Timestep')
@@ -830,6 +853,7 @@ contains
          call fs%get_info()
          call mfile%write()
          call consfile%write()
+         call vaporfile%write()
          call cflfile%write()
          call tfile%write()
          
@@ -852,7 +876,7 @@ contains
       call Mach%finalize()
       ! Finalize materials
       call water%finalize()
-      call air%finalize()
+      call gas%finalize()
       ! Finalize visualization
       call viz%finalize()
       call viz_evt%finalize()
@@ -863,6 +887,7 @@ contains
       call mfile%finalize()
       call cflfile%finalize()
       call consfile%finalize()
+      call vaporfile%finalize()
       call gridfile%finalize()
       call tfile%finalize()
    end subroutine simulation_final

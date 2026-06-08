@@ -1794,7 +1794,7 @@ contains
                         end if
                      end if
                   end if
-                  ! Divergence of conserved variable fluxes (7 components)
+                  ! Divergence of conserved variable fluxes (all components)
                   rhs(i,j,k,:)=dxi*(pFx(i+1,j,k,:)-pFx(i,j,k,:))+dyi*(pFy(i,j+1,k,:)-pFy(i,j,k,:))+dzi*(pFz(i,j,k+1,:)-pFz(i,j,k,:))
                   ! Velocity gradients at cell center
                   dUdx(1,1)=0.5_WP*dxi*(pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
