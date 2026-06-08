@@ -45,6 +45,9 @@ module relax_igmix_sg_class
       !> Iteration limits
       integer  :: Tsat_itmax=40
       integer  :: NR_itmax  =40
+      !> Phase-change controls (defaults preserve the original dimensional behaviour; override per case)
+      real(WP) :: pv_dry     =1.0_WP    !< Vapor partial-pressure floor for the dry-edge reseed in activate_chem
+      logical  :: do_nucleate=.true.    !< Seed opposite phase in near-pure metastable cells (cavitation/condensation)
       !> Dispatch
       integer  :: model=Prelax
    contains
@@ -242,13 +245,15 @@ contains
       real(WP) :: RHOL,RHOG
       real(WP) :: cvG,cpG,qG,gammaG
       real(WP), parameter :: p_eps=1.0e-10_WP,VFmin=1.0e-5_WP,Yvmin=0.0_WP,Yvmax=1.0_WP
-      real(WP), parameter :: Yv_dry=1.0e-5_WP,pv_dry=1.0_WP,Yv_pure=0.999_WP
+      real(WP), parameter :: Yv_dry=1.0e-5_WP,Yv_pure=0.999_WP
       real(WP), parameter :: fd_eps=1.0e-7_WP,F_line_search_tol=0.3_WP
       logical :: chem_relax,nucleated
       allocate(Qin(size(Q))); Qin=Q
       VFin=VF
       nucleated=.false.
-      ! Nucleation: seed a tiny opposite phase in metastable pure-ish cells so pTg starts well-conditioned
+      ! Nucleation: seed a tiny opposite phase in metastable pure-ish cells so pTg starts well-conditioned.
+      ! Gated by do_nucleate -- off defers cavitation/condensation of pure cells (first phase-change pass).
+      if (this%do_nucleate) then
       nucleation: block
          real(WP), parameter :: VF_nuc=1.0e-7_WP
          real(WP) :: rhoL_nuc,pL_nuc,TL_nuc,pv_sat,rhoV_nuc,eV_nuc
@@ -304,6 +309,7 @@ contains
             nucleated=.true.
          end if
       end block nucleation
+      end if
       ! Steps 1+2: mechanical + thermal
       call this%pT_relax(dt,VF,Q,Pjump)
       ! Step 3: chemical (phase change)
@@ -463,7 +469,7 @@ contains
          real(WP) :: xv,pv_,Fsat
          activate_chem=.false.
          xv=this%get_xv(Yv_); pv_=xv*p_
-         if ((Yv_.le.Yv_dry).or.(pv_.le.pv_dry).or.(.not.check_pv(pv_))) then
+         if ((Yv_.le.Yv_dry).or.(pv_.le.this%pv_dry).or.(.not.check_pv(pv_))) then
             ! Dry / ill-conditioned edge: seed Yv from saturation at current state
             pv_=exp(this%AS+(this%BS+this%ES*p_)/T_)*T_**this%CS*(p_+this%liq%pinf)**this%DS
             if (.not.check_pv(pv_)) return

@@ -12,7 +12,7 @@ module simulation
    use amrio_class,       only: amrio
    use nasg_class,        only: nasg
    use igmix_class,       only: igmix
-   use my_relax_class,    only: my_relax
+   use relax_igmix_nasg_class, only: relax_igmix_nasg
    implicit none
    private
    
@@ -49,7 +49,7 @@ module simulation
    integer, parameter :: indV=1,indA=2 !< Gas species indices in the mixture (1=vapor, 2=air)
 
    !> Relaxation model
-   type(my_relax), target :: relax_model
+   type(relax_igmix_nasg), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -406,7 +406,7 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
-         real(WP) :: GammaL,PinfL,bL,CvL
+         real(WP) :: GammaL,PinfL,bL,CvL,qpL
          real(WP) :: GammaV,cvV,qV,qpV
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
@@ -449,6 +449,7 @@ contains
          call param_read('Liquid pinf',PinfL)
          call param_read('Liquid covolume',bL)
          call param_read('Liquid cv',CvL)
+         call param_read('Liquid qp',qpL)
          ! Pre-shock gas temperature (ideal gas, T = p/((gamma-1)*Cv*rho))
          T_G=pG1/(rhoG1*(GammaG-1.0_WP)*CvG)
          ! Pressure equilibrium (Laplace jump): liquid pressure = gas + surface tension
@@ -465,7 +466,7 @@ contains
          call param_read('Vapor qp',qpV)
          ! Build materials: gas = [vapor, air] ideal-gas mixture (indV=1, indA=2)
          call gas%initialize(gamma=[GammaV,GammaG],cv=[cvV,CvG],q=[qV,0.0_WP],qp=[qpV,0.0_WP],species_names=[character(len=5)::'vapor','air'],name='gas')
-         call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
+         call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=qpL,name='water')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -524,7 +525,9 @@ contains
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
          call relax_model%initialize(liq=water,gas=gas,indV=indV,indA=indA); fs%relax=>relax_model
-         relax_model%model=1 ! 1=Prelax (mechanical only) for careful NASG deployment; 2=pT
+         relax_model%pv_dry     =1.0e-7_WP   ! nondim vapor-pressure floor for dry-edge reseed (~1 Pa / p_ref)
+         relax_model%do_nucleate=.false.     ! defer cavitation/condensation nucleation (first g-relax pass)
+         relax_model%model=3 ! 1=Prelax (mechanical only); 2=pT; 3=pTg (phase change)
          ! Set initial conditions
          fs%user_init=>shockdrop_init
 
