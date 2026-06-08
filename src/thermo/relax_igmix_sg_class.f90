@@ -694,13 +694,15 @@ contains
       real(WP) :: Tlo,Thi,Told,Tnew,Flo,Fhi,Fold,Fnew,dFold
       integer  :: it,expand_it
       conv=.false.; Tsat_it=0
-      Tlo=250.0_WP; Thi=900.0_WP
+      ! Bracket relative to the guess temperature (scale/unit-agnostic; was a fixed 250-900 K window)
+      if (Tguess.le.0.0_WP) return
+      Tlo=0.3_WP*Tguess; Thi=3.0_WP*Tguess
       Flo=this%pTsat(pl_,pv_,Tlo)
       Fhi=this%pTsat(pl_,pv_,Thi)
       expand_it=0
       do while ((Flo*Fhi.gt.0.0_WP).and.(expand_it.lt.20))
          if ((Flo.gt.0.0_WP).and.(Fhi.gt.0.0_WP)) then
-            Tlo=max(1.0_WP,0.8_WP*Tlo); Flo=this%pTsat(pl_,pv_,Tlo)
+            Tlo=0.8_WP*Tlo;             Flo=this%pTsat(pl_,pv_,Tlo)
          else if ((Flo.lt.0.0_WP).and.(Fhi.lt.0.0_WP)) then
             Thi=1.2_WP*Thi;             Fhi=this%pTsat(pl_,pv_,Thi)
          else

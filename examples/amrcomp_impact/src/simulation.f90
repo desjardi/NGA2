@@ -1,18 +1,18 @@
 !> AMR compressible impact test case
 module simulation
-   use precision,           only: WP
-   use string,              only: str_medium
-   use amrgrid_class,       only: amrgrid
-   use amrmpcomp_class,     only: amrmpcomp
-   use amrviz_class,        only: amrviz
-   use amrdata_class,       only: amrdata
-   use timetracker_class,   only: timetracker
-   use event_class,         only: event
-   use monitor_class,       only: monitor
-   use amrio_class,         only: amrio
-   use stiffened_gas_class, only: stiffened_gas
-   use ideal_gas_class,     only: ideal_gas
-   use my_relax_class,      only: my_relax
+   use precision,         only: WP
+   use string,            only: str_medium
+   use amrgrid_class,     only: amrgrid
+   use amrmpcomp_class,   only: amrmpcomp
+   use amrviz_class,      only: amrviz
+   use amrdata_class,     only: amrdata
+   use timetracker_class, only: timetracker
+   use event_class,       only: event
+   use monitor_class,     only: monitor
+   use amrio_class,       only: amrio
+   use nasg_class,        only: nasg
+   use ideal_gas_class,   only: ideal_gas
+   use my_relax_class,    only: my_relax
    implicit none
    private
    
@@ -44,8 +44,8 @@ module simulation
    type(monitor) :: mfile,consfile,cflfile,gridfile,tfile
    
    !> Materials
-   type(stiffened_gas), target :: water
-   type(ideal_gas),     target :: air
+   type(nasg),      target :: water
+   type(ideal_gas), target :: air
 
    !> Relaxation model
    type(my_relax), target :: relax_model
@@ -399,7 +399,7 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
-         real(WP) :: GammaL,PinfL,CvL
+         real(WP) :: GammaL,PinfL,bL,CvL
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
          ! Gas EoS parameters (ideal gas)
@@ -437,19 +437,22 @@ contains
          CvG=pG2/(rhoG2*(GammaG-1.0_WP))
          ! Surface tension
          call param_read('Weber number',Weber)
-         ! Liquid state from density ratio and liquid Mach number
-         call param_read('Density ratio',density_ratio)
-         call param_read('Liquid Mach number',ML)
-         rhoL1=density_ratio
-         pL1=pG1+4.0_WP/Weber                   ! Force pressure equilibrium, accounting for 3D Laplace pressure
-         if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! Force pressure equilibrium, accounting for 2D Laplace pressure
-         PinfL=rhoL1/(GammaL*ML**2)-pL1
+         ! Liquid EoS, fit to this case's reference parameters
+         call param_read('Liquid pinf',PinfL)
+         call param_read('Liquid covolume',bL)
+         call param_read('Liquid cv',CvL)
          ! Pre-shock gas temperature (ideal gas, T = p/((gamma-1)*Cv*rho))
          T_G=pG1/(rhoG1*(GammaG-1.0_WP)*CvG)
-         CvL=(pL1+PinfL)/(rhoL1*(GammaL-1.0_WP)*T_G) ! Force thermal equilibrium
+         ! Pressure equilibrium (Laplace jump): liquid pressure = gas + surface tension
+         pL1=pG1+4.0_WP/Weber                   ! 3D Laplace pressure
+         if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! 2D Laplace pressure
+         ! Liquid density from the NASG EOS at thermal+pressure equilibrium (T_L=T_G, p=pL1) [Option A]
+         rhoL1=(pL1+PinfL)/((GammaL-1.0_WP)*CvL*T_G+bL*(pL1+PinfL))
+         density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
+         ML=1.0_WP/sqrt(GammaL*(pL1+PinfL)/(rhoL1*(1.0_WP-bL*rhoL1)))     ! diagnostic liquid Mach (Deltau=1)
          ! Build materials
          call air%initialize  (gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='air')
-         call water%initialize(gamma=GammaL,pinf=PinfL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
+         call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=0.0_WP,name='water')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -463,6 +466,7 @@ contains
          write(message,'("[Pre-shock]  rhoG1=",es12.5," pG1=",es12.5)') rhoG1,pG1; call log(message)
          write(message,'("[Post-shock] rhoG2=",es12.5," pG2=",es12.5)') rhoG2,pG2; call log(message)
          write(message,'("[Liquid] rhoL1=",es12.5," pL1=",es12.5," ML=",es12.5)') rhoL1,pL1,ML; call log(message)
+         write(message,'("[Temp]   TL=",es12.5," TG=",es12.5)') water%get_T_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP]),T_G; call log(message)
          call water%print(); call air%print()
          write(message,'("[Visc]   Re=",es12.5," mu*=",es12.5," Suth_n=",es12.5," Suth_T=",es12.5)') Reynolds,visc_ratio,Suth_n,Suth_T; call log(message)
          write(message,'("[Surface tension] We=",es12.5)') Weber; call log(message)
@@ -507,6 +511,7 @@ contains
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
          call relax_model%initialize(gas=air,liq=water); fs%relax=>relax_model
+         relax_model%model=1 ! 1=Prelax (mechanical only) for careful NASG deployment; 2=pT
          ! Set initial conditions
          fs%user_init=>shockdrop_init
 

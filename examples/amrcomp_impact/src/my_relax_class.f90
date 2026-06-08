@@ -1,16 +1,16 @@
-!> Impact-specific extension of relax_ig_sg
+!> Impact-specific extension of relax_ig_nasg (ideal-gas + Noble-Abel-stiffened-gas liquid)
 !> Adds:
 !>   - Cavitation check for pure-liquid cells (energy injection when PL < -0.9*pinf)
 !>   - Naive air-dissolution clip after mechanical relax (when Peq > Peq_diss)
 module my_relax_class
-   use precision,         only: WP
-   use relax_ig_sg_class, only: relax_ig_sg,Prelax,PTrelax
+   use precision,           only: WP
+   use relax_ig_nasg_class, only: relax_ig_nasg,Prelax,PTrelax
    implicit none
    private
 
    public :: my_relax
 
-   type, extends(relax_ig_sg) :: my_relax
+   type, extends(relax_ig_nasg) :: my_relax
       real(WP) :: PL_cav  =-0.9_WP             !< Cavitation target pressure as a factor of pinf
       real(WP) :: Peq_diss=200.0_WP            !< Dissolution clip threshold on the equilibrium pressure
    contains
@@ -60,7 +60,7 @@ contains
       real(WP),               intent(in)    :: Pjump
       real(WP) :: Peq
       ! Run parent's mechanical relax
-      call this%relax_ig_sg%p_relax(dt,VF,Q,Pjump)
+      call this%relax_ig_nasg%p_relax(dt,VF,Q,Pjump)
       ! Post-relax dissolution check: compute equilibrium pressure from updated state
       Peq=this%liq%get_p_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=[1.0_WP])
       if (Peq.gt.this%Peq_diss) then
