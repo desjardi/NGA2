@@ -172,10 +172,12 @@ contains
          use random, only: random_uniform
          integer :: nD,nseed
          real(WP), dimension(3) :: center,radius
+         real(WP) :: radius_scale
          integer :: myseed
          integer, dimension(:), allocatable :: seed
          call param_read('Number of ellipsoids',nEllipsoid,default=4)
          call param_read('Random seed',myseed,default=1)
+         call param_read('Radius scale',radius_scale,default=0.5_WP)
          ! Allocate arrays
          allocate(ellipsoid_center(3,nEllipsoid))
          allocate(ellipsoid_radius(3,nEllipsoid))
@@ -188,10 +190,12 @@ contains
             center=[random_uniform(amr%xlo, amr%xhi), &
                     random_uniform(amr%ylo, amr%yhi), &
                     random_uniform(amr%zlo, amr%zhi)  ]
+            center=[0.5_WP,0.5_WP,0.5_WP]  ! For testing
             ellipsoid_center(:,nD)=center
-            radius=[0.5*random_uniform(amr%xlo, amr%xhi), &
-                    0.5*random_uniform(amr%ylo, amr%yhi), &
-                    0.5*random_uniform(amr%zlo, amr%zhi)  ]
+            radius=[radius_scale*random_uniform(amr%xlo, amr%xhi), &
+                    radius_scale*random_uniform(amr%ylo, amr%yhi), &
+                    radius_scale*random_uniform(amr%zlo, amr%zhi)  ]
+            radius=[0.4_WP,10.0_WP,0.4_WP]  ! For testing
             ellipsoid_radius(:,nD)=radius
          end do
       end block setup_Ellipsoids
