@@ -7,6 +7,8 @@ module simulation
    use amrdata_class,     only: amrdata
    use amrio_class,       only: amrio
    use amrcclabel_class,  only: amrcclabel
+   use amrvof_class,      only: amrvof
+   use monitor_class,     only: monitor
 
    implicit none
    private
@@ -19,10 +21,10 @@ module simulation
    ! VOF solver
    type(amrvof), target :: vof
 
-   ! Sphere parameters
-   integer :: nSphere
-   real(WP), dimension(:,:), allocatable :: sphere_center
-   real(WP), dimension(:), allocatable :: sphere_radius
+   ! Ellipsoid parameters
+   integer :: nEllipsoid
+   real(WP), dimension(:,:), allocatable :: ellipsoid_center
+   real(WP), dimension(:,:), allocatable :: ellipsoid_radius
 
    ! Visualization 
    type(amrviz) :: viz 
@@ -33,15 +35,23 @@ module simulation
    ! CCLabel
    type(amrcclabel) :: cclabel
 
+   ! Monitoring
+   type(monitor) :: gridfile
+
 contains
 
    
    !> Function that identifies cells within a structure
-   logical function make_label(pVF,i,j,k)
+   logical function make_label(pVF,lo,i,j,k)
       implicit none
-      real(WP), dimension(:,:,:,:), contiguous, intent(in) :: pVF
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
       integer, intent(in) :: i,j,k
-      if (pVF(i,j,k,1).gt.0.0_WP) then
+      integer :: il,jl,kl
+      il = i - lo(1) + 1
+      jl = j - lo(2) + 1
+      kl = k - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.0.0_WP) then
          make_label=.true.
       else
          make_label=.false.
@@ -49,37 +59,53 @@ contains
    end function make_label
 
     !> Function that identifies if neighbors are within the same structure
-   logical function same_label(pVF,i,j,k,ii,jj,kk)
+   logical function same_label(pVF,lo,i,j,k,ii,jj,kk)
        implicit none
-       real(WP), dimension(:,:,:,:), contiguous, intent(in) :: pVF
+       real(WP), dimension(:,:,:,:), intent(in) :: pVF
+       integer, dimension(3), intent(in) :: lo
        integer, intent(in) :: i,j,k,ii,jj,kk
-       if (pVF(i,j,k,1).gt.0.0_WP .and. pVF(ii,jj,kk,1).gt.0.0_WP) then
+       integer :: il,jl,kl,iil,jjl,kkl
+       il  = i  - lo(1) + 1
+       jl  = j  - lo(2) + 1
+       kl  = k  - lo(3) + 1
+       iil = ii - lo(1) + 1
+       jjl = jj - lo(2) + 1
+       kkl = kk - lo(3) + 1
+       if (pVF(il,jl,kl,1).gt.0.0_WP .and. pVF(iil,jjl,kkl,1).gt.0.0_WP) then
           same_label=.true.
        else
           same_label=.false.
        end if
    end function same_label
 
-     !> Spheres levelset function with periodicity
-   function spheres_levelset(xyz,t) result(G)
+     !> Ellipsoids levelset function with periodicity
+   function Ellipsoids_levelset(xyz,t) result(G)
       implicit none
       real(WP), dimension(3), intent(in) :: xyz
       real(WP), intent(in) :: t
-      real(WP) :: G
+      real(WP) :: G,phi
       real(WP), dimension(3) :: d,L
-      ! Distance to nearest sphere 
-      do n=1,nSphere
-         d=xyz-sphere_center(:,n)
+      integer :: n
+      ! Distance to nearest Ellipsoid 
+      G = -huge(1.0_WP)
+      do n=1,nEllipsoid
+         d=xyz-ellipsoid_center(:,n)
          L=[amr%xhi-amr%xlo,amr%yhi-amr%ylo,amr%zhi-amr%zlo]
          d=d-L*nint(d/L)  ! Nearest image
-         G=min(G,sphere_radius(n)-sqrt(sum(d**2)))
+         phi = 1.0_WP - sqrt( &
+              (d(1)/ellipsoid_radius(1,n))**2 + &
+              (d(2)/ellipsoid_radius(2,n))**2 + &
+              (d(3)/ellipsoid_radius(3,n))**2 )
+         G=max(G,phi)
       end do
-   end function spheres_levelset
+   end function Ellipsoids_levelset
 
-   !> Initialize VF field with sphere using levelset-based moments
-   subroutine spheres_init(solver,lvl,time,ba,dm)
+   !> Initialize VF field with Ellipsoids using levelset-based moments
+   subroutine Ellipsoids_init(solver,lvl,time,ba,dm)
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_boxarray,amrex_distromap,amrex_mfiter_build,amrex_mfiter_destroy
       use mms_geom,         only: initialize_volume_moments
+      use amrmpinc_class,   only: VFlo,VFhi
+      implicit none
       class(amrvof), intent(inout) :: solver
       integer, intent(in) :: lvl
       real(WP), intent(in) :: time
@@ -111,7 +137,7 @@ contains
             ! Compute VF and barycenters from levelset with 3 levels of refinement
             call initialize_volume_moments(lo=[solver%amr%xlo+real(i  ,WP)*dx,solver%amr%ylo+real(j  ,WP)*dy,solver%amr%zlo+real(k  ,WP)*dz], &
             &                              hi=[solver%amr%xlo+real(i+1,WP)*dx,solver%amr%ylo+real(j+1,WP)*dy,solver%amr%zlo+real(k+1,WP)*dz], &
-            &                              levelset=spheres_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
+            &                              levelset=Ellipsoids_levelset,time=time,level=nref,VFlo=VFlo,VF=pVF(i,j,k,1),BL=BL,BG=BG)
             ! Store barycenters
             if (lvl.eq.solver%amr%maxlvl) then
                pCL(i,j,k,:)=BL
@@ -120,7 +146,7 @@ contains
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
-   end subroutine spheres_init
+   end subroutine Ellipsoids_init
    
    !> Initialization of problem solver
    subroutine simulation_init
@@ -129,7 +155,7 @@ contains
       
       ! Create amrgrid
       create_amrgrid: block
-         amr%name='vof_advect'
+         amr%name='cclabel_tester'
          call param_read('Base nx',amr%nx)
          call param_read('Base ny',amr%ny)
          call param_read('Base nz',amr%nz)
@@ -141,34 +167,45 @@ contains
          call amr%initialize()
       end block create_amrgrid
 
-      ! Setup spheres parameters
-      setup_spheres: block
+      ! Setup Ellipsoids parameters
+      setup_Ellipsoids: block
          use random, only: random_uniform
-         call param_read('Sphere diameter',radius); radius=radius/2.0_WP
-         call param_read('Number of spheres',nSphere);
+         integer :: nD,nseed
+         real(WP), dimension(3) :: center,radius
+         integer :: myseed
+         integer, dimension(:), allocatable :: seed
+         call param_read('Number of ellipsoids',nEllipsoid,default=4)
+         call param_read('Random seed',myseed,default=1)
          ! Allocate arrays
-         allocate(sphere_center(3,nSphere))
-         allocate(sphere_radius(nSphere))
+         allocate(ellipsoid_center(3,nEllipsoid))
+         allocate(ellipsoid_radius(3,nEllipsoid))
          ! Provide seed for random number generator
          call random_seed(size=nseed)
          allocate(seed(nseed))
-         seed(:)=1
+         seed(:)=myseed
          call random_seed(put=seed)
-         do nD=1,nSphere
+         do nD=1,nEllipsoid
             center=[random_uniform(amr%xlo, amr%xhi), &
                     random_uniform(amr%ylo, amr%yhi), &
                     random_uniform(amr%zlo, amr%zhi)  ]
-            sphere_center(:,nD)=center
-            sphere_radius(nD)=radius
+            ellipsoid_center(:,nD)=center
+            radius=[0.5*random_uniform(amr%xlo, amr%xhi), &
+                    0.5*random_uniform(amr%ylo, amr%yhi), &
+                    0.5*random_uniform(amr%zlo, amr%zhi)  ]
+            ellipsoid_radius(:,nD)=radius
          end do
-      end block setup_spheres
+      end block setup_Ellipsoids
 
       ! Initialize our VOF field
       create_and_initialize_vof: block
-         call vof%initialize(amr,name='spheres_vof')
-         vof%user_vof_init=>spheres_init
+         call vof%initialize(amr,name='Ellipsoids_vof')
+         vof%user_vof_init=>Ellipsoids_init
       end block create_and_initialize_vof
 
+      ! Initialize CCLabel
+      create_and_initialize_cclabel: block
+         call cclabel%initialize(amr,name='Ellipsoids_cclabel')
+      end block create_and_initialize_cclabel
 
       ! Initialize regridding
       init_regridding: block
@@ -177,7 +214,7 @@ contains
          ! Fresh start
          call amr%init_from_scratch(time=0.0_WP)
          ! Build PLIC
-         call vof%build_plic(time%t)
+         call vof%build_plic(0.0_WP)
       end block init_regridding
 
       ! Create visualization
@@ -189,6 +226,19 @@ contains
          call viz%add_surfmesh(vof%smesh,'plic')
       end block create_visualization
 
+      ! Create monitor
+      create_monitor: block
+         gridfile=monitor(amRoot=amr%amRoot,name='grid')
+         call gridfile%add_column(amr%nlevels,'Nlvl')
+         call gridfile%add_column(amr%nboxes,'Nbox')
+         call gridfile%add_column(amr%ncells,'Ncell')
+         call gridfile%add_column(amr%compression,'Compression')
+         call gridfile%add_column(amr%maxRSS,'Maximum RSS')
+         call gridfile%add_column(amr%minRSS,'Minimum RSS')
+         call gridfile%add_column(amr%avgRSS,'Average RSS')
+         call gridfile%write()
+      end block create_monitor
+
       
    end subroutine simulation_init
    
@@ -196,7 +246,8 @@ contains
    !> Time integrate our problem
    subroutine simulation_run
      
-      
+      ! Compute CCLabel
+      call cclabel%build(make_label,same_label,vof%VF)
 
       ! Write visualization with IDs
       call viz%write(time=0.0_WP)
@@ -210,7 +261,7 @@ contains
       ! Deallocate work arrays
       call io%finalize()
       call amr%finalize()
-      call vf%finalize()
+      call vof%finalize()
       
    end subroutine simulation_final
    
