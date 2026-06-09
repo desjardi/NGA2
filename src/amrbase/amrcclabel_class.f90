@@ -38,7 +38,7 @@ module amrcclabel_class
    type :: struct_type
       integer :: parent                                   !< ID of parent struct
       integer :: n_                                       !< Number of local cells contained in struct
-      type(map_type), dimension(:), allocatable :: map         !< List of cells contained in struct
+      type(map_type), dimension(:), allocatable :: map    !< List of cells contained in struct
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
    
@@ -48,8 +48,6 @@ module amrcclabel_class
       character(len=str_medium) :: name = 'UNNAMED_CCLABEL'
       ! ID of the structure that contains each cell
       type(amrdata) :: id
-      ! Periodicity treatement
-      type(amrdata) :: idp
       ! Array of structures
       integer :: nstruct
       type(struct_type), dimension(:), allocatable :: struct
@@ -66,18 +64,20 @@ module amrcclabel_class
    
    !> Type of the make_label function used to generate a structure
    interface
-      logical function make_label_ftype(pVF,i,j,k)
+      logical function make_label_ftype(pVF,lo,i,j,k)
          use precision,    only: WP
          real(WP), dimension(:,:,:,:), intent(in) :: pVF
+         integer, dimension(3), intent(in) :: lo
          integer, intent(in) :: i,j,k
       end function make_label_ftype
    end interface
    
    !> Type of the same_label function used to connect two structures
    interface
-      logical function same_label_ftype(pVF,i,j,k,ii,jj,kk)
+      logical function same_label_ftype(pVF,lo,i,j,k,ii,jj,kk)
          use precision,    only: WP
          real(WP), dimension(:,:,:,:), intent(in) :: pVF
+         integer, dimension(3), intent(in) :: lo
          integer, intent(in) :: i,j,k,ii,jj,kk
       end function same_label_ftype
    end interface
@@ -100,8 +100,6 @@ contains
       call this%id%initialize(amr,name='id',ncomp=1,ng=this%nover);! this%id%parent=>this
       call this%id%register() ! Update with regriding
       call this%id%setval(val=0.0_WP)
-      ! Allocate and initialize periodicity array
-      call this%idp%initialize(amr,name='idp',ncomp=3,ng=this%nover);! this%idp%parent=>this
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
@@ -110,11 +108,13 @@ contains
    !> Build structure using the user-set test functions
    subroutine build(this,make_label,same_label,data)
       use amrdata_class,    only: amrdata
+      use amrdata_class, only: interp_none
       implicit none
       class(amrcclabel), intent(inout) :: this
       procedure(make_label_ftype) :: make_label
       procedure(same_label_ftype) :: same_label
       type(amrdata), intent(in) :: data
+      type(amrdata) :: idp
       integer :: nstruct_,stmin,stmax
       integer, dimension(:), allocatable :: parent             !< Resolving structure id across procs
       integer, dimension(:), allocatable :: parent_all         !< Resolving structure id across procs
@@ -132,15 +132,17 @@ contains
       this%struct(:)%per(3)=0
       this%struct(:)%n_=0
       
-      ! Allocate periodicity work array
-      call this%idp%setval(val=0.0_WP)
+      ! Allocate PCG work arrays as local scratch on the current grid and zero
+      ! them (reset only builds, leaving memory uninitialized/snan in debug builds)
+      call idp%initialize(this%amr,name='idp',ncomp=3,ng=1,interp=interp_none)
+      call idp%reset()
+      call idp%setval(0.0_WP)
       
       ! Perform a first pass to build proc-local structures and corresponding tree
       first_pass: block
          use amrex_amr_module, only: amrex_mfiter,amrex_box
          integer :: lvl,i,j,k
          integer :: ii,jj,kk,dim
-         integer :: fab 
          integer, dimension(3) :: pos
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
@@ -153,7 +155,7 @@ contains
             do while (mfi%next())
                ! Get pointers to data arrays
                pid=>this%id%mf(lvl)%dataptr(mfi)
-               pidp=>this%idp%mf(lvl)%dataptr(mfi)
+               pidp=>idp%mf(lvl)%dataptr(mfi)
                pdata=>data%mf(lvl)%dataptr(mfi)
                ! Only work on finest level for now
                if (lvl.ne.data%amr%maxlvl) cycle
@@ -161,22 +163,22 @@ contains
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   ! Find next cell in a structure
-                  if (make_label(pdata,i,j,k)) then
+                  if (make_label(pdata,lbound(pdata),i,j,k)) then
                      ! Loop through one-sided neighbors
                      do dim=1,3
                         pos=0; pos(dim)=-1
                         ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
                         ! Check if neighbor is labeled
-                        if (pid(ii,jj,kk,1).gt.0) then
+                        if (pid(ii,jj,kk,1).gt.0.5_WP) then
                            ! Neighbor is labeled, but are we?
                            if (pid(i,j,k,1).ne.0) then
                               ! We already have a label, perform a union of both labels
-                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
+                              if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
                                  pid(i,j,k,1)=union_struct(int(pid(i,j,k,1)),int(pid(ii,jj,kk,1)))
                               end if
                            else
                               ! We don't have a label, check if we take the neighbor's label
-                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
+                              if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
                                  pid(i,j,k,1)=pid(ii,jj,kk,1)
                               else
                                  pid(i,j,k,1)=add()
@@ -187,9 +189,9 @@ contains
                      ! If no neighbor was labeled, we need a new structure
                      if (pid(i,j,k,1).eq.0) pid(i,j,k,1)=add()
                      ! ! Identify periodicity cases
-                     ! if (this%pg%xper.and.i.eq.this%pg%imax) this%struct(pid(i,j,k,1))%per(1)=1
-                     ! if (this%pg%yper.and.j.eq.this%pg%jmax) this%struct(pid(i,j,k,1))%per(2)=1
-                     ! if (this%pg%zper.and.k.eq.this%pg%kmax) this%struct(pid(i,j,k,1))%per(3)=1
+                     ! if (this%amr%xper.and.i.eq.this%pg%imax) this%struct(pid(i,j,k,1))%per(1)=1
+                     ! if (this%amr%yper.and.j.eq.this%pg%jmax) this%struct(pid(i,j,k,1))%per(2)=1
+                     ! if (this%amr%zper.and.k.eq.this%pg%kmax) this%struct(pid(i,j,k,1))%per(3)=1
                      ! pidp(i,j,k,:)=this%struct(pid(i,j,k,1))%per
                   end if
                end do; end do; end do
@@ -210,87 +212,92 @@ contains
             do while (mfi%next())
                ! Get pointers to data
                pid=>this%id%mf(lvl)%dataptr(mfi)
-               pidp=>this%idp%mf(lvl)%dataptr(mfi)
+               pidp=>idp%mf(lvl)%dataptr(mfi)
                ! Only work on finest level for now
                if (lvl.ne.data%amr%maxlvl) cycle
                ! Perform local loop
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  if (pid(i,j,k,1).gt.0) then
+                  if (pid(i,j,k,1).gt.0.5_WP) then
                      pid(i,j,k,1)=rootify_struct(int(pid(i,j,k,1)))
                      this%struct(int(pid(i,j,k,1)))%n_=this%struct(int(pid(i,j,k,1)))%n_+1
-                     pidp(i,j,k,1)=max(int(pidp(1,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(1))
-                     pidp(i,j,k,2)=max(int(pidp(2,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(2))
-                     pidp(i,j,k,3)=max(int(pidp(3,i,j,k)),this%struct(int(pid(i,j,k,1)))%per(3))
-                     this%struct(int(pid(i,j,k,1)))%per=int(pidp(:,i,j,k))
+                     ! pidp(i,j,k,1)=max(int(pidp(i,j,k,1)),this%struct(int(pid(i,j,k,1)))%per(1))
+                     ! pidp(i,j,k,2)=max(int(pidp(i,j,k,2)),this%struct(int(pid(i,j,k,1)))%per(2))
+                     ! pidp(i,j,k,3)=max(int(pidp(i,j,k,3)),this%struct(int(pid(i,j,k,1)))%per(3))
+                     ! this%struct(int(pid(i,j,k,1)))%per=int(pidp(:,i,j,k))
                   end if
                end do; end do; end do
             end do
          end do
       end block collapse_tree
       
-      ! ! Compact structure array
-      ! compact_tree: block
-      !    use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
-      !    integer :: i,j,k,n,ierr
-      !    integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
-      !    type(struct_type), dimension(:), allocatable :: tmp
-      !    ! Count exact number of local structures
-      !    nstruct_=0
-      !    do n=1,size(this%struct,dim=1)
-      !       if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
-      !    end do
-      !    ! Gather this info to ensure unique index
-      !    allocate( my_nstruct(0:this%pg%nproc-1)); my_nstruct=0; my_nstruct(this%pg%rank)=nstruct_
-      !    allocate(all_nstruct(0:this%pg%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%pg%nproc,MPI_INTEGER,MPI_SUM,this%pg%comm,ierr)
-      !    stmin=1
-      !    if (this%pg%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%pg%rank-1))
-      !    this%nstruct=sum(all_nstruct)
-      !    deallocate(my_nstruct,all_nstruct)
-      !    stmax=stmin+nstruct_-1
-      !    ! Generate an index map
-      !    allocate(idmap(1:size(this%struct,dim=1))); idmap=0
-      !    nstruct_=0
-      !    do n=1,size(this%struct,dim=1)
-      !       if (this%struct(n)%n_.gt.0) then
-      !          nstruct_=nstruct_+1
-      !          idmap(n)=stmin+nstruct_-1
-      !       end if
-      !    end do
-      !    ! Update id array to new index
-      !    update_id: block
-      !       use amrex_amr_module, only: amrex_mfiter,amrex_box
-      !       integer :: lvl
-      !       type(amrex_mfiter) :: mfi
-      !       type(amrex_box) :: bx
-      !       ! Traverse levels ! Only work on finest level for now
-      !       do lvl=this%amr%finest_level()
-      !          ! Loop over tiles
-      !          call this%amr%mfiter_build(lvl,mfi)
-      !          do while (mfi%next())
-      !             ! Get pointers to data
-      !             pid=>this%id%mf(lvl)%dataptr(mfi)
-      !             ! Perform local loop
-      !             bx=mfi%tilebox()
-      !             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-      !                if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
-      !             end do; end do; end do  
-      !          end do
-      !       end do
-      !    end block update_id
-      !    deallocate(idmap)
-      !    ! Finish compacting and renumbering
-      !    allocate(tmp(stmin:stmax))
-      !    nstruct_=0
-      !    do n=1,size(this%struct,dim=1)
-      !       if (this%struct(n)%n_.gt.0) then
-      !          nstruct_=nstruct_+1
-      !          tmp(stmin+nstruct_-1)=this%struct(n)
-      !          allocate(tmp(stmin+nstruct_-1)%map(3,tmp(stmin+nstruct_-1)%n_))
-      !       end if
-      !    end do
-      !    call move_alloc(tmp,this%struct)
-      ! end block compact_tree
+      ! Compact structure array
+      compact_tree: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+         integer :: i,j,k,n,ierr
+         integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
+         type(struct_type), dimension(:), allocatable :: tmp
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
+         ! Count exact number of local structures
+         nstruct_=0
+         do n=1,size(this%struct,dim=1)
+            if (this%struct(n)%n_.gt.0.5_WP) nstruct_=nstruct_+1
+         end do
+         ! Gather this info to ensure unique index
+         allocate( my_nstruct(0:this%amr%nproc-1)); my_nstruct=0; my_nstruct(this%amr%rank)=nstruct_
+         allocate(all_nstruct(0:this%amr%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%amr%nproc,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+         stmin=1
+         if (this%amr%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%amr%rank-1))
+         this%nstruct=sum(all_nstruct)
+         deallocate(my_nstruct,all_nstruct)
+         stmax=stmin+nstruct_-1
+         ! Generate an index map
+         allocate(idmap(1:size(this%struct,dim=1))); idmap=0
+         nstruct_=0
+         do n=1,size(this%struct,dim=1)
+            if (this%struct(n)%n_.gt.0) then
+               nstruct_=nstruct_+1
+               idmap(n)=stmin+nstruct_-1
+            end if
+         end do
+         ! Update id array to new index
+         update_id: block
+            use amrex_amr_module, only: amrex_mfiter,amrex_box
+            integer :: lvl
+            type(amrex_mfiter) :: mfi
+            type(amrex_box) :: bx
+            ! Traverse levels ! Only work on finest level for now
+            do lvl=0,data%amr%clvl()
+               ! Loop over tiles
+               call this%amr%mfiter_build(lvl,mfi)
+               do while (mfi%next())
+                  ! Get pointers to data
+                  pid=>this%id%mf(lvl)%dataptr(mfi)
+                  ! Only work on finest level for now
+                  if (lvl.ne.data%amr%maxlvl) cycle
+                  ! Perform local loop
+                  bx=mfi%tilebox()
+                  do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                     if (pid(i,j,k,1).gt.0.5_WP) then
+                        pid(i,j,k,1)=idmap(int(pid(i,j,k,1)))
+                     end if
+                  end do; end do; end do  
+               end do
+            end do
+         end block update_id
+         deallocate(idmap)
+         ! Finish compacting and renumbering
+         allocate(tmp(stmin:stmax))
+         nstruct_=0
+         do n=1,size(this%struct,dim=1)
+            if (this%struct(n)%n_.gt.0) then
+               nstruct_=nstruct_+1
+               tmp(stmin+nstruct_-1)=this%struct(n)
+               allocate(tmp(stmin+nstruct_-1)%map(tmp(stmin+nstruct_-1)%n_))
+            end if
+         end do
+         call move_alloc(tmp,this%struct)
+      end block compact_tree
       
       ! ! Fill out the node map
       ! node_map: block
@@ -311,7 +318,7 @@ contains
       !          ! Perform local loop
       !          bx=mfi%tilebox()
       !          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-      !             if (pid(i,j,k,1).gt.0) then
+      !             if (pid(i,j,k,.gt.0.5_WP then
       !                counter(pid(i,j,k,1))=counter(pid(i,j,k,1))+1
       !                this%struct(pid(i,j,k,1))%map(:,counter(pid(i,j,k,1))))=[i,j,k]
       !             end if
@@ -319,130 +326,126 @@ contains
       !    deallocate(counter)
       ! end block node_map
       
-      ! ! Interprocessor treatment of our structures
-      ! interproc_handling: block
-      !    use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
-      !    integer :: i,j,k,stop_global,stop_,counter,n,m,ierr,find_parent,find_parent_own
-      !    ! Allocate to total number of structures
-      !    allocate(parent    (this%nstruct)); parent    =0
-      !    allocate(parent_all(this%nstruct)); parent_all=0
-      !    allocate(parent_own(this%nstruct)); parent_own=0
-      !    ! Fill global lineage with selves
-      !    do n=1,this%nstruct
-      !       parent(n)=n
-      !    end do
-      !    ! Synchronize id array
-      !    call sync_lvl(this%id,this%amr%finest_level())
-      !    ! Handle imin_ border
-      !    if (this%pg%imin_.ne.this%pg%imin) then ! ??????????????
-      !       ! Traverse levels ! Only work on finest level for now
-      !       do lvl=this%amr%finest_level()
-      !          ! Loop over tiles
-      !          call this%amr%mfiter_build(lvl,mfi)
-      !          do while (mfi%next())
-      !             ! Get pointers to data
-      !             pid=>this%id%mf(lvl)%dataptr(mfi)
-      !             pVF=>this%VF%mf(lvl)%dataptr(mfi)
-      !             ! Perform local loop
-      !             bx=mfi%tilebox()
-      !             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
-      !                if (pid(bx%lo(1),j,k,1).gt.0.and(pid(bx%lo(1)-1,j,k,1).gt.0)) then
-      !                   if (same_label(pVF(bx%lo(1),j,k),pVF(bx%lo(1)-1,j,k))) call union_parent(pid(bx%lo(1),j,k),pid(bx%lo(1)-1,j,k))
-      !                end if
-      !             end do; end do
-      !          end if
-      !       end do; end do
-      !    end if
-      !    ! Handle jmin_ border
-      !    if (this%pg%jmin_.ne.this%pg%jmin) then ! ?????????????            
-      !       ! Traverse levels ! Only work on finest level for now
-      !       do lvl=this%amr%finest_level()
-      !          ! Loop over tiles
-      !          call this%amr%mfiter_build(lvl,mfi)
-      !          do while (mfi%next())
-      !             ! Get pointers to data
-      !             pid=>this%id%mf(lvl)%dataptr(mfi)
-      !             pVF=>this%VF%mf(lvl)%dataptr(mfi)
-      !             ! Perform local loop
-      !             bx=mfi%tilebox()
-      !             do k=bx%lo(3),bx%hi(3); do i=bx%lo(1),bx%hi(1)
-      !                if (pid(i,bx%lo(2),k,1).gt.0.and(pid(i,bx%lo(2)-1,k,1).gt.0)) then
-      !                   if (same_label(pVF(i,bx%lo(2),k),pVF(i,bx%lo(2)-1,k))) call union_parent(pid(i,bx%lo(2),k),pid(i,bx%lo(2)-1,k))
-      !                end if
-      !             end do; end do
-      !          end if
-      !       end do; end do
-      !    end if
-      !    ! Handle kmin_ border
-      !    if (this%pg%kmin_.ne.this%pg%kmin) then ! ?????????????
-      !       ! Traverse levels ! Only work on finest level for now
-      !       do lvl=this%amr%finest_level()
-      !          ! Loop over tiles
-      !          call this%amr%mfiter_build(lvl,mfi)
-      !          do while (mfi%next())
-      !             ! Get pointers to data
-      !             pid=>this%id%mf(lvl)%dataptr(mfi)
-      !             pVF=>this%VF%mf(lvl)%dataptr(mfi)
-      !             ! Perform local loop
-      !             bx=mfi%tilebox()
-      !             do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-      !                if (pid(i,j,bx%lo(3),1).gt.0.and(pid(i,j,bx%lo(3)-1,1).gt.0)) then
-      !                   if (same_label(pVF(i,j,bx%lo(3)),pVF(i,j,bx%lo(3)-1))) call union_parent(pid(i,j,bx%lo(3)),pid(i,j,bx%lo(3)-1))
-      !                end if
-      !             end do; end do
-      !          end if
-      !       end do; end do
-      !    end if
-      !    ! Initialize global stop criterion and counter
-      !    stop_global=1
-      !    counter=0
-      !    ! Resolve lineage
-      !    do while (stop_global.ne.0)
-      !       ! Initialize local stop flag
-      !       stop_=0
-      !       ! Remember own parents
-      !       parent_own=parent
-      !       ! Set self-parents to huge(1)
-      !       do n=1,this%nstruct
-      !          if (parent(n).eq.n) parent(n)=huge(1)
-      !       end do
-      !       ! Take global min
-      !       call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
-      !       ! Set self-parents back to selves
-      !       do n=1,this%nstruct
-      !          if (parent_all(n).eq.huge(1)) parent_all(n)=n
-      !       end do
-      !       ! Flatten trees
-      !       do n=1,this%nstruct
-      !          parent_all(n)=find_all(n)
-      !          parent_own(n)=find_own(n)
-      !       end do
-      !       ! Start with final parent array being equal to parent_all
-      !       parent=parent_all
-      !       ! Increment counter
-      !       counter=counter+1
-      !       ! Reconcile conflicts between parent_all and parent_own
-      !       do n=1,this%nstruct
-      !          if (parent_own(n).ne.n) then
-      !             find_parent_own=rootify_parent(parent_own(n))
-      !             find_parent    =rootify_parent(parent(n))
-      !             if (find_parent_own.ne.find_parent) then
-      !                call union_parent(find_parent,find_parent_own)
-      !                stop_=1
-      !             end if
-      !          end if
-      !       end do
-      !       ! Check if we did some changes
-      !       call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
-      !    end do
-      !    ! Update this%struct%parent by pointing all parents to root and update id
-      !    do n=stmin,stmax
-      !       this%struct(n)%parent=rootify_parent(parent(n))
-      !       do m=1,this%struct(n)%n_
-      !          this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=this%struct(n)%parent
-      !       end do
-      !    end do
-      ! end block interproc_handling
+      ! Interprocessor treatment of our structures
+      interproc_handling: block
+         use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         integer :: lvl,i,j,k
+         integer :: ii,jj,kk,dim
+         integer, dimension(3) :: pos
+         integer ::stop_global,stop_,counter,n,m,ierr,find_parent,find_parent_own
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp,pdata
+         ! Allocate to total number of structures
+         allocate(parent    (this%nstruct)); parent    =0
+         allocate(parent_all(this%nstruct)); parent_all=0
+         allocate(parent_own(this%nstruct)); parent_own=0
+         ! Fill global lineage with selves
+         do n=1,this%nstruct
+            parent(n)=n
+         end do
+         ! Synchronize id array
+         call this%id%sync()
+         ! Loop over cells and check for connections across periodic boundaries, storing parent connections in parent array
+         ! Traverse levels ! Only work on finest level for now
+         do lvl=0,data%amr%clvl()
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pid=>this%id%mf(lvl)%dataptr(mfi)
+               pdata=>data%mf(lvl)%dataptr(mfi)
+               ! Only work on finest level for now
+               if (lvl.ne.data%amr%maxlvl) cycle
+               ! Perform local loop
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  ! Only work with labeled cells 
+                  if (pid(i,j,k,1).lt.0.5_WP) cycle
+                  ! Loop through one-sided neighbors 
+                  do dim=1,3
+                     pos=0; pos(dim)=-1
+                     ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
+                     if (pid(ii,jj,kk,1).lt.0.5_WP) cycle
+                     ! Check if we should connect these two cells
+                     if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
+                        ! Update parent array to reflect connection
+                        call union_parent(int(pid(i,j,k,1)),int(pid(ii,jj,kk,1)))
+                     end if
+                  end do
+               end do; end do; end do
+            end do
+         end do
+      
+         ! Initialize global stop criterion and counter
+         stop_global=1
+         counter=0
+         ! Resolve lineage
+         do while (stop_global.ne.0)
+            ! Initialize local stop flag
+            stop_=0
+            ! Remember own parents
+            parent_own=parent
+            ! Set self-parents to huge(1)
+            do n=1,this%nstruct
+               if (parent(n).eq.n) parent(n)=huge(1)
+            end do
+            ! Take global min
+            call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%amr%comm,ierr)
+            ! Set self-parents back to selves
+            do n=1,this%nstruct
+               if (parent_all(n).eq.huge(1)) parent_all(n)=n
+            end do
+            ! Flatten trees
+            do n=1,this%nstruct
+               parent_all(n)=find_all(n)
+               parent_own(n)=find_own(n)
+            end do
+            ! Start with final parent array being equal to parent_all
+            parent=parent_all
+            ! Increment counter
+            counter=counter+1
+            ! Reconcile conflicts between parent_all and parent_own
+            do n=1,this%nstruct
+               if (parent_own(n).ne.n) then
+                  find_parent_own=rootify_parent(parent_own(n))
+                  find_parent    =rootify_parent(parent(n))
+                  if (find_parent_own.ne.find_parent) then
+                     call union_parent(find_parent,find_parent_own)
+                     stop_=1
+                  end if
+               end if
+            end do
+            ! Check if we did some changes
+            call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+         end do
+         ! Update this%struct%parent by pointing all parents to root and update id
+         ! do n=stmin,stmax
+         !    this%struct(n)%parent=rootify_parent(parent(n))
+         !    do m=1,this%struct(n)%n_
+         !       this%id(this%struct(n)%map(m)%i,this%struct(n)%map(m)%j,this%struct(n)%map(m)%k)=this%struct(n)%parent
+         !    end do
+         ! end do
+         ! Traverse levels
+         do lvl=0,data%amr%clvl()
+            ! Loop over tiles
+            call data%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data arrays
+               pid=>this%id%mf(lvl)%dataptr(mfi)
+               ! Only work on finest level for now
+               if (lvl.ne.data%amr%maxlvl) cycle
+               ! Perform local loop
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  if (pid(i,j,k,1).gt.0.5_WP) then
+                     pid(i,j,k,1)=rootify_parent(parent(int(pid(i,j,k,1))))
+                  end if
+               end do; end do; end do
+            end do
+         end do
+      end block interproc_handling
       
       ! ! Update periodicity array across processors
       ! periodicity_update: block
@@ -457,7 +460,7 @@ contains
       !       ownper(:,n)=this%struct(n)%per
       !    end do
       !    ! Communicate per
-      !    call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+      !    call MPI_ALLREDUCE(ownper,allper,3*this%nstruct,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
       !    ! Update parent per
       !    do n=1,this%nstruct
       !       allper(:,parent(n))=max(allper(:,parent(n)),allper(:,n))
@@ -465,7 +468,7 @@ contains
       !    ! Update idp array
       !    do n=stmin,stmax
       !       do m=1,this%struct(n)%n_
-      !          idp(:,this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m))=allper(:,this%id(this%struct(n)%map(1,m),this%struct(n)%map(2,m),this%struct(n)%map(3,m)))
+      !          idp(:,this%struct(n)%map(m))=allper(:,this%id(this%struct(n)%map(m)))
       !       end do
       !    end do
       !    ! Clean up
@@ -514,7 +517,7 @@ contains
       !          if (parent(n).eq.n) parent(n)=huge(1)
       !       end do
       !       ! Take global min
-      !       call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%pg%comm,ierr)
+      !       call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%amr%comm,ierr)
       !       ! Set self-parents back to selves
       !       do n=1,this%nstruct
       !          if (parent_all(n).eq.huge(1)) parent_all(n)=n
@@ -540,7 +543,7 @@ contains
       !          end if
       !       end do
       !       ! Check if we did some changes
-      !       call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%pg%comm,ierr)
+      !       call MPI_ALLREDUCE(stop_,stop_global,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
       !    end do
       !    ! Update this%struct%parent and point all parents to root and update id
       !    do n=stmin,stmax
@@ -647,7 +650,9 @@ contains
       !       if (this%id(i,j,k).eq.1) then; this%id(i,j,k)=bigid; else if (this%id(i,j,k).eq.bigid) then; this%id(i,j,k)=1; end if
       !    end do; end do; end do
       ! end block rename_largest_structure
-      
+
+      ! Release scratch
+      call idp%finalize()
       
    contains
       
@@ -791,7 +796,6 @@ contains
       class(amrcclabel), intent(inout) :: this
       call this%empty()
       call this%id%finalize()
-      call this%idp%finalize()
       ! nullify(this%pg)
       this%name='UNNAMED_CCL'
    end subroutine finalize
