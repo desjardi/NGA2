@@ -21,6 +21,7 @@ module material_class
       procedure(get_e_from_p_T_iface),      deferred :: get_e_from_p_T
       procedure(get_p_from_rho_T_iface),    deferred :: get_p_from_rho_T
       procedure(get_rho_from_p_T_iface),    deferred :: get_rho_from_p_T
+      procedure(get_cv_from_rho_T_iface),   deferred :: get_cv_from_rho_T
       procedure(get_h_from_p_T_iface),      deferred :: get_h_from_p_T
       procedure(get_s_from_p_T_iface),      deferred :: get_s_from_p_T
       procedure(get_g_from_p_T_iface),      deferred :: get_g_from_p_T
@@ -80,6 +81,14 @@ module material_class
          real(WP), intent(in) :: p,T
          real(WP), dimension(:), intent(in) :: y
       end function get_rho_from_p_T_iface
+
+      !> cv = (de/dT)_rho; constant for calorically-perfect EOS, composition-weighted for mixtures
+      real(WP) function get_cv_from_rho_T_iface(this,rho,T,y)
+         import :: WP,material
+         class(material), intent(in) :: this
+         real(WP), intent(in) :: rho,T
+         real(WP), dimension(:), intent(in) :: y
+      end function get_cv_from_rho_T_iface
 
       real(WP) function get_h_from_p_T_iface(this,p,T,y)
          import :: WP,material

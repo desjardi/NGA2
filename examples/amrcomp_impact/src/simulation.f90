@@ -548,8 +548,8 @@ contains
 
          ! Wall BC at x- (90 degree contact)
          fs%lo_bc(1)=BC_REFLECT
-         fs%Q%lo_bc(1,1:4)=amrex_bc_foextrap
-         fs%Q%lo_bc(1,5  )=amrex_bc_reflect_odd
+         fs%Q%lo_bc(1,:)=amrex_bc_foextrap ! Extrapolate everything then correct
+         fs%Q%lo_bc(1,5)=amrex_bc_reflect_odd
          fs%U%lo_bc(1,:)=amrex_bc_reflect_odd
          ! Tangential momenta Q(6:7) and face velocities V, W at wall: slip vs no-slip
          call param_read('Wall BC',wall_bc_type,default='noslip')

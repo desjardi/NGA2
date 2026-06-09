@@ -25,6 +25,7 @@ module ideal_gas_class
       procedure :: get_e_from_p_T          => ig_get_e_from_p_T
       procedure :: get_p_from_rho_T        => ig_get_p_from_rho_T
       procedure :: get_rho_from_p_T        => ig_get_rho_from_p_T
+      procedure :: get_cv_from_rho_T       => ig_get_cv_from_rho_T
       procedure :: get_h_from_p_T          => ig_get_h_from_p_T
       procedure :: get_s_from_p_T          => ig_get_s_from_p_T
       procedure :: get_g_from_p_T          => ig_get_g_from_p_T
@@ -100,6 +101,13 @@ contains
       real(WP), dimension(:), intent(in) :: y
       rho = p/(this%R*T)
    end function ig_get_rho_from_p_T
+
+   real(WP) function ig_get_cv_from_rho_T(this,rho,T,y) result(cv)
+      class(ideal_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,T
+      real(WP), dimension(:), intent(in) :: y
+      cv = this%cv
+   end function ig_get_cv_from_rho_T
 
    real(WP) function ig_get_h_from_p_T(this,p,T,y) result(h)
       class(ideal_gas), intent(in) :: this

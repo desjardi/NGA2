@@ -22,6 +22,7 @@ module igmix_class
       procedure :: get_e_from_p_T          => igmix_get_e_from_p_T
       procedure :: get_p_from_rho_T        => igmix_get_p_from_rho_T
       procedure :: get_rho_from_p_T        => igmix_get_rho_from_p_T
+      procedure :: get_cv_from_rho_T       => igmix_get_cv_from_rho_T
       procedure :: get_h_from_p_T          => igmix_get_h_from_p_T
       procedure :: get_s_from_p_T          => igmix_get_s_from_p_T
       procedure :: get_g_from_p_T          => igmix_get_g_from_p_T
@@ -127,6 +128,13 @@ contains
       Rm=sum(y(1:this%ns)*this%R(1:this%ns))
       rho=p/(Rm*T)
    end function igmix_get_rho_from_p_T
+
+   real(WP) function igmix_get_cv_from_rho_T(this,rho,T,y) result(cv)
+      class(igmix), intent(in) :: this
+      real(WP), intent(in) :: rho,T
+      real(WP), dimension(:), intent(in) :: y
+      cv=sum(y(1:this%ns)*this%cv(1:this%ns))
+   end function igmix_get_cv_from_rho_T
 
    real(WP) function igmix_get_h_from_p_T(this,p,T,y) result(h)
       class(igmix), intent(in) :: this

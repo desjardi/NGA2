@@ -2425,9 +2425,11 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       integer :: lvl,i,j,k,ierr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pVisc,pBeta,pDiff,pVF,pPL,pPG,pC,pTL,pTG
-      real(WP) :: dxi,dyi,dzi,rho,viscmax,conv,pgrad
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pVisc,pBeta,pDiff,pVF,pPL,pPG,pC,pTL,pTG,pRHOL,pRHOG,pYl,pYg
+      real(WP) :: dxi,dyi,dzi,rho,viscmax,conv,pgrad,cvL,cvG,alpha_heat
       real(WP) :: Pmix_ip,Pmix_im,Pmix_jp,Pmix_jm,Pmix_kp,Pmix_km
+      real(WP), dimension(this%liq%ns) :: yL
+      real(WP), dimension(this%gas%ns) :: yG
       ! Get convective CFL from parent
       call this%amrmpflow%get_cflc(dt=dt)
       ! Reset child CFLs
@@ -2455,15 +2457,32 @@ contains
             pC   =>this%C%mf(lvl)%dataptr(mfi)
             pTL  =>this%TL%mf(lvl)%dataptr(mfi)
             pTG  =>this%TG%mf(lvl)%dataptr(mfi)
+            pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
+            pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            if (this%liq%ns.gt.1) pYl=>this%Yl%mf(lvl)%dataptr(mfi)
+            if (this%gas%ns.gt.1) pYg=>this%Yg%mf(lvl)%dataptr(mfi)
             ! Loop over cells
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                ! Get density
                rho=max(pQ(i,j,k,1)+pQ(i,j,k,2),this%rho_floor)
+               ! Heat-diffusion CFL: thermal diffusivity alpha=lambda/(rho*cv), phasic in pure cells (matches conduction flux)
+               alpha_heat=0.0_WP
+               if (pVF(i,j,k,1).gt.VFhi.and.pRHOL(i,j,k,1).gt.0.0_WP) then
+                  ! Pure liquid: alpha_L=lambda/(rhoL*cvL)
+                  if (this%liq%ns.gt.1) yL(1:this%liq%ns-1)=pYl(i,j,k,:)
+                  yL(this%liq%ns)=max(0.0_WP,1.0_WP-sum(yL(1:this%liq%ns-1)))
+                  cvL=this%liq%get_cv_from_rho_T(pRHOL(i,j,k,1),pTL(i,j,k,1),yL)
+                  alpha_heat=pDiff(i,j,k,1)/max(pRHOL(i,j,k,1)*cvL,tiny(1.0_WP))
+               else if (pVF(i,j,k,1).lt.VFlo.and.pRHOG(i,j,k,1).gt.0.0_WP) then
+                  ! Pure gas: alpha_G=lambda/(rhoG*cvG)
+                  if (this%gas%ns.gt.1) yG(1:this%gas%ns-1)=pYg(i,j,k,:)
+                  yG(this%gas%ns)=max(0.0_WP,1.0_WP-sum(yG(1:this%gas%ns-1)))
+                  cvG=this%gas%get_cv_from_rho_T(pRHOG(i,j,k,1),pTG(i,j,k,1),yG)
+                  alpha_heat=pDiff(i,j,k,1)/max(pRHOG(i,j,k,1)*cvG,tiny(1.0_WP))
+               end if
                ! Viscous CFL
-               viscmax=max(pVisc(i,j,k,1)/rho, &
-               &           pBeta(i,j,k,1)/rho, &
-               &           pDiff(i,j,k,1)*(pVF(i,j,k,1)*pTL(i,j,k,1)+(1.0_WP-pVF(i,j,k,1))*pTG(i,j,k,1))/max(pQ(i,j,k,3)+pQ(i,j,k,4),this%rho_floor))
+               viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,alpha_heat)
                if (this%amr%nx.gt.1) this%CFLv_x=max(this%CFLv_x,4.0_WP*viscmax*dt*dxi**2)
                if (this%amr%ny.gt.1) this%CFLv_y=max(this%CFLv_y,4.0_WP*viscmax*dt*dyi**2)
                if (this%amr%nz.gt.1) this%CFLv_z=max(this%CFLv_z,4.0_WP*viscmax*dt*dzi**2)

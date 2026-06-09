@@ -1101,8 +1101,9 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       integer :: lvl,i,j,k,ierr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW,pVisc,pBeta,pDiff,pT,pC
-      real(WP) :: dxi,dyi,dzi,rho,conv,pgrad,viscmax
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW,pVisc,pBeta,pDiff,pT,pC,pY
+      real(WP) :: dxi,dyi,dzi,rho,conv,pgrad,viscmax,cv,alpha_heat
+      real(WP), dimension(this%mat%ns) :: y
       ! Get convective CFL from parent
       call this%amrflow%get_cflc(dt=dt)
       ! Reset CFLs
@@ -1127,13 +1128,18 @@ contains
             pP=>this%P%mf(lvl)%dataptr(mfi)
             pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
             pC=>this%C%mf(lvl)%dataptr(mfi)
+            if (this%mat%ns.gt.1) pY=>this%Y%mf(lvl)%dataptr(mfi)
             ! Loop over interior tiles
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                rho=max(pQ(i,j,k,1),this%rho_floor)
+               ! Heat-diffusion CFL: thermal diffusivity alpha=lambda/(rho*cv)
+               if (this%mat%ns.gt.1) y(1:this%mat%ns-1)=pY(i,j,k,:)
+               y(this%mat%ns)=max(0.0_WP,1.0_WP-sum(y(1:this%mat%ns-1)))
+               cv=this%mat%get_cv_from_rho_T(rho,pT(i,j,k,1),y)
+               alpha_heat=pDiff(i,j,k,1)/max(rho*cv,tiny(1.0_WP))
                ! Viscous-like CFL
-               !viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)/rho) ! Heat diffusion cfl is incorrect
-               viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,pDiff(i,j,k,1)*pT(i,j,k,1)/max(pQ(i,j,k,5),this%rho_floor))
+               viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,alpha_heat)
                if (this%amr%nx.gt.1) this%CFLv_x=max(this%CFLv_x,4.0_WP*viscmax*dt*dxi**2)
                if (this%amr%ny.gt.1) this%CFLv_y=max(this%CFLv_y,4.0_WP*viscmax*dt*dyi**2)
                if (this%amr%nz.gt.1) this%CFLv_z=max(this%CFLv_z,4.0_WP*viscmax*dt*dzi**2)
