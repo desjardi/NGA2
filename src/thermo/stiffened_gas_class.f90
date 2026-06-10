@@ -16,6 +16,8 @@ module stiffened_gas_class
       procedure :: get_p_from_rho_e        => sg_get_p_from_rho_e
       procedure :: get_T_from_p_rho        => sg_get_T_from_p_rho
       procedure :: get_c_from_p_rho        => sg_get_c_from_p_rho
+      procedure :: get_T_from_rho_e        => sg_get_T_from_rho_e
+      procedure :: get_c_from_rho_e        => sg_get_c_from_rho_e
       procedure :: get_e_from_p_rho        => sg_get_e_from_p_rho
       procedure :: get_e_from_p_T          => sg_get_e_from_p_T
       procedure :: get_p_from_rho_T        => sg_get_p_from_rho_T
@@ -67,6 +69,21 @@ contains
       real(WP), dimension(:), intent(in) :: y
       c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/rho))
    end function sg_get_c_from_p_rho
+
+   !> Optimal (rho,e) primitives (stiffened gas): T,c directly; cv inherited from ideal_gas (=this%cv).
+   real(WP) function sg_get_T_from_rho_e(this,rho,e,y) result(T)
+      class(stiffened_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      T=(e-this%q-this%pinf/rho)/this%cv
+   end function sg_get_T_from_rho_e
+
+   real(WP) function sg_get_c_from_rho_e(this,rho,e,y) result(c)
+      class(stiffened_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      c=sqrt(max(0.0_WP,this%gamma*(this%gamma-1.0_WP)*((e-this%q)-this%pinf/rho)))
+   end function sg_get_c_from_rho_e
 
    real(WP) function sg_get_e_from_p_rho(this,p,rho,y) result(e)
       class(stiffened_gas), intent(in) :: this

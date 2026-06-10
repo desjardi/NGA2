@@ -31,6 +31,9 @@ module ideal_gas_class
       procedure :: get_s_from_p_T          => ig_get_s_from_p_T
       procedure :: get_g_from_p_T          => ig_get_g_from_p_T
       procedure :: get_gruneisen_from_rho_e=> ig_get_gruneisen_from_rho_e
+      procedure :: get_T_from_rho_e        => ig_get_T_from_rho_e
+      procedure :: get_c_from_rho_e        => ig_get_c_from_rho_e
+      procedure :: get_cv_from_rho_e       => ig_get_cv_from_rho_e
       procedure :: get_rhoe_from_p_rho     => ig_get_rhoe_from_p_rho
       procedure :: get_rhoe_from_p_T       => ig_get_rhoe_from_p_T
       procedure :: print                   => ig_print
@@ -109,6 +112,28 @@ contains
       real(WP), dimension(:), intent(in) :: y
       cv = this%cv
    end function ig_get_cv_from_rho_T
+
+   !> Optimal primitives directly from (rho,e) -- no pressure recompute (overrides the base default).
+   real(WP) function ig_get_T_from_rho_e(this,rho,e,y) result(T)
+      class(ideal_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      T=(e-this%q)/this%cv
+   end function ig_get_T_from_rho_e
+
+   real(WP) function ig_get_c_from_rho_e(this,rho,e,y) result(c)
+      class(ideal_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      c=sqrt(max(0.0_WP,this%gamma*(this%gamma-1.0_WP)*(e-this%q)))
+   end function ig_get_c_from_rho_e
+
+   real(WP) function ig_get_cv_from_rho_e(this,rho,e,y) result(cv)
+      class(ideal_gas), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      cv=this%cv
+   end function ig_get_cv_from_rho_e
 
    real(WP) function ig_get_h_from_p_T(this,p,T,y) result(h)
       class(ideal_gas), intent(in) :: this

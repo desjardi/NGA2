@@ -28,6 +28,9 @@ module igmix_class
       procedure :: get_s_from_p_T          => igmix_get_s_from_p_T
       procedure :: get_g_from_p_T          => igmix_get_g_from_p_T
       procedure :: get_gruneisen_from_rho_e=> igmix_get_gruneisen_from_rho_e
+      procedure :: get_T_from_rho_e        => igmix_get_T_from_rho_e
+      procedure :: get_c_from_rho_e        => igmix_get_c_from_rho_e
+      procedure :: get_cv_from_rho_e       => igmix_get_cv_from_rho_e
       procedure :: get_rhoe_from_p_rho     => igmix_get_rhoe_from_p_rho
       procedure :: get_rhoe_from_p_T       => igmix_get_rhoe_from_p_T
       procedure :: print                   => igmix_print
@@ -136,6 +139,35 @@ contains
       real(WP), dimension(:), intent(in) :: y
       cv=sum(y(1:this%ns)*this%cv(1:this%ns))
    end function igmix_get_cv_from_rho_T
+
+   !> Optimal (rho,e) primitives (ideal-gas mixture): T,c,cv directly from mass-fraction-weighted coeffs.
+   real(WP) function igmix_get_T_from_rho_e(this,rho,e,y) result(T)
+      class(igmix), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      real(WP) :: cvm,qm
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
+      T=(e-qm)/cvm
+   end function igmix_get_T_from_rho_e
+
+   real(WP) function igmix_get_c_from_rho_e(this,rho,e,y) result(c)
+      class(igmix), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      real(WP) :: cvm,cpm,qm
+      cvm=sum(y(1:this%ns)*this%cv(1:this%ns))
+      cpm=sum(y(1:this%ns)*this%cp(1:this%ns))
+      qm =sum(y(1:this%ns)*this%q (1:this%ns))
+      c=sqrt(max(0.0_WP,cpm*(cpm-cvm)*(e-qm)/cvm**2))
+   end function igmix_get_c_from_rho_e
+
+   real(WP) function igmix_get_cv_from_rho_e(this,rho,e,y) result(cv)
+      class(igmix), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      cv=sum(y(1:this%ns)*this%cv(1:this%ns))
+   end function igmix_get_cv_from_rho_e
 
    real(WP) function igmix_get_h_from_p_T(this,p,T,y) result(h)
       class(igmix), intent(in) :: this

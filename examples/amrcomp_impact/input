@@ -29,11 +29,6 @@ Liquid pinf:      55.2625
 Liquid covolume:  0.003655
 Liquid cv:        2.22961
 Liquid qp:        7.1209
-# Water vapor
-GammaV:    1.30065
-Vapor cv:  1.08276
-Vapor q:   1.62719
-Vapor qp:  3.50590
 # Shock parameters
 Gas Mach number: 1.95
 # Surface tension

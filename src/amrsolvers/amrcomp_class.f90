@@ -754,10 +754,10 @@ contains
                y(this%mat%ns)=max(0.0_WP,1.0_WP-sum(y(1:this%mat%ns-1)))
                ! Compute pressure via EoS: P = P(rho, I)
                pP(i,j,k,1)=this%mat%get_p_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=y)
-               ! Compute speed of sound via EoS: C = C(rho, P)
-               pC(i,j,k,1)=this%mat%get_c_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=y)
-               ! Compute temperature via EoS: T = T(rho, P)
-               pT(i,j,k,1)=this%mat%get_T_from_p_rho(p=pP(i,j,k,1),rho=pQ(i,j,k,1),y=y)
+               ! Compute speed of sound via EoS from (rho,e) -- avoids the ill-conditioned (p,rho) flash
+               pC(i,j,k,1)=this%mat%get_c_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=y)
+               ! Compute temperature via EoS from (rho,e)
+               pT(i,j,k,1)=this%mat%get_T_from_rho_e(rho=pQ(i,j,k,1),e=pI(i,j,k,1),y=y)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -1121,7 +1121,7 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       integer :: lvl,i,j,k,ierr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW,pVisc,pBeta,pDiff,pT,pC,pY
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pP,pUVW,pVisc,pBeta,pDiff,pT,pC,pY,pI
       real(WP) :: dxi,dyi,dzi,rho,conv,pgrad,viscmax,cv,alpha_heat
       real(WP), dimension(this%mat%ns) :: y
       ! Get convective CFL from parent
@@ -1148,6 +1148,7 @@ contains
             pP=>this%P%mf(lvl)%dataptr(mfi)
             pUVW=>this%UVW%mf(lvl)%dataptr(mfi)
             pC=>this%C%mf(lvl)%dataptr(mfi)
+            pI=>this%I%mf(lvl)%dataptr(mfi)
             if (this%mat%ns.gt.1) pY=>this%Y%mf(lvl)%dataptr(mfi)
             ! Loop over interior tiles
             bx=mfi%tilebox()
@@ -1156,7 +1157,7 @@ contains
                ! Heat-diffusion CFL: thermal diffusivity alpha=lambda/(rho*cv)
                if (this%mat%ns.gt.1) y(1:this%mat%ns-1)=pY(i,j,k,:)
                y(this%mat%ns)=max(0.0_WP,1.0_WP-sum(y(1:this%mat%ns-1)))
-               cv=this%mat%get_cv_from_rho_T(rho,pT(i,j,k,1),y)
+               cv=this%mat%get_cv_from_rho_e(rho,pI(i,j,k,1),y)
                alpha_heat=pDiff(i,j,k,1)/max(rho*cv,tiny(1.0_WP))
                ! Viscous-like CFL
                viscmax=max(pVisc(i,j,k,1)/rho,pBeta(i,j,k,1)/rho,alpha_heat)

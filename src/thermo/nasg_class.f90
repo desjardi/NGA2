@@ -16,6 +16,8 @@ module nasg_class
       procedure :: get_p_from_rho_e        => nasg_get_p_from_rho_e
       procedure :: get_T_from_p_rho        => nasg_get_T_from_p_rho
       procedure :: get_c_from_p_rho        => nasg_get_c_from_p_rho
+      procedure :: get_T_from_rho_e        => nasg_get_T_from_rho_e
+      procedure :: get_c_from_rho_e        => nasg_get_c_from_rho_e
       procedure :: get_e_from_p_rho        => nasg_get_e_from_p_rho
       procedure :: get_p_from_rho_T        => nasg_get_p_from_rho_T
       procedure :: get_rho_from_p_T        => nasg_get_rho_from_p_T
@@ -67,6 +69,23 @@ contains
       real(WP), dimension(:), intent(in) :: y
       c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*(1.0_WP-this%b*rho))))
    end function nasg_get_c_from_p_rho
+
+   !> Optimal (rho,e) primitives (NASG, co-volume b): T direct; c via one inline p; cv inherited (=this%cv).
+   real(WP) function nasg_get_T_from_rho_e(this,rho,e,y) result(T)
+      class(nasg), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      T=(e-this%q-this%pinf*(1.0_WP-this%b*rho)/rho)/this%cv
+   end function nasg_get_T_from_rho_e
+
+   real(WP) function nasg_get_c_from_rho_e(this,rho,e,y) result(c)
+      class(nasg), intent(in) :: this
+      real(WP), intent(in) :: rho,e
+      real(WP), dimension(:), intent(in) :: y
+      real(WP) :: p
+      p=(this%gamma-1.0_WP)*rho*(e-this%q)/(1.0_WP-this%b*rho)-this%gamma*this%pinf
+      c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*(1.0_WP-this%b*rho))))
+   end function nasg_get_c_from_rho_e
 
    real(WP) function nasg_get_e_from_p_rho(this,p,rho,y) result(e)
       class(nasg), intent(in) :: this

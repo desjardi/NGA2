@@ -11,8 +11,8 @@ module simulation
    use monitor_class,     only: monitor
    use amrio_class,       only: amrio
    use nasg_class,        only: nasg
-   use igmix_class,       only: igmix
-   use relax_igmix_nasg_class, only: relax_igmix_nasg
+   use ideal_gas_class,   only: ideal_gas
+   use relax_ig_nasg_class, only: relax_ig_nasg
    implicit none
    private
    
@@ -41,15 +41,14 @@ module simulation
    real(WP) :: restart_time
    
    !> Simulation monitoring
-   type(monitor) :: mfile,consfile,cflfile,gridfile,tfile,vaporfile
+   type(monitor) :: mfile,consfile,cflfile,gridfile,tfile
    
    !> Materials
-   type(nasg),  target :: water
-   type(igmix), target :: gas
-   integer, parameter :: indV=1,indA=2 !< Gas species indices in the mixture (1=vapor, 2=air)
+   type(nasg),      target :: water
+   type(ideal_gas), target :: gas
 
    !> Relaxation model
-   type(relax_igmix_nasg), target :: relax_model
+   type(relax_ig_nasg), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -160,8 +159,8 @@ contains
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
                ! Phasic heat diffusivities: gas k=cp*mu/Pr, liquid from ratio
-               pDiffG(i,j,k,1)=gas%cp(indA)*mu_g/Prandtl
-               pDiffL(i,j,k,1)=diff_ratio*gas%cp(indA)/(Reynolds*Prandtl)
+               pDiffG(i,j,k,1)=gas%cp*mu_g/Prandtl
+               pDiffL(i,j,k,1)=diff_ratio*gas%cp/(Reynolds*Prandtl)
                ! Apply sponge layer viscosity
                r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
@@ -193,15 +192,13 @@ contains
       type(amrex_box) :: bx
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pVF,pCL,pCG
       real(WP), dimension(3) :: BL,BG
-      real(WP) :: dx,dy,dz,myVF,IEL,x_cc,rhoG,pG,uG,H,yg(2)
+      real(WP) :: dx,dy,dz,myVF,IEL,x_cc,rhoG,pG,uG,H
       integer :: i,j,k
       integer, parameter :: nref=3
       ! Get mesh size
       dx=solver%amr%dx(lvl); dy=solver%amr%dy(lvl); dz=solver%amr%dz(lvl)
       ! Get internal energy of liquid
       IEL=water%get_e_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP])
-      ! Pre-shock gas composition: pure air (no vapor)
-      yg(indV)=0.0_WP; yg(indA)=1.0_WP
       ! Use passed ba/dm since grid is being constructed
       call amrex_mfiter_build(mfi,ba,dm,tiling=.false.)
       do while (mfi%next())
@@ -236,11 +233,10 @@ contains
             pQ(i,j,k,1)=(       myVF)*rhoL1
             pQ(i,j,k,2)=(1.0_WP-myVF)*rhoG
             pQ(i,j,k,3)=pQ(i,j,k,1)*IEL
-            pQ(i,j,k,4)=pQ(i,j,k,2)*gas%get_e_from_p_rho(p=pG,rho=rhoG,y=yg)
+            pQ(i,j,k,4)=pQ(i,j,k,2)*gas%get_e_from_p_rho(p=pG,rho=rhoG,y=[1.0_WP])
             pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*uG
             pQ(i,j,k,6)=0.0_WP
             pQ(i,j,k,7)=0.0_WP
-            pQ(i,j,k,solver%Yg_lo:solver%Yg_hi)=0.0_WP   ! vapor partial density (Yv=0)
          end do; end do; end do
       end do
       call amrex_mfiter_destroy(mfi)
@@ -257,7 +253,6 @@ contains
       character(len=1), intent(in) :: comp
       real(WP), dimension(:,:,:,:), contiguous, pointer :: p
       integer :: i,j,k
-      real(WP) :: yg(2)
       select case (face)
        case (2)  ! X-HIGH: Dirichlet inflow with pre-shock state (gas only, no liquid)
          select case (comp)
@@ -270,16 +265,14 @@ contains
                p(i,j,k,1)=0.0_WP
             end do; end do; end do
           case ('Q')  ! Cell-centered Q in pre-shock gas
-            yg(indV)=0.0_WP; yg(indA)=1.0_WP   ! pre-shock gas is pure air
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                p(i,j,k,1)=0.0_WP                  ! No liquid
                p(i,j,k,2)=rhoG1                   ! Gas density
                p(i,j,k,3)=0.0_WP                  ! No liquid energy
-               p(i,j,k,4)=rhoG1*gas%get_e_from_p_rho(p=pG1,rho=rhoG1,y=yg) ! Gas internal energy
+               p(i,j,k,4)=rhoG1*gas%get_e_from_p_rho(p=pG1,rho=rhoG1,y=[1.0_WP]) ! Gas internal energy
                p(i,j,k,5)=rhoG1*u1                ! X-momentum
                p(i,j,k,6)=0.0_WP
                p(i,j,k,7)=0.0_WP
-               p(i,j,k,solver%Yg_lo:solver%Yg_hi)=0.0_WP   ! vapor partial density (Yv=0)
             end do; end do; end do
          end select
       end select
@@ -405,7 +398,6 @@ contains
          character(len=str_long) :: message
          real(WP) :: A,B,C
          real(WP) :: GammaL,PinfL,bL,CvL,qpL
-         real(WP) :: GammaV,cvV,qV,qpV
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
          ! Gas EoS parameters (ideal gas)
@@ -457,13 +449,8 @@ contains
          rhoL1=(pL1+PinfL)/((GammaL-1.0_WP)*CvL*T_G+bL*(pL1+PinfL))
          density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
          ML=1.0_WP/sqrt(GammaL*(pL1+PinfL)/(rhoL1*(1.0_WP-bL*rhoL1)))     ! diagnostic liquid Mach (Deltau=1)
-         ! Vapor EoS (NASG-fit vapor species; matters for phase change, inert at Yv=0)
-         call param_read('GammaV',GammaV)
-         call param_read('Vapor cv',cvV)
-         call param_read('Vapor q',qV)
-         call param_read('Vapor qp',qpV)
-         ! Build materials: gas = [vapor, air] ideal-gas mixture (indV=1, indA=2)
-         call gas%initialize(gamma=[GammaV,GammaG],cv=[cvV,CvG],q=[qV,0.0_WP],qp=[qpV,0.0_WP],species_names=[character(len=5)::'vapor','air'],name='gas')
+         ! Build materials: gas = ideal-gas air; liquid = NASG water
+         call gas%initialize(gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='gas')
          call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=qpL,name='water')
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
@@ -522,10 +509,8 @@ contains
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
-         call relax_model%initialize(liq=water,gas=gas,indV=indV,indA=indA); fs%relax=>relax_model
-         relax_model%pv_dry     =1.0e-7_WP   ! nondim vapor-pressure floor for dry-edge reseed (~1 Pa / p_ref)
-         relax_model%do_nucleate=.false.     ! defer cavitation/condensation nucleation (first g-relax pass)
-         relax_model%model=3 ! 1=Prelax (mechanical only); 2=pT; 3=pTg (phase change)
+         call relax_model%initialize(gas=gas,liq=water); fs%relax=>relax_model
+         relax_model%model=1 ! 1=Prelax (mechanical only); 2=pT
          ! Set initial conditions
          fs%user_init=>shockdrop_init
 
@@ -631,7 +616,6 @@ contains
          ! Create visualization object
          call viz%initialize(amr,'impact',use_hdf5=.false.)
          call viz%add_scalar(fs%VF,1,'VF')
-         call viz%add_scalar(fs%Yg,1,'Yv')
          call viz%add_scalar(fs%RHOL,1,'RHOL')
          call viz%add_scalar(fs%RHOG,1,'RHOG')
          call viz%add_scalar(fs%PL,1,'PL')
@@ -708,16 +692,7 @@ contains
          call consfile%add_column(fs%Qint(6),'V Momentum')
          call consfile%add_column(fs%Qint(7),'W Momentum')
          call consfile%add_column(fs%rhoKint,'Kinetic energy')
-         call consfile%add_column(fs%Qint(fs%Yg_lo),'Vapor Mass')
          call consfile%write()
-         ! Create vapor monitor: total vapor mass (integral) + vapor mass-fraction extremes
-         vaporfile=monitor(amRoot=amr%amRoot,name='vapor')
-         call vaporfile%add_column(time%n,'Timestep number')
-         call vaporfile%add_column(time%t,'Time')
-         call vaporfile%add_column(fs%Qint(fs%Yg_lo),'Vapor mass')
-         call vaporfile%add_column(fs%Ygmin(1),'Yv min')
-         call vaporfile%add_column(fs%Ygmax(1),'Yv max')
-         call vaporfile%write()
          ! Create grid monitor
          gridfile=monitor(amRoot=amr%amRoot,name='grid')
          call gridfile%add_column(time%n,'Timestep')
@@ -854,7 +829,6 @@ contains
          call fs%get_info()
          call mfile%write()
          call consfile%write()
-         call vaporfile%write()
          call cflfile%write()
          call tfile%write()
          
@@ -888,7 +862,6 @@ contains
       call mfile%finalize()
       call cflfile%finalize()
       call consfile%finalize()
-      call vaporfile%finalize()
       call gridfile%finalize()
       call tfile%finalize()
    end subroutine simulation_final

@@ -1107,9 +1107,9 @@ contains
                      yL(1:this%liq%ns-1)=pYl(i,j,k,:)
                   end if
                   yL(this%liq%ns)=max(0.0_WP,1.0_WP-sum(yL(1:this%liq%ns-1)))
-                  pPL  (i,j,k,1)=this%liq%get_p_from_rho_e(pRHOL(i,j,k,1),pIL  (i,j,k,1),yL)
-                  pTL  (i,j,k,1)=this%liq%get_T_from_p_rho(pPL  (i,j,k,1),pRHOL(i,j,k,1),yL)
-                  CL            =this%liq%get_c_from_p_rho(pPL  (i,j,k,1),pRHOL(i,j,k,1),yL)
+                  pPL  (i,j,k,1)=this%liq%get_p_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                  pTL  (i,j,k,1)=this%liq%get_T_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                  CL            =this%liq%get_c_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
                else
                   pRHOL(i,j,k,1)=0.0_WP
                   pIL  (i,j,k,1)=0.0_WP
@@ -1128,9 +1128,9 @@ contains
                      yG(1:this%gas%ns-1)=pYg(i,j,k,:)
                   end if
                   yG(this%gas%ns)=max(0.0_WP,1.0_WP-sum(yG(1:this%gas%ns-1)))
-                  pPG  (i,j,k,1)=this%gas%get_p_from_rho_e(pRHOG(i,j,k,1),pIG  (i,j,k,1),yG)
-                  pTG  (i,j,k,1)=this%gas%get_T_from_p_rho(pPG  (i,j,k,1),pRHOG(i,j,k,1),yG)
-                  CG            =this%gas%get_c_from_p_rho(pPG  (i,j,k,1),pRHOG(i,j,k,1),yG)
+                  pPG  (i,j,k,1)=this%gas%get_p_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                  pTG  (i,j,k,1)=this%gas%get_T_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                  CG            =this%gas%get_c_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
                else
                   pRHOG(i,j,k,1)=0.0_WP
                   pIG  (i,j,k,1)=0.0_WP
@@ -2471,7 +2471,7 @@ contains
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
       integer :: lvl,i,j,k,ierr
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pVisc,pBeta,pDiffL,pDiffG,pVF,pPL,pPG,pC,pTL,pTG,pRHOL,pRHOG,pYl,pYg
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pVisc,pBeta,pDiffL,pDiffG,pVF,pPL,pPG,pC,pTL,pTG,pRHOL,pRHOG,pIL,pIG,pYl,pYg
       real(WP) :: dxi,dyi,dzi,rho,viscmax,conv,pgrad,cvL,cvG,alpha_heat
       real(WP) :: Pmix_ip,Pmix_im,Pmix_jp,Pmix_jm,Pmix_kp,Pmix_km
       real(WP), dimension(this%liq%ns) :: yL
@@ -2506,6 +2506,8 @@ contains
             pTG  =>this%TG%mf(lvl)%dataptr(mfi)
             pRHOL=>this%RHOL%mf(lvl)%dataptr(mfi)
             pRHOG=>this%RHOG%mf(lvl)%dataptr(mfi)
+            pIL  =>this%IL%mf(lvl)%dataptr(mfi)
+            pIG  =>this%IG%mf(lvl)%dataptr(mfi)
             if (this%liq%ns.gt.1) pYl=>this%Yl%mf(lvl)%dataptr(mfi)
             if (this%gas%ns.gt.1) pYg=>this%Yg%mf(lvl)%dataptr(mfi)
             ! Loop over cells
@@ -2519,13 +2521,13 @@ contains
                   ! Pure liquid: alpha_L=lambda/(rhoL*cvL)
                   if (this%liq%ns.gt.1) yL(1:this%liq%ns-1)=pYl(i,j,k,:)
                   yL(this%liq%ns)=max(0.0_WP,1.0_WP-sum(yL(1:this%liq%ns-1)))
-                  cvL=this%liq%get_cv_from_rho_T(pRHOL(i,j,k,1),pTL(i,j,k,1),yL)
+                  cvL=this%liq%get_cv_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
                   alpha_heat=pDiffL(i,j,k,1)/max(pRHOL(i,j,k,1)*cvL,tiny(1.0_WP))
                else if (pVF(i,j,k,1).lt.VFlo.and.pRHOG(i,j,k,1).gt.0.0_WP) then
                   ! Pure gas: alpha_G=lambda/(rhoG*cvG)
                   if (this%gas%ns.gt.1) yG(1:this%gas%ns-1)=pYg(i,j,k,:)
                   yG(this%gas%ns)=max(0.0_WP,1.0_WP-sum(yG(1:this%gas%ns-1)))
-                  cvG=this%gas%get_cv_from_rho_T(pRHOG(i,j,k,1),pTG(i,j,k,1),yG)
+                  cvG=this%gas%get_cv_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
                   alpha_heat=pDiffG(i,j,k,1)/max(pRHOG(i,j,k,1)*cvG,tiny(1.0_WP))
                end if
                ! Viscous CFL

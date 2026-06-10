@@ -31,6 +31,12 @@ module material_class
       procedure(get_rhoe_from_p_T_iface),   deferred :: get_rhoe_from_p_T
       procedure(print_iface),               deferred :: print
       procedure(finalize_iface),            deferred :: finalize
+      !> Primitives from (rho,e), the well-conditioned state the solver actually holds -- prefer these
+      !> over get_T/get_c_from_p_rho in any (rho,e)-driven hot loop. Deferred so every material gives an
+      !> OPTIMAL impl (ideal_gas/sg/nasg/igmix closed forms; CoolProp a single (rho,e) flash).
+      procedure(get_T_from_rho_e_iface),  deferred :: get_T_from_rho_e
+      procedure(get_c_from_rho_e_iface),  deferred :: get_c_from_rho_e
+      procedure(get_cv_from_rho_e_iface), deferred :: get_cv_from_rho_e
    end type material
 
    abstract interface
@@ -127,6 +133,27 @@ module material_class
          real(WP), intent(in) :: rho,e
          real(WP), dimension(:), intent(in) :: y
       end function get_gruneisen_iface
+
+      real(WP) function get_T_from_rho_e_iface(this,rho,e,y)
+         import :: WP,material
+         class(material), intent(in) :: this
+         real(WP), intent(in) :: rho,e
+         real(WP), dimension(:), intent(in) :: y
+      end function get_T_from_rho_e_iface
+
+      real(WP) function get_c_from_rho_e_iface(this,rho,e,y)
+         import :: WP,material
+         class(material), intent(in) :: this
+         real(WP), intent(in) :: rho,e
+         real(WP), dimension(:), intent(in) :: y
+      end function get_c_from_rho_e_iface
+
+      real(WP) function get_cv_from_rho_e_iface(this,rho,e,y)
+         import :: WP,material
+         class(material), intent(in) :: this
+         real(WP), intent(in) :: rho,e
+         real(WP), dimension(:), intent(in) :: y
+      end function get_cv_from_rho_e_iface
 
       real(WP) function get_rhoe_from_p_rho_iface(this,p,rho,y)
          import :: WP,material
