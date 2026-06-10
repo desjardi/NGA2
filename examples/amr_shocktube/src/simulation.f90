@@ -66,7 +66,7 @@ contains
       implicit none
       call fs%visc%setval(val=0.0_WP)
       call fs%beta%setval(val=0.0_WP)
-      call fs%diff%setval(val=0.0_WP)
+      call fs%diffL%setval(val=0.0_WP); call fs%diffG%setval(val=0.0_WP)
    end subroutine get_viscosities
 
    !> User init callback - set Q and VF for 1D shocktube

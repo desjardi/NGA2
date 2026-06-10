@@ -24,6 +24,7 @@ module igmix_class
       procedure :: get_rho_from_p_T        => igmix_get_rho_from_p_T
       procedure :: get_cv_from_rho_T       => igmix_get_cv_from_rho_T
       procedure :: get_h_from_p_T          => igmix_get_h_from_p_T
+      procedure :: get_hk_from_p_T         => igmix_get_hk_from_p_T
       procedure :: get_s_from_p_T          => igmix_get_s_from_p_T
       procedure :: get_g_from_p_T          => igmix_get_g_from_p_T
       procedure :: get_gruneisen_from_rho_e=> igmix_get_gruneisen_from_rho_e
@@ -145,6 +146,14 @@ contains
       qm =sum(y(1:this%ns)*this%q (1:this%ns))
       h=cpm*T+qm
    end function igmix_get_h_from_p_T
+
+   subroutine igmix_get_hk_from_p_T(this,p,T,y,hk)
+      class(igmix), intent(in) :: this
+      real(WP), intent(in) :: p,T
+      real(WP), dimension(:), intent(in) :: y
+      real(WP), dimension(:), intent(out) :: hk
+      hk(1:this%ns)=this%cp(1:this%ns)*T+this%q(1:this%ns)
+   end subroutine igmix_get_hk_from_p_T
 
    !> Mixture entropy: sum_n y_n * s_n(x_n * p, T) using mole-fraction partial pressures
    real(WP) function igmix_get_s_from_p_T(this,p,T,y) result(s)

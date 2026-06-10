@@ -6,6 +6,7 @@ module my_relax_class
    use precision,              only: WP
    use relax_igmix_nasg_class, only: relax_igmix_nasg
    use relax_igmix_sg_class,   only: Prelax,PTrelax,PTgrelax
+   use thermorelax_class,      only: RELAX_DEGENERATE
    implicit none
    private
 
@@ -22,7 +23,7 @@ module my_relax_class
 contains
 
    !> Apply: cavitation branch for pure-liquid cells, then dispatch to overridden p_relax/pT_relax
-   subroutine apply(this,dt,VF,Q,Pjump)
+   subroutine apply(this,dt,VF,Q,Pjump,ierr)
       use messager, only: die
       implicit none
       class(my_relax),        intent(inout) :: this
@@ -30,39 +31,42 @@ contains
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       real(WP) :: PL
-      ! Cavitation territory: pure-liquid cells
+      ! Cavitation territory: pure-liquid cells (not a two-phase relaxation -> degenerate)
       if (VF.ge.1.0_WP) then
-         if (Q(1).le.0.0_WP.or.Q(3).le.0.0_WP) return
+         if (Q(1).le.0.0_WP.or.Q(3).le.0.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
          PL=this%liq%get_p_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=[1.0_WP])
          if (PL.lt.this%PL_cav*this%liq%pinf) then
             print*,'Warning: cavitation detected, injecting energy'
             Q(3)=VF*(this%PL_cav*this%liq%pinf+this%liq%gamma*this%liq%pinf)/(this%liq%gamma-1.0_WP)
          end if
+         if (present(ierr)) ierr=RELAX_DEGENERATE
          return
       end if
       ! Mixture cells only
-      if (VF.le.0.0_WP) return
+      if (VF.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
       ! Dispatch (this%p_relax hits the override polymorphically since this is class(my_relax) here)
       select case (this%model)
-      case (Prelax);   call this%p_relax  (dt,VF,Q,Pjump)
-      case (PTrelax);  call this%pT_relax (dt,VF,Q,Pjump)
-      case (PTgrelax); call this%pTg_relax(dt,VF,Q,Pjump)
+      case (Prelax);   call this%p_relax  (dt,VF,Q,Pjump,ierr)
+      case (PTrelax);  call this%pT_relax (dt,VF,Q,Pjump,ierr)
+      case (PTgrelax); call this%pTg_relax(dt,VF,Q,Pjump,ierr)
       case default; call die('[my_relax apply] unknown model')
       end select
    end subroutine apply
 
    !> p_relax: run parent's mechanical relax, then apply dissolution clip if Peq exceeds threshold
-   subroutine p_relax(this,dt,VF,Q,Pjump)
+   subroutine p_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(my_relax),        intent(inout) :: this
       real(WP),               intent(in)    :: dt
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       real(WP) :: Peq
-      ! Run parent's mechanical relax
-      call this%relax_igmix_nasg%p_relax(dt,VF,Q,Pjump)
+      ! Run parent's mechanical relax (propagates its ierr verdict)
+      call this%relax_igmix_nasg%p_relax(dt,VF,Q,Pjump,ierr)
       ! Post-relax dissolution check: compute equilibrium pressure from updated state
       Peq=this%liq%get_p_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=[1.0_WP])
       if (Peq.gt.this%Peq_diss) then

@@ -20,6 +20,7 @@ module nasg_class
       procedure :: get_p_from_rho_T        => nasg_get_p_from_rho_T
       procedure :: get_rho_from_p_T        => nasg_get_rho_from_p_T
       procedure :: get_h_from_p_T          => nasg_get_h_from_p_T
+      procedure :: get_hk_from_p_T         => nasg_get_hk_from_p_T
       procedure :: get_g_from_p_T          => nasg_get_g_from_p_T
       procedure :: get_gruneisen_from_rho_e=> nasg_get_gruneisen_from_rho_e
       procedure :: get_rhoe_from_p_rho     => nasg_get_rhoe_from_p_rho
@@ -94,6 +95,14 @@ contains
       real(WP), dimension(:), intent(in) :: y
       h=this%cp*T+this%b*p+this%q
    end function nasg_get_h_from_p_T
+
+   subroutine nasg_get_hk_from_p_T(this,p,T,y,hk)
+      class(nasg), intent(in) :: this
+      real(WP), intent(in) :: p,T
+      real(WP), dimension(:), intent(in) :: y
+      real(WP), dimension(:), intent(out) :: hk
+      hk(1)=this%cp*T+this%b*p+this%q
+   end subroutine nasg_get_hk_from_p_T
 
    real(WP) function nasg_get_g_from_p_T(this,p,T,y) result(g)
       class(nasg), intent(in) :: this

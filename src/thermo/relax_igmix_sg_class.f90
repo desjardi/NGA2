@@ -6,7 +6,7 @@
 module relax_igmix_sg_class
    use precision,             only: WP
    use messager,              only: die
-   use thermorelax_class,     only: thermorelax
+   use thermorelax_class,     only: thermorelax,RELAX_OK,RELAX_FAILED,RELAX_BAD_LIQUID,RELAX_BAD_GAS,RELAX_VACUUM_GAS,RELAX_DEGENERATE
    use stiffened_gas_class,   only: stiffened_gas
    use igmix_class,           only: igmix
    implicit none
@@ -95,32 +95,34 @@ contains
    end subroutine initialize
 
    !> Dispatch via model. Encapsulates mixture-cell gate.
-   subroutine apply(this,dt,VF,Q,Pjump)
+   subroutine apply(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_sg),  intent(inout) :: this
       real(WP),               intent(in)    :: dt
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       ! Mixture cells only
-      if (VF.le.0.0_WP.or.VF.ge.1.0_WP) return
+      if (VF.le.0.0_WP.or.VF.ge.1.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
       ! Dispatch on model
       select case (this%model)
-      case (Prelax);   call this%p_relax  (dt,VF,Q,Pjump)
-      case (PTrelax);  call this%pT_relax (dt,VF,Q,Pjump)
-      case (PTgrelax); call this%pTg_relax(dt,VF,Q,Pjump)
+      case (Prelax);   call this%p_relax  (dt,VF,Q,Pjump,ierr)
+      case (PTrelax);  call this%pT_relax (dt,VF,Q,Pjump,ierr)
+      case (PTgrelax); call this%pTg_relax(dt,VF,Q,Pjump,ierr)
       case default;    call die('[relax_igmix_sg apply] unknown model')
       end select
    end subroutine apply
 
    !> Mechanical relaxation (Pelanti quadratic). Has clipping for unphysical phasic pressures.
-   subroutine p_relax(this,dt,VF,Q,Pjump)
+   subroutine p_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_sg),  intent(inout) :: this
       real(WP),               intent(in)    :: dt
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       real(WP), dimension(:), allocatable   :: y
       real(WP) :: PL,PG,ZL,ZG,Pint
       real(WP) :: a,b,d,coeffL,coeffG,Peq,VFeq
@@ -150,7 +152,7 @@ contains
          Q(2)=sum(Q(1:2)); Q(1)=0.0_WP
          Q(4)=sum(Q(3:4)); Q(3)=0.0_WP
          Q(7+this%liq%ns+this%indV-1)=Yv*Q(2)
-         deallocate(y); return
+         deallocate(y); if (present(ierr)) ierr=RELAX_BAD_LIQUID; return
       end if
       if (PG.le.0.0_WP) then
          print*,"*** GAS CLIPPED!",PG,VF,Q
@@ -158,7 +160,7 @@ contains
          Q(1)=sum(Q(1:2)); Q(2)=0.0_WP
          Q(3)=sum(Q(3:4)); Q(4)=0.0_WP
          Q(7+this%liq%ns+this%indV-1)=0.0_WP
-         deallocate(y); return
+         deallocate(y); if (present(ierr)) ierr=RELAX_BAD_GAS; return
       end if
       ! Phasic acoustic impedances (rho*c)
       ZL=Q(1)/(       VF)*this%liq%get_c_from_p_rho(p=PL,rho=Q(1)/(       VF),y=[1.0_WP])
@@ -178,16 +180,18 @@ contains
       Q(4)=Q(4)+0.5_WP*(Pint+Peq)*(VFeq-VF)
       VF=VFeq
       deallocate(y)
+      if (present(ierr)) ierr=RELAX_OK
    end subroutine p_relax
 
    !> Mechanical + thermal relaxation. Calls p_relax first, then enforces TL=TG.
-   subroutine pT_relax(this,dt,VF,Q,Pjump)
+   subroutine pT_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_sg),  intent(inout) :: this
       real(WP),               intent(in)    :: dt
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       real(WP), dimension(:), allocatable :: y
       real(WP) :: a,b,d,Peq,VFeq
       real(WP) :: cvG,cpG,qG,gammaG
@@ -215,7 +219,7 @@ contains
       d=cvG*(gammaG-1.0_WP)*this%liq%pinf*(qG*Q(2)**2+this%liq%q*Q(1)*Q(2)-sum(Q(3:4))*Q(2))
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       if (Peq.le.max(0.0_WP,-this%liq%pinf)) then
-         deallocate(y); return
+         deallocate(y); if (present(ierr)) ierr=RELAX_BAD_LIQUID; return
       end if
       VFeq=Q(1)*this%liq%cv*(this%liq%gamma-1.0_WP)*Peq &
       &   /(Q(1)*this%liq%cv*(this%liq%gamma-1.0_WP)*Peq+Q(2)*cvG*(gammaG-1.0_WP)*(Peq+this%liq%pinf))
@@ -227,18 +231,20 @@ contains
       Q(4)=(1.0_WP-VFeq)*this%gas%get_rhoe_from_p_rho(p=Peq,rho=Q(2)/max(1.0_WP-VFeq,tiny(1.0_WP)),y=y)
       VF=VFeq
       deallocate(y)
+      if (present(ierr)) ierr=RELAX_OK
    end subroutine pT_relax
 
    !> Mechanical + thermal + chemical (phase change) relaxation.
    !> Nucleates a tiny opposite phase in metastable pure cells; calls pT_relax;
    !> runs pure-phase admissibility tests; falls back to LV (pure water) or LVG (with non-condensable) Newton solves.
-   subroutine pTg_relax(this,dt,VF,Q,Pjump)
+   subroutine pTg_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_sg),  intent(inout) :: this
       real(WP),               intent(in)    :: dt
       real(WP),               intent(inout) :: VF
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(out)   :: ierr
       real(WP), dimension(:), allocatable :: Q0,Qin,y
       real(WP) :: VF0,VFin,p,T,Yv
       real(WP) :: rho0,rhoe0,rhoA0
@@ -248,6 +254,9 @@ contains
       real(WP), parameter :: Yv_dry=1.0e-5_WP,Yv_pure=0.999_WP
       real(WP), parameter :: fd_eps=1.0e-7_WP,F_line_search_tol=0.3_WP
       logical :: chem_relax,nucleated
+      ! Default to success; the no-op / stable-pure / converged exits all leave this OK,
+      ! and only the genuine-failure paths below override it.
+      if (present(ierr)) ierr=RELAX_OK
       allocate(Qin(size(Q))); Qin=Q
       VFin=VF
       nucleated=.false.
@@ -267,7 +276,7 @@ contains
             rhoL_nuc=Q(1)/VF
             pL_nuc=this%liq%get_p_from_rho_e(rho=rhoL_nuc,e=Q(3)/Q(1),y=[1.0_WP])
             TL_nuc=this%liq%get_T_from_p_rho(p=pL_nuc,rho=rhoL_nuc,y=[1.0_WP])
-            if (pL_nuc.le.-this%liq%pinf.or.TL_nuc.le.0.0_WP) return
+            if (pL_nuc.le.-this%liq%pinf.or.TL_nuc.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_LIQUID; return; end if
             pv_sat=this%get_pvsat(pL_nuc,TL_nuc)
             if (pv_sat.le.pL_nuc) return  ! stable pure liquid
             ! Superheated liquid: nucleate tiny vapor
@@ -282,18 +291,18 @@ contains
             nucleated=.true.
          else if (VF.le.VF_nuc) then
             ! Near-pure gas: check condensation
-            if (Q(2).le.0.0_WP) return
+            if (Q(2).le.0.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
             Yv_nuc=Q(7+this%liq%ns+this%indV-1)/Q(2); Yv_nuc=max(Yvmin,min(Yvmax,Yv_nuc))
             if (Yv_nuc.le.Yv_dry) return
             y_nuc(this%indV)=Yv_nuc; y_nuc(this%indA)=1.0_WP-Yv_nuc
             rhoG_nuc=Q(2)/max(1.0_WP-VF,tiny(1.0_WP))
             pG_nuc=this%gas%get_p_from_rho_e(rho=rhoG_nuc,e=Q(4)/Q(2),y=y_nuc)
             TG_nuc=this%gas%get_T_from_p_rho(p=pG_nuc,rho=rhoG_nuc,y=y_nuc)
-            if (pG_nuc.le.0.0_WP.or.TG_nuc.le.0.0_WP) return
+            if (pG_nuc.le.0.0_WP.or.TG_nuc.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_GAS; return; end if
             xv_nuc=this%get_xv(Yv_nuc); pv_nuc=xv_nuc*pG_nuc
             if (pv_nuc.le.p_eps) return
             call this%get_Tsat(pG_nuc,pv_nuc,TG_nuc,Tsat_nuc,conv_nuc,Tsat_it_nuc)
-            if (.not.conv_nuc) return
+            if (.not.conv_nuc) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
             if (TG_nuc.ge.Tsat_nuc) return  ! stable pure vapor/gas
             ! Supersaturated: nucleate tiny liquid
             rhoL_new=this%liq%get_rho_from_p_T(p=pG_nuc,T=TG_nuc,y=[1.0_WP])
@@ -422,6 +431,7 @@ contains
          else
             call restore()
          end if
+         if (present(ierr)) ierr=RELAX_FAILED
          call dealloc(); return
       end if
       ! Update Q with the converged equilibrium state
@@ -441,6 +451,7 @@ contains
       Q(4)=Q(2)*this%gas%get_e_from_p_T(p=p,T=T,y=y)
       Q(7+this%liq%ns+this%indV-1)=Q(2)*Yv
       if (.not.check_cons()) then
+         if (present(ierr)) ierr=RELAX_FAILED
          call restore(); call dealloc(); return
       end if
       call dealloc()

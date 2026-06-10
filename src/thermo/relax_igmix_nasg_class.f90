@@ -8,6 +8,7 @@ module relax_igmix_nasg_class
    use stiffened_gas_class,     only: stiffened_gas
    use nasg_class,              only: nasg
    use igmix_class,             only: igmix
+   use thermorelax_class,       only: RELAX_OK,RELAX_FAILED,RELAX_BAD_LIQUID,RELAX_BAD_GAS,RELAX_VACUUM_GAS,RELAX_DEGENERATE
    implicit none
    private
 
@@ -54,22 +55,23 @@ contains
    !> ideal-gas MIXTURE via mass-fraction-weighted (gammaG,cvG,qG) from the frozen composition,
    !> + NASG liquid (co-volume b). Reduces exactly to relax_ig_nasg%p_relax at single-component
    !> gas. Composition (Q(iVQ)) is untouched (no mass transfer in p-relax).
-   subroutine p_relax(this,dt,VF,Q,Pjump)
+   subroutine p_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_nasg), intent(inout) :: this
       real(WP),                intent(in)    :: dt
       real(WP),                intent(inout) :: VF
       real(WP), dimension(:),  intent(inout) :: Q
       real(WP),                intent(in)    :: Pjump
+      integer,  optional,      intent(out)   :: ierr
       real(WP) :: PG,PL,ZG,ZL,Pint,cJ,bL,rhoL,rhoG
       real(WP) :: a,b,d,n1,n0,d1,d0,Peq,VFeq
       real(WP) :: cvG,cpG,qG,gammaG,gL,pinfL,qL,Yv
       real(WP) :: y(this%gas%ns)
       integer  :: iVQ
       ! Skip if any conserved quantity is non-positive
-      if (any(Q(1:4).le.0.0_WP)) return
+      if (any(Q(1:4).le.0.0_WP)) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
       ! Skip near-pure-liquid cells (gas density too low)
-      if (Q(2)/(1.0_WP-VF).lt.this%RHOGmin) return
+      if (Q(2)/(1.0_WP-VF).lt.this%RHOGmin) then; if (present(ierr)) ierr=RELAX_VACUUM_GAS; return; end if
       ! Frozen gas composition -> mixture-effective ideal-gas parameters
       iVQ=7+this%liq%ns+this%indV-1
       Yv=Q(iVQ)/Q(2)
@@ -85,7 +87,8 @@ contains
       PL=this%liq%get_p_from_rho_e(rho=rhoL,e=Q(3)/Q(1),y=[1.0_WP])
       PG=this%gas%get_p_from_rho_e(rho=rhoG,e=Q(4)/Q(2),y=y)
       ! No cavitation model: leave sub-vacuum / over-packed cells untouched (avoid NaN impedances)
-      if (PL.le.-pinfL.or.PG.le.0.0_WP.or.1.0_WP-bL*rhoL.le.0.0_WP) return
+      if (PL.le.-pinfL.or.1.0_WP-bL*rhoL.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_LIQUID; return; end if
+      if (PG.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_GAS; return; end if
       ! Phasic acoustic impedances (rho*c)
       ZL=rhoL*this%liq%get_c_from_p_rho(p=PL,rho=rhoL,y=[1.0_WP])
       ZG=rhoG*this%gas%get_c_from_p_rho(p=PG,rho=rhoG,y=y)
@@ -100,37 +103,40 @@ contains
       b=d1*(-Pjump/(gammaG-1.0_WP)+Q(2)*qG-Q(4)+VF*(this%phi0*Pint-this%phist*cJ*Pjump))+n1*(Pjump/(gammaG-1.0_WP)-this%phi0*Pint+this%phist*cJ*Pjump)+d0*(1.0_WP/(gammaG-1.0_WP)+this%phist*VF)+n0*(-1.0_WP/(gammaG-1.0_WP)-this%phist)
       d=d0*(-Pjump/(gammaG-1.0_WP)+Q(2)*qG-Q(4)+VF*(this%phi0*Pint-this%phist*cJ*Pjump))+n0*(Pjump/(gammaG-1.0_WP)-this%phi0*Pint+this%phist*cJ*Pjump)
       ! Equilibrium pressure
-      if (b**2-4.0_WP*a*d.lt.0.0_WP) return
+      if (b**2-4.0_WP*a*d.lt.0.0_WP) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Soundness check (pinf_g=0)
-      if (Peq.le.-pinfL.or.Peq-Pjump.le.0.0_WP) return
+      if (Peq.le.-pinfL) then; if (present(ierr)) ierr=RELAX_BAD_LIQUID; return; end if
+      if (Peq-Pjump.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_GAS; return; end if
       ! Equilibrium VF (strict bounds)
       VFeq=(n1*Peq+n0)/(d1*Peq+d0)
-      if (VFeq.lt.0.0_WP.or.VFeq.gt.1.0_WP) return
+      if (VFeq.lt.0.0_WP.or.VFeq.gt.1.0_WP) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
       ! Update Q with p*dV work at the relaxed interface pressure
       Q(3)=Q(3)-(this%phist*Peq+this%phi0*Pint-this%phist*cJ*Pjump)*(VFeq-VF)
       Q(4)=Q(4)+(this%phist*Peq+this%phi0*Pint-this%phist*cJ*Pjump)*(VFeq-VF)
       VF=VFeq
+      if (present(ierr)) ierr=RELAX_OK
    end subroutine p_relax
 
    !> Mechanical + thermal relaxation: matm-style exact quadratic (PL=Peq, PG=Peq-Pjump, TL=TG),
    !> ideal-gas MIXTURE (mass-fraction-weighted gammaG,cvG,qG) + NASG liquid (co-volume via the
    !> (1-b*Q(1)) factor). Reduces exactly to relax_ig_nasg%pT_relax at single-component gas.
-   subroutine pT_relax(this,dt,VF,Q,Pjump)
+   subroutine pT_relax(this,dt,VF,Q,Pjump,ierr)
       implicit none
       class(relax_igmix_nasg), intent(inout) :: this
       real(WP),                intent(in)    :: dt
       real(WP),                intent(inout) :: VF
       real(WP), dimension(:),  intent(inout) :: Q
       real(WP),                intent(in)    :: Pjump
+      integer,  optional,      intent(out)   :: ierr
       real(WP) :: a,b,d,Peq,VFeq,Eth
       real(WP) :: cv1,cv2,g1,g2,pinf,R1,R2,bL,ombm,cpG,qG,Yv
       real(WP) :: y(this%gas%ns)
       integer  :: iVQ
-      ! Mechanical relaxation first
+      ! Mechanical relaxation first (its own ierr is not propagated; pT owns the final verdict)
       call this%p_relax(dt,VF,Q,Pjump)
       ! Skip if any conserved quantity is non-positive
-      if (any(Q(1:4).le.0.0_WP)) return
+      if (any(Q(1:4).le.0.0_WP)) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
       ! Frozen gas composition -> mixture-effective ideal-gas parameters
       iVQ=7+this%liq%ns+this%indV-1
       Yv=Q(iVQ)/Q(2)
@@ -144,7 +150,7 @@ contains
       R1=cv1*(g1-1.0_WP); R2=cv2*(g2-1.0_WP)
       bL=this%liq_nasg%b
       ombm=1.0_WP-bL*Q(1)             ! (1 - m1*b) co-volume factor
-      if (ombm.le.0.0_WP) return      ! liquid past co-volume packing limit -> do nothing
+      if (ombm.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_LIQUID; return; end if   ! liquid past co-volume packing limit
       ! Thermal internal energy (formation energies removed); invariant under thermal relax
       Eth=Q(3)+Q(4)-Q(1)*this%liq%q-Q(2)*qG
       ! Quadratic for liquid equilibrium pressure Peq (gas pressure Peq-Pjump), TL=TG, pinf_g=0
@@ -152,17 +158,19 @@ contains
       b=ombm*(Q(1)*cv1*g1*pinf+Q(2)*cv2*pinf-Pjump*(Q(1)*cv1+Q(2)*cv2))-Eth*(Q(1)*R1+Q(2)*R2)
       d=-ombm*Pjump*(Q(1)*cv1*g1*pinf+Q(2)*cv2*pinf)+Pjump*Eth*Q(1)*R1-Eth*Q(2)*R2*pinf
       ! Equilibrium pressure
-      if (b**2-4.0_WP*a*d.lt.0.0_WP) return
+      if (b**2-4.0_WP*a*d.lt.0.0_WP) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
       Peq=(-b+sqrt(b**2-4.0_WP*a*d))/(2.0_WP*a)
       ! Soundness check (pinf_g=0): liquid p=Peq>-pinf, gas p=Peq-Pjump>0
-      if (Peq.le.-this%liq%pinf.or.Peq-Pjump.le.0.0_WP) return
+      if (Peq.le.-this%liq%pinf) then; if (present(ierr)) ierr=RELAX_BAD_LIQUID; return; end if
+      if (Peq-Pjump.le.0.0_WP) then; if (present(ierr)) ierr=RELAX_BAD_GAS; return; end if
       ! Equilibrium VF (strict bounds); co-volume floor b*Q(1) appears naturally
       VFeq=bL*Q(1)+ombm*Q(1)*R1*(Peq-Pjump)/(Q(1)*R1*(Peq-Pjump)+Q(2)*R2*(Peq+pinf))
-      if (VFeq.lt.0.0_WP.or.VFeq.gt.1.0_WP) return
+      if (VFeq.lt.0.0_WP.or.VFeq.gt.1.0_WP) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
       ! Update Q with the new equilibrium state (co-volume in liquid rhoe, formation energies re-added)
       Q(3)=(VFeq-bL*Q(1))*(Peq+g1*pinf)/(g1-1.0_WP)+Q(1)*this%liq%q
       Q(4)=(1.0_WP-VFeq)*(Peq-Pjump  )/(g2-1.0_WP)+Q(2)*qG
       VF=VFeq
+      if (present(ierr)) ierr=RELAX_OK
    end subroutine pT_relax
 
    !> NASG-form energy-conserving equilibrium pressure

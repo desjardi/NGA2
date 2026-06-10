@@ -23,6 +23,7 @@ module material_class
       procedure(get_rho_from_p_T_iface),    deferred :: get_rho_from_p_T
       procedure(get_cv_from_rho_T_iface),   deferred :: get_cv_from_rho_T
       procedure(get_h_from_p_T_iface),      deferred :: get_h_from_p_T
+      procedure(get_hk_from_p_T_iface),     deferred :: get_hk_from_p_T
       procedure(get_s_from_p_T_iface),      deferred :: get_s_from_p_T
       procedure(get_g_from_p_T_iface),      deferred :: get_g_from_p_T
       procedure(get_gruneisen_iface),       deferred :: get_gruneisen_from_rho_e
@@ -103,6 +104,15 @@ module material_class
          real(WP), intent(in) :: p,T
          real(WP), dimension(:), intent(in) :: y
       end function get_s_from_p_T_iface
+
+      !> Partial specific enthalpies h_k = dH/dm_k at fixed (p,T,m_j) for k=1..ns
+      subroutine get_hk_from_p_T_iface(this,p,T,y,hk)
+         import :: WP,material
+         class(material), intent(in) :: this
+         real(WP), intent(in) :: p,T
+         real(WP), dimension(:), intent(in) :: y
+         real(WP), dimension(:), intent(out) :: hk
+      end subroutine get_hk_from_p_T_iface
 
       real(WP) function get_g_from_p_T_iface(this,p,T,y)
          import :: WP,material
