@@ -2,14 +2,13 @@
 Partition :	1 1 1 
 
 # Mesh definition
-Base nx : 8
-Base ny : 8
-Base nz : 8
+Base nx : 16
+Base ny : 16
+Base nz : 16
 Max level : 3
 
-# Droplet properties
-Random seed : 3
-Number of ellipsoids : 4
+# Ellipsoid properties
+Droplet case : Cylinder  # Random or Cylinder
 
 # Time integration
 Max timestep size : 2.5e-3

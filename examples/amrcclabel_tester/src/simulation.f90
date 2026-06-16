@@ -40,7 +40,6 @@ module simulation
 
 contains
 
-   
    !> Function that identifies cells within a structure
    logical function make_label(pVF,lo,i,j,k)
       implicit none
@@ -58,27 +57,66 @@ contains
       end if
    end function make_label
 
-    !> Function that identifies if neighbors are within the same structure
+   !> Function that identifies if neighbors are within the same structure
    logical function same_label(pVF,lo,i,j,k,ii,jj,kk)
-       implicit none
-       real(WP), dimension(:,:,:,:), intent(in) :: pVF
-       integer, dimension(3), intent(in) :: lo
-       integer, intent(in) :: i,j,k,ii,jj,kk
-       integer :: il,jl,kl,iil,jjl,kkl
-       il  = i  - lo(1) + 1
-       jl  = j  - lo(2) + 1
-       kl  = k  - lo(3) + 1
-       iil = ii - lo(1) + 1
-       jjl = jj - lo(2) + 1
-       kkl = kk - lo(3) + 1
-       if (pVF(il,jl,kl,1).gt.0.0_WP .and. pVF(iil,jjl,kkl,1).gt.0.0_WP) then
-          same_label=.true.
-       else
-          same_label=.false.
-       end if
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k,ii,jj,kk
+      integer :: il,jl,kl,iil,jjl,kkl
+      il  = i  - lo(1) + 1
+      jl  = j  - lo(2) + 1
+      kl  = k  - lo(3) + 1
+      iil = ii - lo(1) + 1
+      jjl = jj - lo(2) + 1
+      kkl = kk - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.0.0_WP .and. pVF(iil,jjl,kkl,1).gt.0.0_WP) then
+         same_label=.true.
+      else
+         same_label=.false.
+      end if
    end function same_label
 
-     !> Ellipsoids levelset function with periodicity
+   !> Function that identifies cells within a structure on coarse level
+   logical function coarse_make_label(pVF,lo,i,j,k)
+      use amrmpinc_class,   only: VFhi
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k
+      integer :: il,jl,kl
+      il = i - lo(1) + 1
+      jl = j - lo(2) + 1
+      kl = k - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.VFhi) then
+         coarse_make_label=.true.
+      else
+         coarse_make_label=.false.
+      end if
+   end function coarse_make_label
+
+   !> Function that identifies if neighbors are within the same structure on coarse level
+   logical function coarse_same_label(pVF,lo,i,j,k,ii,jj,kk)
+      use amrmpinc_class,   only: VFhi
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k,ii,jj,kk
+      integer :: il,jl,kl,iil,jjl,kkl
+      il  = i  - lo(1) + 1
+      jl  = j  - lo(2) + 1
+      kl  = k  - lo(3) + 1
+      iil = ii - lo(1) + 1
+      jjl = jj - lo(2) + 1
+      kkl = kk - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.VFhi .and. pVF(iil,jjl,kkl,1).gt.VFhi) then
+         coarse_same_label=.true.
+      else
+         coarse_same_label=.false.
+      end if
+   end function coarse_same_label
+
+   !> Ellipsoids levelset function with periodicity
    function Ellipsoids_levelset(xyz,t) result(G)
       implicit none
       real(WP), dimension(3), intent(in) :: xyz
@@ -170,32 +208,51 @@ contains
       ! Setup Ellipsoids parameters
       setup_Ellipsoids: block
          use random, only: random_uniform
+         use string,   only: str_medium
+         use messager,       only: die
          integer :: nD,nseed
          real(WP), dimension(3) :: center,radius
          real(WP) :: radius_scale
          integer :: myseed
          integer, dimension(:), allocatable :: seed
-         call param_read('Number of ellipsoids',nEllipsoid,default=4)
-         call param_read('Random seed',myseed,default=1)
-         call param_read('Radius scale',radius_scale,default=0.5_WP)
+         character(len=str_medium) :: case
+         call param_read('Droplet case',case,default='Random')
+         if (case == 'Random') then 
+            call param_read('Number of ellipsoids',nEllipsoid,default=4)
+            call param_read('Random seed',myseed,default=3)
+            call param_read('Radius scale',radius_scale,default=0.5_WP)
+            ! Provide seed for random number generator
+            call random_seed(size=nseed)
+            allocate(seed(nseed))
+            seed(:)=myseed
+            call random_seed(put=seed)
+         else if (case == 'Cylinder') then
+            nEllipsoid=1
+         end if
+         
          ! Allocate arrays
          allocate(ellipsoid_center(3,nEllipsoid))
          allocate(ellipsoid_radius(3,nEllipsoid))
-         ! Provide seed for random number generator
-         call random_seed(size=nseed)
-         allocate(seed(nseed))
-         seed(:)=myseed
-         call random_seed(put=seed)
+
+         ! Define centers and radii of ellipsoids
          do nD=1,nEllipsoid
-            center=[random_uniform(amr%xlo, amr%xhi), &
-                    random_uniform(amr%ylo, amr%yhi), &
-                    random_uniform(amr%zlo, amr%zhi)  ]
-            center=[0.5_WP,0.5_WP,0.5_WP]  ! For testing
+            if (case == 'Random') then
+               ! Random center and radius
+               center=[random_uniform(amr%xlo, amr%xhi), &
+                       random_uniform(amr%ylo, amr%yhi), &
+                       random_uniform(amr%zlo, amr%zhi)  ]
+               radius=[radius_scale*random_uniform(amr%xlo, amr%xhi), &
+                       radius_scale*random_uniform(amr%ylo, amr%yhi), &
+                       radius_scale*random_uniform(amr%zlo, amr%zhi)  ]
+            else if (case == 'Cylinder') then
+               ! Large cylinder for testing multiple levels representing one structure
+               center=[0.5_WP, 0.5_WP,0.5_WP]
+               radius=[0.4_WP,10.0_WP,0.4_WP]
+            else
+               call die('Unknown droplet case')
+            end if
+
             ellipsoid_center(:,nD)=center
-            radius=[radius_scale*random_uniform(amr%xlo, amr%xhi), &
-                    radius_scale*random_uniform(amr%ylo, amr%yhi), &
-                    radius_scale*random_uniform(amr%zlo, amr%zhi)  ]
-            radius=[0.4_WP,10.0_WP,0.4_WP]  ! For testing
             ellipsoid_radius(:,nD)=radius
          end do
       end block setup_Ellipsoids
@@ -251,7 +308,7 @@ contains
    subroutine simulation_run
      
       ! Compute CCLabel
-      call cclabel%build(make_label,same_label,vof%VF)
+      call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,vof%VF)
 
       ! Write visualization with IDs
       call viz%write(time=0.0_WP)
