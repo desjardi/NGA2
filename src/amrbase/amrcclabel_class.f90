@@ -121,12 +121,12 @@ contains
       ! Build CCL on finest level
       call build_lvl(data%amr%maxlvl,make_label,same_label)
 
-      testing_finest: block 
-         integer :: lvl
-         do lvl = 0,data%amr%maxlvl
-            call print_ids(lvl,"after build_lvl(finest)")
-         end do
-      end block testing_finest
+      ! testing_finest: block 
+      !    integer :: lvl
+      !    do lvl = 0,data%amr%maxlvl
+      !       call print_ids(lvl,"after build_lvl(finest)")
+      !    end do
+      ! end block testing_finest
 
       ! Create unique IDs for each structure on coarser levels
       restrict_unique_id: block
@@ -146,12 +146,12 @@ contains
                this%id%mf(lvl+1),   & ! fine
                ref_ratio )
 
-            testing_after_restrict: block 
-               integer :: lvl
-               do lvl = 0,data%amr%maxlvl
-                  call print_ids(lvl,"after restrict")
-               end do
-            end block testing_after_restrict
+            ! testing_after_restrict: block 
+            !    integer :: lvl
+            !    do lvl = 0,data%amr%maxlvl
+            !       call print_ids(lvl,"after restrict")
+            !    end do
+            ! end block testing_after_restrict
 
             ! Build CCL on coarse level
             call build_lvl(lvl,coarse_make_label,coarse_same_label)
@@ -159,12 +159,12 @@ contains
          end do
       end block restrict_unique_id
 
-      testing_end_build: block 
-         integer :: lvl
-         do lvl = 0,data%amr%maxlvl
-            call print_ids(lvl,"after build")
-         end do
-      end block testing_end_build
+      ! testing_end_build: block 
+      !    integer :: lvl
+      !    do lvl = 0,data%amr%maxlvl
+      !       call print_ids(lvl,"after build")
+      !    end do
+      ! end block testing_end_build
 
    contains
 
@@ -245,7 +245,6 @@ contains
                            else
                               ! We don't have a label, check if we take the neighbor's label
                               if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
-                                 ! print *,'Using neighbor''s label'
                                  pid(i,j,k,1)=pid(ii,jj,kk,1)
                               else
                                  pid(i,j,k,1)=add()
@@ -380,9 +379,9 @@ contains
             ! Synchronize id array
             call this%id%sync()
             ! Loop over cells and check for connections across periodic boundaries, storing parent connections in parent array
-               ! Loop over tiles
-               call this%amr%mfiter_build(lvl,mfi)
-               do while (mfi%next())
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
                ! Get pointers to data
                pid=>this%id%mf(lvl)%dataptr(mfi)
                pdata=>data%mf(lvl)%dataptr(mfi)
@@ -471,6 +470,55 @@ contains
             call this%id%sync()
          end block interproc_handling
 
+         ! Now we need to compact the data based on id only
+         compact_struct: block
+            use mpi_f08, only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER,MPI_IN_PLACE
+            use amrex_amr_module, only: amrex_mfiter,amrex_box
+            integer :: i,j,k,n,nn,ierr,count
+            integer, dimension(:), allocatable :: idmap,counter
+            type(struct_type), dimension(:), allocatable :: tmp
+            type(amrex_mfiter) :: mfi
+            type(amrex_box) :: bx
+            real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
+            ! Prepare global id map
+            allocate(   idmap(1:this%nstruct));    idmap=0
+            ! Traverse id array and tag used id values
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pid=>this%id%mf(lvl)%dataptr(mfi)
+               ! Perform local loop
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  if (pid(i,j,k,1).gt.0) idmap(pid(i,j,k,1))=1
+               end do; end do; end do
+            end do
+            call MPI_ALLREDUCE(MPI_IN_PLACE,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+            ! Count number of used structures and create the map
+            this%nstruct=sum(idmap)
+            count=0
+            do n=1,size(idmap,dim=1)
+               if (idmap(n).gt.0) then
+                  count=count+1
+                  idmap(n)=count
+               end if
+            end do
+            ! Rename all structures
+            ! Loop over tiles
+            call this%amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               ! Get pointers to data
+               pid=>this%id%mf(lvl)%dataptr(mfi)
+               ! Perform local loop
+               bx=mfi%tilebox()
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
+               end do; end do; end do
+            end do
+            call this%id%sync()
+         end block compact_struct
+
          ! Release scratch
          call idp%finalize()
 
@@ -491,7 +539,7 @@ contains
          integer, parameter :: max_id = 100000   ! adjust as needed
          logical :: seen(0:max_id) 
          integer :: count(0:max_id) 
-         integer :: id,i,j,k
+         integer :: id,i,j,k,root
 
          seen = .false.
          count = 0
@@ -520,7 +568,13 @@ contains
          if (this%amr%amRoot) then
             print *, "Unique IDs on level ", lvl,' ',msg
             do id=0,max_id
-               if (seen(id)) print *, 'id = ',id,' count = ',count(id)
+               ! if (seen(id).and.id.gt.0) then
+               !    print *,'rootifying on ',id
+               !    root = rootify_struct(id)
+               ! else
+               !    root = 0
+               ! end if
+               if (seen(id)) print *, 'id = ',id,' count = ',count(id)!, ' root =',root
             end do
          end if
       end subroutine print_ids
