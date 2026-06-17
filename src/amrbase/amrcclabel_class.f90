@@ -595,11 +595,13 @@ contains
             tmp(nstruct_+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
-         ! Add new root
-         nstruct_=nstruct_+1
-         this%struct(id)%parent=id
-         this%struct(id)%per=0
-         this%struct(id)%n_=0
+         ! Add new root if doesn't already exist
+         if (this%struct(id)%parent.ne.id) then
+            nstruct_=nstruct_+1
+            this%struct(id)%parent=id
+            this%struct(id)%per=0
+            this%struct(id)%n_=0
+         end if
       end subroutine add_existing
       
       !> This recursive function points global parent to root and returns that root
