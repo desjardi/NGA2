@@ -30,4 +30,5 @@ Max CFL:  0.5
 # Output
 Output period:     0.5
 Checkpoint period: 5.0
+CCLabel period:    0.1
 Restart from:      !restart/jet_4.50006E+01

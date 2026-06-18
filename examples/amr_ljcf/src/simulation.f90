@@ -8,6 +8,7 @@ module simulation
    use amrdata_class,     only: amrdata
    use timetracker_class, only: timetracker
    use event_class,       only: event
+   use amrcclabel_class,  only: amrcclabel,stats_type
    use monitor_class,     only: monitor
    use messager,          only: log
    use amrio_class,       only: amrio
@@ -34,6 +35,11 @@ module simulation
    ! Regrid parameters
    type(event) :: regrid_evt
    real(WP) :: Re_tag=huge(1.0_WP)
+
+   ! CCLabel
+   type(event) :: cclabel_evt
+   type(amrcclabel) :: cclabel
+   type(stats_type), dimension(:), allocatable :: stats 
 
    ! Monitoring
    type(monitor) :: mfile,cflfile,gridfile
@@ -369,6 +375,82 @@ contains
       call amrex_mfiter_destroy(mfi)
    end subroutine jet_init
 
+   !> Function that identifies cells within a structure
+   logical function make_label(pVF,lo,i,j,k)
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k
+      integer :: il,jl,kl
+      il = i - lo(1) + 1
+      jl = j - lo(2) + 1
+      kl = k - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.0.0_WP) then
+         make_label=.true.
+      else
+         make_label=.false.
+      end if
+   end function make_label
+
+   !> Function that identifies if neighbors are within the same structure
+   logical function same_label(pVF,lo,i,j,k,ii,jj,kk)
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k,ii,jj,kk
+      integer :: il,jl,kl,iil,jjl,kkl
+      il  = i  - lo(1) + 1
+      jl  = j  - lo(2) + 1
+      kl  = k  - lo(3) + 1
+      iil = ii - lo(1) + 1
+      jjl = jj - lo(2) + 1
+      kkl = kk - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.0.0_WP .and. pVF(iil,jjl,kkl,1).gt.0.0_WP) then
+         same_label=.true.
+      else
+         same_label=.false.
+      end if
+   end function same_label
+
+   !> Function that identifies cells within a structure on coarse level
+   logical function coarse_make_label(pVF,lo,i,j,k)
+      use amrmpinc_class,   only: VFhi
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k
+      integer :: il,jl,kl
+      il = i - lo(1) + 1
+      jl = j - lo(2) + 1
+      kl = k - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.VFhi) then
+         coarse_make_label=.true.
+      else
+         coarse_make_label=.false.
+      end if
+   end function coarse_make_label
+
+   !> Function that identifies if neighbors are within the same structure on coarse level
+   logical function coarse_same_label(pVF,lo,i,j,k,ii,jj,kk)
+      use amrmpinc_class,   only: VFhi
+      implicit none
+      real(WP), dimension(:,:,:,:), intent(in) :: pVF
+      integer, dimension(3), intent(in) :: lo
+      integer, intent(in) :: i,j,k,ii,jj,kk
+      integer :: il,jl,kl,iil,jjl,kkl
+      il  = i  - lo(1) + 1
+      jl  = j  - lo(2) + 1
+      kl  = k  - lo(3) + 1
+      iil = ii - lo(1) + 1
+      jjl = jj - lo(2) + 1
+      kkl = kk - lo(3) + 1
+      if (pVF(il,jl,kl,1).gt.VFhi .and. pVF(iil,jjl,kkl,1).gt.VFhi) then
+         coarse_same_label=.true.
+      else
+         coarse_same_label=.false.
+      end if
+   end function coarse_same_label
+
    !> Initialization hook
    subroutine simulation_init()
       use param, only: param_read
@@ -520,6 +602,12 @@ contains
          call io%add_scalar(name='dt',value=time%dt)
       end block init_checkpoint
 
+      ! Initialize CClabel
+      cclabel_evt=event(time=time,name="CCLabel output")
+      call param_read('CCLabel period',cclabel_evt%tper)
+      call cclabel%initialize(amr,name='amr_ljcf')
+      call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF) 
+
       ! Initialize visualization
       create_visualization: block
          ! Create visualization object
@@ -531,6 +619,7 @@ contains
          call viz%add_scalar(fs%visc,1,'visc')
          call viz%add_scalar(fs%P,1,'pressure')
          call viz%add_scalar(fs%VF,1,'VF')
+         call viz%add_scalar(cclabel%id,1,'ID')
          call viz%add_surfmesh(fs%smesh,'plic')
          ! Create visualization output event
          viz_evt=event(time=time,name='Visualization output')
@@ -674,6 +763,20 @@ contains
 
          ! Compute Umag
          call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
+
+         ! Construct CCLabel and compute stats
+         if (cclabel_evt%occurs()) then 
+            call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF)
+            call cclabel%compute_stats(fs%VF,stats)
+            print_stats: block
+               integer :: n 
+               if (amr%amRoot) then
+                  do n=1,cclabel%nstruct
+                     print *, "id=",n," vol=",stats(n)%vol," com=",stats(n)%com
+                  end do
+               end if
+            end block print_stats
+         end if
 
          ! Monitor output
          call fs%get_info()
