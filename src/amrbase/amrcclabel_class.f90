@@ -147,13 +147,6 @@ contains
          end do
       end block build_coarser
 
-      ! testing_end_build: block 
-      !    integer :: lvl
-      !    do lvl = 0,data%amr%maxlvl
-      !       call print_ids(lvl,"after build")
-      !    end do
-      ! end block testing_end_build
-
    contains
 
       !> Build structure on a level using user-set test functions
@@ -537,59 +530,6 @@ contains
 
       end subroutine build_lvl
 
-      !> Debug function to print id's that exist on a level
-      subroutine print_ids(lvl,msg)
-         use amrex_amr_module, only: amrex_mfiter,amrex_box
-         implicit none
-         integer, intent(in) :: lvl
-         character(len=*), intent(in) :: msg
-         real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
-         type(amrex_mfiter) :: mfi
-         type(amrex_box) :: bx
-         integer, parameter :: max_id = 10000   ! adjust as needed
-         logical :: seen(0:max_id) 
-         integer :: count(0:max_id) 
-         integer :: id,i,j,k
-
-         seen = .false.
-         count = 0
-         ! Loop over tiles
-         call data%amr%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            pid => this%id%mf(lvl)%dataptr(mfi)
-            bx = mfi%tilebox()
-            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-               id = nint(pid(i,j,k,1))
-               if (id <= max_id) then
-                  seen(id) = .true.
-                  count(id) = count(id) + 1
-               else
-                  print *, "Warning: ID ", id, " exceeds max_id ", max_id
-               end if
-            end do; end do; end do
-         end do
-         ! Collect and print unique IDs
-         communicate: block
-                  use mpi_f08,   only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_Logical,MPI_LOR, MPI_INTEGER, MPI_SUM
-                  integer :: ierr
-            call MPI_AllREDUCE(MPI_IN_PLACE,  seen, max_id+1, MPI_LOGICAL, MPI_LOR, this%amr%comm, ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE, count, max_id+1, MPI_INTEGER, MPI_SUM, this%amr%comm, ierr)
-         end block communicate
-         if (this%amr%amRoot) then
-            print *, "Unique IDs on level ", lvl,' ',msg
-            do id=0,max_id
-               ! if (seen(id).and.id.gt.0) then
-               !    print *,'rootifying on ',id
-               !    root = rootify_struct(id)
-               ! else
-               !    root = 0
-               ! end if
-               if (seen(id)) print *, 'id = ',id,' count = ',count(id)!, ' root =',root
-            end do
-         end if
-      end subroutine print_ids
-            
-      
       !> This recursive function that points the lineage of a structure to its root and returns that root
       recursive function rootify_struct(x) result(y)
          implicit none
