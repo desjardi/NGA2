@@ -317,9 +317,11 @@ contains
 
       print_stats: block
          integer :: n 
-         do n=1,cclabel%nstruct
-            print *, "rank =", amr%rank, "id=",n," vol=",stats(n)%vol," com=",stats(n)%com
-         end do
+         if (amr%amRoot) then
+            do n=1,cclabel%nstruct
+               print *, "id=",n," vol=",stats(n)%vol," com=",stats(n)%com
+            end do
+         end if
       end block print_stats
 
       ! Write visualization with IDs
