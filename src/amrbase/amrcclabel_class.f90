@@ -44,8 +44,6 @@ module amrcclabel_class
       integer :: nover=1
       ! Associated amr grid 
       class(amrgrid), pointer, private :: amr => null()
-      ! Temporary arrays for interlevel sync
-      type(amrdata) :: tmp_id,tmp_conflict
    contains
       procedure :: initialize
       procedure :: build
@@ -91,12 +89,7 @@ contains
       ! Allocate and initialize ID array
       call this%id%initialize(amr,name='id',ncomp=1,ng=this%nover,interp=interp_none);! this%id%parent=>this
       call this%id%register() ! Update with regriding
-      call this%id%setval(val=0.0_WP)
-      ! Allocate temporary arrays for interlevel sync
-      call this%tmp_id%initialize(amr,name='tmp_id',ncomp=1,ng=this%nover)
-      call this%tmp_conflict%initialize(amr,name='tmp_conflict',ncomp=1,ng=this%nover)
-      call this%tmp_id%register() ! Update with regriding
-      call this%tmp_conflict%register() ! Update with regriding
+      call this%id%reset() ! Update with current grids
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
@@ -200,7 +193,7 @@ contains
                end do; end do; end do
             end do
          end block previous_ids
-
+            
          ! Perform a first pass to build proc-local structures and corresponding tree
          first_pass: block
             use amrex_amr_module, only: amrex_mfiter,amrex_box
