@@ -40,6 +40,7 @@ module simulation
    type(event) :: cclabel_evt
    type(amrcclabel) :: cclabel
    type(stats_type), dimension(:), allocatable :: stats 
+   type(monitor) :: cclabel_file 
 
    ! Monitoring
    type(monitor) :: mfile,cflfile,gridfile
@@ -776,6 +777,29 @@ contains
                   end do
                end if
             end block print_stats
+
+            write_stats: block
+               use monitor_class, only: iformat,rformat
+               use string,    only: str_medium
+               character(len=str_medium) :: filename,struct_name
+               integer :: n
+               ! Create a file to write Weber numbers
+               write(filename, rformat) time%t
+               filename = 'structStats_'//trim(adjustl(filename))
+               cclabel_file=monitor(fs%amr%amRoot,filename)
+               ! Add columns to the file
+               do n=1,cclabel%nstruct
+                  call cclabel_file%add_column(n,'Structure ID')
+                  call cclabel_file%add_column(stats(n)%vol,'Drop Volume')  
+                  call cclabel_file%add_column(stats(n)%com(1),'X Drop Pos')
+                  call cclabel_file%add_column(stats(n)%com(2),'Y Drop Pos')
+                  call cclabel_file%add_column(stats(n)%com(3),'Z Drop Pos')
+                  ! Write the data for this structure
+                  call cclabel_file%write()
+               end do
+               ! Close file
+               call cclabel_file%close()
+            end block write_stats
          end if
 
          ! Monitor output
