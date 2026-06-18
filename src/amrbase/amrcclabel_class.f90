@@ -1,6 +1,5 @@
 !> TODO
-! - restict seems to be working
-! - Now need to update cells on a coarse level that are completely liquid - i think.  Test with level = 3 or 4?
+! - Be more careful with this%nstruct should be set on finest level and then not touched on coarser levels. 
 
 
 !> Connected component labeling class: identifies Lagrangian objects from a Eulerian logical field
@@ -16,7 +15,7 @@ module amrcclabel_class
    
    
    ! Expose type/constructor/methods
-   public :: amrcclabel,make_label_ftype,same_label_ftype
+   public :: amrcclabel,make_label_ftype,same_label_ftype,stats_type
    
    
    ! Some parameters for memory management
@@ -30,6 +29,12 @@ module amrcclabel_class
       integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
    
+   !> Statistics object
+   type :: stats_type
+      integer :: id                    !< ID of structure
+      real(WP) :: vol                  !< Volme of structure
+      real(WP), dimension(3) :: com    !< Center of mass of structure
+   end type stats_type
    
    !> amrcclabel object definition
    type :: amrcclabel
@@ -49,6 +54,7 @@ module amrcclabel_class
       procedure :: initialize
       procedure :: build
       procedure :: empty
+      procedure :: compute_stats
       procedure :: finalize
    end type amrcclabel
    
@@ -121,6 +127,7 @@ contains
       ! Build CCL on finest level
       call build_lvl(data%amr%maxlvl,make_label,same_label)
 
+
       ! Create unique IDs for each structure on coarser levels
       build_coarser: block
          integer :: lvl
@@ -192,7 +199,7 @@ contains
             this%nstruct=nstruct_
 
             ! Loop over tiles
-            call data%amr%mfiter_build(lvl,mfi)
+            call this%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
                ! Get pointers to data arrays
                pid=>this%id%mf(lvl)%dataptr(mfi)
@@ -217,7 +224,7 @@ contains
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pdata
 
             ! Loop over tiles
-            call data%amr%mfiter_build(lvl,mfi)
+            call this%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
                ! Get pointers to data arrays
                pid=>this%id%mf(lvl)%dataptr(mfi)
@@ -860,6 +867,133 @@ contains
       ! Zero structures
       this%nstruct=0
    end subroutine empty
+
+
+   !> Compute common statistics for structures 
+   !> identified by id in this%id and weighted by VF array 
+   subroutine compute_stats(this,VF,stats)
+      use amrex_fort_module,     only : amrex_spacedim
+      use amrex_multifab_module, only : amrex_multifab, amrex_mfiter, &
+                                        amrex_mfiter_build, amrex_mfiter_destroy
+      use amrex_box_module,      only : amrex_box
+      use amrex_boxarray_module, only : amrex_boxarray, amrex_boxarray_build, amrex_boxarray_destroy
+      use amrex_geometry_module, only : amrex_geometry
+      use amrex_box_module,      only : amrex_box
+      use amrex_amr_module,      only : amrex_long
+      use amrex_parallel_module, only : amrex_parallel_reduce_sum
+      implicit none
+      class(amrcclabel) :: this
+      type(amrdata), intent(in) :: VF
+      type(stats_type), allocatable, dimension(:), intent(out) :: stats
+      real(WP), allocatable, dimension(:)   :: vol_map
+      real(WP), allocatable, dimension(:,:) :: com_map
+      logical :: id_seen(this%nstruct)
+      type(amrex_mfiter)   :: mfi
+      type(amrex_box)      :: bx
+      type(amrex_boxarray) :: fine_ba_crse
+      type(amrex_box) :: pt_box
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pVF
+      real(WP) :: dx(3), cell_vol, prob_lo(3)
+      real(WP) :: xc, yc, zc
+      integer  :: lo(3), hi(3), ilo(3), ihi(3)
+      integer  :: i, j, k, lvl, id_val
+      real(WP) :: VF_val
+      integer(amrex_long) :: nb, n
+      integer, allocatable :: bxs(:,:,:)
+      integer :: ratio(3)
+
+      allocate(vol_map(1:this%nstruct))
+      allocate(com_map(1:this%nstruct,3))
+
+      vol_map = 0.0_WP
+      com_map = 0.0_WP
+      prob_lo = [this%amr%xlo, this%amr%ylo, this%amr%zlo]
+
+      do lvl = 0, this%amr%maxlvl
+
+         dx(1)    = this%amr%dx(lvl)
+         dx(2)    = this%amr%dy(lvl)
+         dx(3)    = this%amr%dz(lvl)
+         cell_vol = this%amr%cell_vol(lvl)
+
+         if (lvl < this%amr%maxlvl) then
+               ratio = [this%amr%rrefx(lvl), this%amr%rrefy(lvl), this%amr%rrefz(lvl)]
+               nb = this%id%mf(lvl+1)%ba%nboxes()
+               allocate(bxs(2, 3, nb))
+               do n = 1, nb
+                  bx = this%id%mf(lvl+1)%ba%get_box(int(n-1))
+                  bxs(1,:,n) = bx%lo / ratio
+                  bxs(2,:,n) = bx%hi / ratio
+               end do
+               call amrex_boxarray_build(fine_ba_crse, bxs)
+               deallocate(bxs)
+         end if
+
+         call this%amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            ! Get pointers to data arrays
+            pid => this%id%mf(lvl)%dataptr(mfi)   
+            pVF =>      VF%mf(lvl)%dataptr(mfi)
+            bx  = mfi%validbox()
+            lo  = bx%lo
+            hi  = bx%hi
+            
+            ilo = [lbound(pid,1), lbound(pid,2), lbound(pid,3)]
+            ihi = [ubound(pid,1), ubound(pid,2), ubound(pid,3)]
+
+            accumulate_stats: block 
+               real(WP) :: id_arr(ilo(1):ihi(1), ilo(2):ihi(2), ilo(3):ihi(3))
+
+               do k = lo(3), hi(3)
+               do j = lo(2), hi(2)
+               do i = lo(1), hi(1)
+
+                  id_val = nint(pid(i,j,k,1))
+                  VF_val =      pVF(i,j,k,1)
+                  if (id_val <= 0) cycle
+
+                  if (lvl < this%amr%maxlvl) then
+                     pt_box%lo = [i, j, k]
+                     pt_box%hi = [i, j, k]
+                     if (fine_ba_crse%intersects(pt_box)) cycle
+                  end if
+
+                  xc = prob_lo(1) + (real(i, WP) + 0.5_WP) * dx(1)
+                  yc = prob_lo(2) + (real(j, WP) + 0.5_WP) * dx(2)
+                  zc = prob_lo(3) + (real(k, WP) + 0.5_WP) * dx(3)
+
+                  vol_map(id_val  ) = vol_map(id_val  ) + cell_vol * VF_val 
+                  com_map(id_val,1) = com_map(id_val,1) + cell_vol * VF_val * xc
+                  com_map(id_val,2) = com_map(id_val,2) + cell_vol * VF_val * yc
+                  com_map(id_val,3) = com_map(id_val,3) + cell_vol * VF_val * zc
+
+               end do
+               end do
+               end do
+            end block accumulate_stats
+
+            nullify(pid)
+            nullify(pVF)
+         end do
+         call amrex_mfiter_destroy(mfi)
+
+         if (lvl < this%amr%maxlvl) call amrex_boxarray_destroy(fine_ba_crse)
+
+      end do
+
+      call amrex_parallel_reduce_sum(vol_map, this%nstruct)
+      call amrex_parallel_reduce_sum(com_map(:,1), this%nstruct)
+      call amrex_parallel_reduce_sum(com_map(:,2), this%nstruct)
+      call amrex_parallel_reduce_sum(com_map(:,3), this%nstruct)
+
+      allocate(stats(this%nstruct))
+      do i = 1, this%nstruct
+         stats(i)%id  = i
+         stats(i)%vol = vol_map(i)
+         stats(i)%com = com_map(i,:)/vol_map(i)
+      end do
+
+   end subroutine compute_stats
    
    
    !> Finalize CCL object

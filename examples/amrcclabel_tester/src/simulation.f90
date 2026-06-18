@@ -306,9 +306,21 @@ contains
    
    !> Time integrate our problem
    subroutine simulation_run
+      use amrcclabel_class, only : stats_type
+      type(stats_type), dimension(:), allocatable :: stats 
      
       ! Compute CCLabel
       call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,vof%VF)
+
+      ! Compute structure statistics
+      call cclabel%compute_stats(vof%VF,stats)
+
+      print_stats: block
+         integer :: n 
+         do n=1,cclabel%nstruct
+            print *, "rank =", amr%rank, "id=",n," vol=",stats(n)%vol," com=",stats(n)%com
+         end do
+      end block print_stats
 
       ! Write visualization with IDs
       call viz%write(time=0.0_WP)
