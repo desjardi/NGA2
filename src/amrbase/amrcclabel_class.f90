@@ -90,6 +90,7 @@ contains
       call this%id%initialize(amr,name='id',ncomp=1,ng=this%nover,interp=interp_none);! this%id%parent=>this
       call this%id%register() ! Update with regriding
       call this%id%reset() ! Update with current grids
+      call this%id%setval(0.0_WP)
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
