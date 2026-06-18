@@ -765,18 +765,10 @@ contains
          ! Compute Umag
          call Umag%get_magnitude(srcX=fs%Q,srcY=fs%Q,srcZ=fs%Q,compX=1,compY=2,compZ=3)
 
-         ! Construct CCLabel and compute stats
+         ! Construct CCLabel then compute & write stats
          if (cclabel_evt%occurs()) then 
             call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF)
             call cclabel%compute_stats(fs%VF, fs%Q, fs%rhoG, fs%sigma, stats)
-            print_stats: block
-               integer :: n 
-               if (amr%amRoot) then
-                  do n=1,cclabel%nstruct
-                     print *, "id=",n," vol=",stats(n)%vol," com=",stats(n)%com
-                  end do
-               end if
-            end block print_stats
 
             write_stats: block
                use monitor_class, only: iformat,rformat
