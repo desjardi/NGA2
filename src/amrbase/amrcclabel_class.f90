@@ -27,10 +27,16 @@ module amrcclabel_class
    
    !> Statistics object
    type :: stats_type
-      integer :: id                    !< ID of structure
-      real(WP) :: vol                  !< Volme of structure
-      real(WP), dimension(3) :: com    !< Center of mass of structure
-   end type stats_type
+    integer  :: id           ! Structure ID
+    real(WP) :: vol          ! Liquid volume
+    real(WP) :: com(3)       ! Center of mass
+    real(WP) :: vel(3)       ! Volume-weighted liquid velocity
+    real(WP) :: moi(3,3)     ! Moment of inertia tensor
+    real(WP) :: Deq          ! Equivalent sphere diameter
+    real(WP) :: gvel(3)      ! Volume-weighted surrounding gas velocity
+    real(WP) :: weber        ! Weber number
+    logical  :: remove       ! .true. if structure touches domain boundary
+end type stats_type
    
    !> amrcclabel object definition
    type :: amrcclabel
@@ -794,127 +800,320 @@ contains
 
 
    !> Compute common statistics for structures 
-   !> identified by id in this%id and weighted by VF array 
-   subroutine compute_stats(this,VF,stats)
+   !> identified by id in this%id
+   subroutine compute_stats(this, VF, Q, rhoG, sigma, stats)
       use amrex_fort_module,     only : amrex_spacedim
       use amrex_multifab_module, only : amrex_multifab, amrex_mfiter, &
-                                        amrex_mfiter_build, amrex_mfiter_destroy
+                                       amrex_mfiter_build, amrex_mfiter_destroy
       use amrex_box_module,      only : amrex_box
       use amrex_boxarray_module, only : amrex_boxarray, amrex_boxarray_build, amrex_boxarray_destroy
-      use amrex_geometry_module, only : amrex_geometry
-      use amrex_box_module,      only : amrex_box
-      use amrex_amr_module,      only : amrex_long
       use amrex_parallel_module, only : amrex_parallel_reduce_sum
+      use amrex_amr_module, only : amrex_long
+      use mathtools,             only : pi
       implicit none
       class(amrcclabel) :: this
-      type(amrdata), intent(in) :: VF
+      type(amrdata), intent(in) :: VF     ! Volume fraction
+      type(amrdata), intent(in) :: Q      ! Cell-centred velocity (3 components)
+      real(WP),      intent(in) :: rhoG   ! Gas density
+      real(WP),      intent(in) :: sigma  ! Surface tension coefficient
       type(stats_type), allocatable, dimension(:), intent(out) :: stats
-      real(WP), allocatable, dimension(:)   :: vol_map
-      real(WP), allocatable, dimension(:,:) :: com_map
+
+      ! Accumulator arrays
+      real(WP), allocatable :: vol_map(:)      ! (nstruct)
+      real(WP), allocatable :: com_map(:,:)    ! (nstruct, 3)
+      real(WP), allocatable :: vel_map(:,:)    ! (nstruct, 3) liquid velocity
+      real(WP), allocatable :: moi_map(:,:,:)  ! (nstruct, 3, 3)
+      real(WP), allocatable :: gvel_map(:,:)   ! (nstruct, 3) gas velocity
+      real(WP), allocatable :: gwt_map(:)      ! (nstruct) gas velocity weights
+      real(WP), allocatable :: rem_map(:)      ! (nstruct) boundary flag (real for MPI reduce)
+
       type(amrex_mfiter)   :: mfi
-      type(amrex_box)      :: bx
+      type(amrex_box)      :: bx, pt_box
       type(amrex_boxarray) :: fine_ba_crse
-      type(amrex_box) :: pt_box
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pVF
+
+      real(WP), pointer, contiguous :: pid(:,:,:,:), pVF(:,:,:,:), pQ(:,:,:,:)
       real(WP) :: dx(3), cell_vol, prob_lo(3)
-      real(WP) :: xc, yc, zc
+      real(WP) :: xc, yc, zc, VF_val
+      real(WP) :: xr, yr, zr, x0, y0, z0
+      real(WP) :: slip_vel, Deq
       integer  :: lo(3), hi(3), ilo(3), ihi(3)
-      integer  :: i, j, k, lvl, id_val
-      real(WP) :: VF_val
-      integer(amrex_long) :: nb, n
+      integer  :: i, j, k, lvl, id_val, ns
+      integer  :: ratio(3)
+      integer, parameter :: nlayer = 2         ! cells near domain face to flag
+      integer(amrex_long) :: nb, nn
       integer, allocatable :: bxs(:,:,:)
-      integer :: ratio(3)
 
-      allocate(vol_map(1:this%nstruct))
-      allocate(com_map(1:this%nstruct,3))
+      allocate(vol_map (this%nstruct));         vol_map  = 0.0_WP
+      allocate(com_map (this%nstruct, 3));      com_map  = 0.0_WP
+      allocate(vel_map (this%nstruct, 3));      vel_map  = 0.0_WP
+      allocate(moi_map (this%nstruct, 3, 3));   moi_map  = 0.0_WP
+      allocate(gvel_map(this%nstruct, 3));      gvel_map = 0.0_WP
+      allocate(gwt_map (this%nstruct));         gwt_map  = 0.0_WP
+      allocate(rem_map (this%nstruct));         rem_map  = 0.0_WP
 
-      vol_map = 0.0_WP
-      com_map = 0.0_WP
       prob_lo = [this%amr%xlo, this%amr%ylo, this%amr%zlo]
 
-      do lvl = 0, this%amr%maxlvl
+      ! =========================================================================
+      ! PASS 1: volume, CoM, liquid velocity, boundary removal flag
+      ! =========================================================================
+      do lvl = 0, this%amr%clvl()
 
          dx(1)    = this%amr%dx(lvl)
          dx(2)    = this%amr%dy(lvl)
          dx(3)    = this%amr%dz(lvl)
          cell_vol = this%amr%cell_vol(lvl)
 
-         if (lvl < this%amr%maxlvl) then
-               ratio = [this%amr%rrefx(lvl), this%amr%rrefy(lvl), this%amr%rrefz(lvl)]
-               nb = this%id%mf(lvl+1)%ba%nboxes()
-               allocate(bxs(2, 3, nb))
-               do n = 1, nb
-                  bx = this%id%mf(lvl+1)%ba%get_box(int(n-1))
-                  bxs(1,:,n) = bx%lo / ratio
-                  bxs(2,:,n) = bx%hi / ratio
-               end do
-               call amrex_boxarray_build(fine_ba_crse, bxs)
-               deallocate(bxs)
+         if (lvl < this%amr%clvl()) then
+            ratio = [this%amr%rrefx(lvl), this%amr%rrefy(lvl), this%amr%rrefz(lvl)]
+            nb = this%id%mf(lvl+1)%ba%nboxes()
+            allocate(bxs(2, 3, nb))
+            do nn = 1, nb
+               bx = this%id%mf(lvl+1)%ba%get_box(int(nn-1))
+               bxs(1,:,nn) = bx%lo / ratio
+               bxs(2,:,nn) = bx%hi / ratio
+            end do
+            call amrex_boxarray_build(fine_ba_crse, bxs)
+            deallocate(bxs)
          end if
 
-         call this%amr%mfiter_build(lvl,mfi)
+         call this%amr%mfiter_build(lvl, mfi)
          do while (mfi%next())
-            ! Get pointers to data arrays
-            pid => this%id%mf(lvl)%dataptr(mfi)   
+            pid => this%id%mf(lvl)%dataptr(mfi)
             pVF =>      VF%mf(lvl)%dataptr(mfi)
+            pQ  =>       Q%mf(lvl)%dataptr(mfi)
             bx  = mfi%validbox()
-            lo  = bx%lo
-            hi  = bx%hi
-            
-            ilo = [lbound(pid,1), lbound(pid,2), lbound(pid,3)]
-            ihi = [ubound(pid,1), ubound(pid,2), ubound(pid,3)]
+            lo  = bx%lo;  hi = bx%hi
 
-            accumulate_stats: block 
+            pass1: block
                do k = lo(3), hi(3)
                do j = lo(2), hi(2)
                do i = lo(1), hi(1)
                   id_val = nint(pid(i,j,k,1))
                   VF_val =      pVF(i,j,k,1)
-                  if (id_val <= 0) cycle
+                  if (id_val <= 0 .or. id_val > this%nstruct) cycle
 
-                  if (lvl < this%amr%maxlvl) then
-                     pt_box%lo = [i, j, k]
-                     pt_box%hi = [i, j, k]
-                     if (fine_ba_crse%intersects(pt_box)) cycle
+                  if (lvl < this%amr%clvl()) then
+                        pt_box%lo = [i,j,k];  pt_box%hi = [i,j,k]
+                        if (fine_ba_crse%intersects(pt_box)) cycle
                   end if
 
                   xc = prob_lo(1) + (real(i, WP) + 0.5_WP) * dx(1)
                   yc = prob_lo(2) + (real(j, WP) + 0.5_WP) * dx(2)
                   zc = prob_lo(3) + (real(k, WP) + 0.5_WP) * dx(3)
 
-                  vol_map(id_val  ) = vol_map(id_val  ) + cell_vol * VF_val 
+                  vol_map(id_val)   = vol_map(id_val)   + cell_vol * VF_val
                   com_map(id_val,1) = com_map(id_val,1) + cell_vol * VF_val * xc
                   com_map(id_val,2) = com_map(id_val,2) + cell_vol * VF_val * yc
                   com_map(id_val,3) = com_map(id_val,3) + cell_vol * VF_val * zc
+                  vel_map(id_val,1) = vel_map(id_val,1) + cell_vol * VF_val * pQ(i,j,k,1)
+                  vel_map(id_val,2) = vel_map(id_val,2) + cell_vol * VF_val * pQ(i,j,k,2)
+                  vel_map(id_val,3) = vel_map(id_val,3) + cell_vol * VF_val * pQ(i,j,k,3)
 
+                  ! Flag if within nlayer cells of any domain face
+                  if (xc < this%amr%xlo + nlayer*dx(1) .or. &
+                        xc > this%amr%xhi - nlayer*dx(1) .or. &
+                        yc < this%amr%ylo + nlayer*dx(2) .or. &
+                        yc > this%amr%yhi - nlayer*dx(2) .or. &
+                        zc < this%amr%zlo + nlayer*dx(3) .or. &
+                        zc > this%amr%zhi - nlayer*dx(3)) then
+                        rem_map(id_val) = 1.0_WP
+                  end if
                end do
                end do
                end do
-            end block accumulate_stats
+            end block pass1
 
-            nullify(pid)
-            nullify(pVF)
+            nullify(pid, pVF, pQ)
          end do
          call amrex_mfiter_destroy(mfi)
 
-         if (lvl < this%amr%maxlvl) call amrex_boxarray_destroy(fine_ba_crse)
-
+         if (lvl < this%amr%clvl()) call amrex_boxarray_destroy(fine_ba_crse)
       end do
 
-      call amrex_parallel_reduce_sum(vol_map, this%nstruct)
+      ! Reduce pass 1
+      call amrex_parallel_reduce_sum(vol_map,      this%nstruct)
       call amrex_parallel_reduce_sum(com_map(:,1), this%nstruct)
       call amrex_parallel_reduce_sum(com_map(:,2), this%nstruct)
       call amrex_parallel_reduce_sum(com_map(:,3), this%nstruct)
+      call amrex_parallel_reduce_sum(vel_map(:,1), this%nstruct)
+      call amrex_parallel_reduce_sum(vel_map(:,2), this%nstruct)
+      call amrex_parallel_reduce_sum(vel_map(:,3), this%nstruct)
+      call amrex_parallel_reduce_sum(rem_map,      this%nstruct)
 
+      ! Normalize CoM and velocity
+      do ns = 1, this%nstruct
+         if (vol_map(ns) > 0.0_WP) then
+               com_map(ns,:) = com_map(ns,:) / vol_map(ns)
+               vel_map(ns,:) = vel_map(ns,:) / vol_map(ns)
+         end if
+      end do
+
+      ! =========================================================================
+      ! PASS 2: moment of inertia + surrounding gas velocity
+      ! Ghost cells on id%mf are filled by sync() at end of build(),
+      ! so neighbor IDs are visible across FAB boundaries.
+      ! =========================================================================
+      do lvl = 0, this%amr%clvl()
+
+         dx(1)    = this%amr%dx(lvl)
+         dx(2)    = this%amr%dy(lvl)
+         dx(3)    = this%amr%dz(lvl)
+         cell_vol = this%amr%cell_vol(lvl)
+
+         if (lvl < this%amr%clvl()) then
+               ratio = [this%amr%rrefx(lvl), this%amr%rrefy(lvl), this%amr%rrefz(lvl)]
+               nb = this%id%mf(lvl+1)%ba%nboxes()
+               allocate(bxs(2, 3, nb))
+               do nn = 1, nb
+                  bx = this%id%mf(lvl+1)%ba%get_box(int(nn-1))
+                  bxs(1,:,nn) = bx%lo / ratio
+                  bxs(2,:,nn) = bx%hi / ratio
+               end do
+               call amrex_boxarray_build(fine_ba_crse, bxs)
+               deallocate(bxs)
+         end if
+
+         call this%amr%mfiter_build(lvl, mfi)
+         do while (mfi%next())
+               pid => this%id%mf(lvl)%dataptr(mfi)
+               pVF =>      VF%mf(lvl)%dataptr(mfi)
+               pQ  =>       Q%mf(lvl)%dataptr(mfi)
+               bx  = mfi%validbox()
+               lo  = bx%lo;  hi = bx%hi
+               ilo = [lbound(pid,1), lbound(pid,2), lbound(pid,3)]
+               ihi = [ubound(pid,1), ubound(pid,2), ubound(pid,3)]
+
+               pass2: block
+                  real(WP) :: id_arr(ilo(1):ihi(1), ilo(2):ihi(2), ilo(3):ihi(3))
+                  integer  :: unique_ids(6), n_unique, d, nbid, ii, jj, kk
+                  integer, dimension(3,6) :: off
+
+                  ! Copy with correct AMReX bounds so neighbor lookup works
+                  id_arr = pid(:,:,:,1)
+
+                  off(:,1)=[1,0,0]; off(:,2)=[-1,0,0]
+                  off(:,3)=[0,1,0]; off(:,4)=[0,-1,0]
+                  off(:,5)=[0,0,1]; off(:,6)=[0,0,-1]
+
+                  do k = lo(3), hi(3)
+                  do j = lo(2), hi(2)
+                  do i = lo(1), hi(1)
+                     id_val = nint(id_arr(i,j,k))
+                     VF_val = pVF(i,j,k,1)
+
+                     if (lvl < this%amr%clvl()) then
+                           pt_box%lo = [i,j,k];  pt_box%hi = [i,j,k]
+                           if (fine_ba_crse%intersects(pt_box)) cycle
+                     end if
+
+                     xc = prob_lo(1) + (real(i, WP) + 0.5_WP) * dx(1)
+                     yc = prob_lo(2) + (real(j, WP) + 0.5_WP) * dx(2)
+                     zc = prob_lo(3) + (real(k, WP) + 0.5_WP) * dx(3)
+
+                     ! --- Moment of inertia for liquid cells ---
+                     if (id_val > 0 .and. id_val <= this%nstruct) then
+                           x0 = com_map(id_val,1);  xr = xc - x0
+                           y0 = com_map(id_val,2);  yr = yc - y0
+                           z0 = com_map(id_val,3);  zr = zc - z0
+                           moi_map(id_val,1,1) = moi_map(id_val,1,1) + cell_vol*VF_val*(yr**2+zr**2)
+                           moi_map(id_val,2,2) = moi_map(id_val,2,2) + cell_vol*VF_val*(zr**2+xr**2)
+                           moi_map(id_val,3,3) = moi_map(id_val,3,3) + cell_vol*VF_val*(xr**2+yr**2)
+                           moi_map(id_val,1,2) = moi_map(id_val,1,2) - cell_vol*VF_val*(xr*yr)
+                           moi_map(id_val,1,3) = moi_map(id_val,1,3) - cell_vol*VF_val*(xr*zr)
+                           moi_map(id_val,2,3) = moi_map(id_val,2,3) - cell_vol*VF_val*(yr*zr)
+                     end if
+
+                     ! --- Gas velocity: accumulate gas cell adjacent to structures ---
+                     ! Ghost-cell-filled id_arr lets us see neighbor IDs across FABs.
+                     ! Collect unique structure IDs from 6-connected neighbors to avoid
+                     ! double-counting a gas cell that touches multiple cells of the
+                     ! same structure.
+                     if (VF_val < 0.5_WP) then
+                           unique_ids = 0;  n_unique = 0
+                           do d = 1, 6
+                              ii = i + off(1,d)
+                              jj = j + off(2,d)
+                              kk = k + off(3,d)
+                              if (ii < ilo(1) .or. ii > ihi(1) .or. &
+                                 jj < ilo(2) .or. jj > ihi(2) .or. &
+                                 kk < ilo(3) .or. kk > ihi(3)) cycle
+                              nbid = nint(id_arr(ii,jj,kk))
+                              if (nbid <= 0 .or. nbid > this%nstruct) cycle
+                              if (any(unique_ids(1:n_unique) == nbid)) cycle
+                              n_unique = n_unique + 1
+                              unique_ids(n_unique) = nbid
+                           end do
+                           do d = 1, n_unique
+                              nbid = unique_ids(d)
+                              gvel_map(nbid,1) = gvel_map(nbid,1) + cell_vol*(1.0_WP-VF_val)*pQ(i,j,k,1)
+                              gvel_map(nbid,2) = gvel_map(nbid,2) + cell_vol*(1.0_WP-VF_val)*pQ(i,j,k,2)
+                              gvel_map(nbid,3) = gvel_map(nbid,3) + cell_vol*(1.0_WP-VF_val)*pQ(i,j,k,3)
+                              gwt_map(nbid)    = gwt_map(nbid)    + cell_vol*(1.0_WP-VF_val)
+                           end do
+                     end if
+
+                  end do
+                  end do
+                  end do
+               end block pass2
+
+               nullify(pid, pVF, pQ)
+         end do
+         call amrex_mfiter_destroy(mfi)
+
+         if (lvl < this%amr%clvl()) call amrex_boxarray_destroy(fine_ba_crse)
+      end do
+
+      ! Reduce pass 2
+      call amrex_parallel_reduce_sum(moi_map(:,1,1), this%nstruct)
+      call amrex_parallel_reduce_sum(moi_map(:,2,2), this%nstruct)
+      call amrex_parallel_reduce_sum(moi_map(:,3,3), this%nstruct)
+      call amrex_parallel_reduce_sum(moi_map(:,1,2), this%nstruct)
+      call amrex_parallel_reduce_sum(moi_map(:,1,3), this%nstruct)
+      call amrex_parallel_reduce_sum(moi_map(:,2,3), this%nstruct)
+      call amrex_parallel_reduce_sum(gvel_map(:,1),  this%nstruct)
+      call amrex_parallel_reduce_sum(gvel_map(:,2),  this%nstruct)
+      call amrex_parallel_reduce_sum(gvel_map(:,3),  this%nstruct)
+      call amrex_parallel_reduce_sum(gwt_map,        this%nstruct)
+
+      ! =========================================================================
+      ! Pack results
+      ! =========================================================================
       allocate(stats(this%nstruct))
-      do i = 1, this%nstruct
-         stats(i)%id  = i
-         stats(i)%vol = vol_map(i)
-         stats(i)%com = com_map(i,:)/vol_map(i)
+      do ns = 1, this%nstruct
+         stats(ns)%id  = ns
+         stats(ns)%vol = vol_map(ns)
+         stats(ns)%com = com_map(ns,:)
+         stats(ns)%vel = vel_map(ns,:)
+         stats(ns)%remove = (rem_map(ns) > 0.0_WP)
+
+         ! Fill symmetric off-diagonal components
+         stats(ns)%moi      = moi_map(ns,:,:)
+         stats(ns)%moi(2,1) = moi_map(ns,1,2)
+         stats(ns)%moi(3,1) = moi_map(ns,1,3)
+         stats(ns)%moi(3,2) = moi_map(ns,2,3)
+
+         ! Equivalent diameter from liquid volume
+         Deq = ((vol_map(ns) * 6.0_WP) / pi)**(1.0_WP/3.0_WP)
+         stats(ns)%Deq = Deq
+
+         ! Surrounding gas velocity
+         if (gwt_map(ns) > 0.0_WP) then
+               stats(ns)%gvel = gvel_map(ns,:) / gwt_map(ns)
+         else
+               stats(ns)%gvel = 0.0_WP
+         end if
+
+         ! Weber number: rhoG * |slip|^2 * Deq / sigma
+         slip_vel = sqrt(sum((stats(ns)%gvel - stats(ns)%vel)**2))
+         if (sigma > 0.0_WP) then
+               stats(ns)%weber = rhoG * slip_vel**2 * Deq / sigma
+         else
+               stats(ns)%weber = 0.0_WP
+         end if
       end do
 
    end subroutine compute_stats
-   
    
    !> Finalize CCL object
    subroutine finalize(this)
