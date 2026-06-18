@@ -93,7 +93,6 @@ module amrex_interface
    public :: amrmfab_compute_divergence ! Compute div(u) from face velocities
    public :: amrmfab_sum_unique         ! Sum for face/nodal data (no double-counting)
    public :: amrmask_make_fine          ! Create mask for cells covered by finer level
-   public :: amrmfab_restrict_unique_id ! Restrict unique ID from fine to coarse (for tracking structures)
 
    !=====================================================================
    ! Per-direction wrappers (bypass AMReX scalar-only Fortran interfaces)
@@ -628,13 +627,6 @@ module amrex_interface
          integer(c_int), intent(in) :: ref_ratio(3)
          integer(c_int), value :: covered_val, notcovered_val
       end subroutine amrmask_make_fine_c
-      subroutine amrmfab_restrict_unique_id_c(crse,fine,ref_ratio) &
-         bind(c, name='amrmfab_restrict_unique_id')
-         import :: c_ptr, c_int
-         type(c_ptr), value :: crse
-         type(c_ptr), value :: fine
-         integer(c_int) :: ref_ratio(3)
-      end subroutine amrmfab_restrict_unique_id_c
 
    end interface
 
@@ -789,15 +781,6 @@ contains
       integer, intent(in) :: covered_val, notcovered_val
       call amrmask_make_fine_c(mask%p, ba_fine%p, ref_ratio, covered_val, notcovered_val)
    end subroutine amrmask_make_fine
-
-   !> Restrict unique ID from fine to coarse (for tracking structures)
-   subroutine amrmfab_restrict_unique_id(crse,fine,ref_ratio)
-      use amrex_amr_module, only: amrex_multifab
-      type(amrex_multifab), intent(inout) :: crse
-      type(amrex_multifab), intent(in) :: fine
-      integer, intent(in) :: ref_ratio(3)
-      call amrmfab_restrict_unique_id_c(crse%p, fine%p, ref_ratio)
-   end subroutine amrmfab_restrict_unique_id
 
    !> Fill coarse patch for 3-component face-centered velocity
    subroutine amrmfab_fillcoarsepatch_faces(mf_u, mf_v, mf_w, time, &

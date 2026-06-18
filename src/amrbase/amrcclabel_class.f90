@@ -121,43 +121,28 @@ contains
       ! Build CCL on finest level
       call build_lvl(data%amr%maxlvl,make_label,same_label)
 
-      ! testing_finest: block 
-      !    integer :: lvl
-      !    do lvl = 0,data%amr%maxlvl
-      !       call print_ids(lvl,"after build_lvl(finest)")
-      !    end do
-      ! end block testing_finest
-
       ! Create unique IDs for each structure on coarser levels
-      restrict_unique_id: block
-         use amrex_interface, only: amrmfab_restrict_unique_id         
+      build_coarser: block
          integer :: lvl
          integer, dimension(3) :: ref_ratio
          do lvl = data%amr%maxlvl-1, 0, -1   ! finest-1 → coarsest
-            if (this%amr%amRoot) print *,'Restricting to level ',lvl
 
             ref_ratio(1)=data%amr%rrefx(lvl)
             ref_ratio(2)=data%amr%rrefy(lvl)
             ref_ratio(3)=data%amr%rrefz(lvl)
 
             ! Implemented in C to get access to additional functions
-            call amrmfab_restrict_unique_id( &
+            call restrict_unique_id( &
                this%id%mf(lvl),     & ! coarse
                this%id%mf(lvl+1),   & ! fine
-               ref_ratio )
-
-            ! testing_after_restrict: block 
-            !    integer :: lvl
-            !    do lvl = 0,data%amr%maxlvl
-            !       call print_ids(lvl,"after restrict")
-            !    end do
-            ! end block testing_after_restrict
+               ref_ratio,           &
+               this%amr%geom(lvl+1) )
 
             ! Build CCL on coarse level
             call build_lvl(lvl,coarse_make_label,coarse_same_label)
 
          end do
-      end block restrict_unique_id
+      end block build_coarser
 
       ! testing_end_build: block 
       !    integer :: lvl
@@ -173,6 +158,11 @@ contains
          integer, intent(in) :: lvl
          procedure(make_label_ftype) :: make_label
          procedure(same_label_ftype) :: same_label
+         logical :: finest
+
+         ! Set finest logical
+         finest=.false.
+         if (lvl.eq.this%amr%maxlvl) finest=.true.
 
          ! Start by cleaning up
          call this%empty()
@@ -186,13 +176,21 @@ contains
          this%struct(:)%per(3)=0
          this%struct(:)%n_=0
 
-         ! Add any ids from coarser levels to struct array
+         ! Add any ids from finer levels to struct array
          previous_ids: block 
+            use mpi_f08, only: MPI_ALLREDUCE,MPI_INTEGER,MPI_MAX,MPI_IN_PLACE
             use amrex_amr_module, only: amrex_mfiter,amrex_box
-            integer :: i,j,k
+            integer :: i,j,k,ierr
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
+            ! Only do if on coarser level
+            if (finest) exit previous_ids
+            ! Set structure counter to not overwrite any existing structures
+            nstruct_=this%id%get_max(lvl)
+            call MPI_ALLREDUCE(MPI_IN_PLACE,nstruct_,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+            this%nstruct=nstruct_
+
             ! Loop over tiles
             call data%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
@@ -265,7 +263,7 @@ contains
                end do; end do; end do
             end do
          end block first_pass
-         
+
          ! Now collapse the tree, count the cells and resolve periodicity in each structure
          collapse_tree: block
             use amrex_amr_module, only: amrex_mfiter,amrex_box
@@ -282,9 +280,6 @@ contains
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   if (pid(i,j,k,1).gt.0.5_WP) then
-                     ! if (nint(pid(i,j,k,1)).ne.1) then
-                     !    print *,' collapsing ',pid(i,j,k,1),' into ',rootify_struct(nint(pid(i,j,k,1)))
-                     ! end if
                      pid(i,j,k,1)=rootify_struct(nint(pid(i,j,k,1)))
                      this%struct(nint(pid(i,j,k,1)))%n_=this%struct(nint(pid(i,j,k,1)))%n_+1
                      ! pidp(i,j,k,1)=max(nint(pidp(i,j,k,1)),this%struct(nint(pid(i,j,k,1)))%per(1))
@@ -296,67 +291,77 @@ contains
             end do
          end block collapse_tree
          
-         ! Compact structure array
+         ! Compact structure array on finest level
          compact_tree: block
-            use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER
+            use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_MAX
             integer :: i,j,k,n,ierr
             integer, dimension(:), allocatable :: my_nstruct,all_nstruct,idmap
             type(struct_type), dimension(:), allocatable :: tmp
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
-            ! Count exact number of local structures
-            nstruct_=0
-            do n=1,size(this%struct,dim=1)
-               if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
-            end do
-            ! Gather this info to ensure unique index
-            allocate( my_nstruct(0:this%amr%nproc-1)); my_nstruct=0; my_nstruct(this%amr%rank)=nstruct_
-            allocate(all_nstruct(0:this%amr%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%amr%nproc,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
-            stmin=1
-            if (this%amr%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%amr%rank-1))
-            this%nstruct=sum(all_nstruct)
-            deallocate(my_nstruct,all_nstruct)
-            stmax=stmin+nstruct_-1
-            ! Generate an index map
-            allocate(idmap(1:size(this%struct,dim=1))); idmap=0
-            nstruct_=0
-            do n=1,size(this%struct,dim=1)
-               if (this%struct(n)%n_.gt.0) then
-                  nstruct_=nstruct_+1
-                  idmap(n)=stmin+nstruct_-1
-               end if
-            end do
-            ! Update id array to new index
-            update_id: block
-               use amrex_amr_module, only: amrex_mfiter,amrex_box
-               type(amrex_mfiter) :: mfi
-               type(amrex_box) :: bx
-               ! Loop over tiles
-               call this%amr%mfiter_build(lvl,mfi)
-               do while (mfi%next())
-                  ! Get pointers to data
-                  pid=>this%id%mf(lvl)%dataptr(mfi)
-                  ! Perform local loop
-                  bx=mfi%tilebox()
-                  do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                     if (pid(i,j,k,1).gt.0.5_WP) then
-                        pid(i,j,k,1)=idmap(nint(pid(i,j,k,1)))
-                     end if
-                  end do; end do; end do  
+            
+            ! If not finest just compute the number of structures
+            if (.not.finest) then
+               nstruct_=0
+               do n=1,size(this%struct,dim=1)
+                  if (this%struct(n)%n_.gt.0) nstruct_=n
                end do
-            end block update_id
-            deallocate(idmap)
-            ! Finish compacting and renumbering
-            allocate(tmp(stmin:stmax))
-            nstruct_=0
-            do n=1,size(this%struct,dim=1)
-               if (this%struct(n)%n_.gt.0) then
-                  nstruct_=nstruct_+1
-                  tmp(stmin+nstruct_-1)=this%struct(n)
-               end if
-            end do
-            call move_alloc(tmp,this%struct)
+               call MPI_ALLREDUCE(nstruct_,this%nstruct,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+            else
+               ! Count exact number of local structures
+               nstruct_=0
+               do n=1,size(this%struct,dim=1)
+                  if (this%struct(n)%n_.gt.0) nstruct_=nstruct_+1
+               end do
+               ! Gather this info to ensure unique index
+               allocate( my_nstruct(0:this%amr%nproc-1)); my_nstruct=0; my_nstruct(this%amr%rank)=nstruct_
+               allocate(all_nstruct(0:this%amr%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%amr%nproc,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
+               stmin=1
+               if (this%amr%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%amr%rank-1))
+               this%nstruct=sum(all_nstruct)
+               deallocate(my_nstruct,all_nstruct)
+               stmax=stmin+nstruct_-1
+               ! Generate an index map
+               allocate(idmap(1:size(this%struct,dim=1))); idmap=0
+               nstruct_=0
+               do n=1,size(this%struct,dim=1)
+                  if (this%struct(n)%n_.gt.0) then
+                     nstruct_=nstruct_+1
+                     idmap(n)=stmin+nstruct_-1
+                  end if
+               end do
+               ! Update id array to new index
+               update_id: block
+                  use amrex_amr_module, only: amrex_mfiter,amrex_box
+                  type(amrex_mfiter) :: mfi
+                  type(amrex_box) :: bx
+                  ! Loop over tiles
+                  call this%amr%mfiter_build(lvl,mfi)
+                  do while (mfi%next())
+                     ! Get pointers to data
+                     pid=>this%id%mf(lvl)%dataptr(mfi)
+                     ! Perform local loop
+                     bx=mfi%tilebox()
+                     do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                        if (pid(i,j,k,1).gt.0.5_WP) then
+                           pid(i,j,k,1)=idmap(nint(pid(i,j,k,1)))
+                        end if
+                     end do; end do; end do  
+                  end do
+               end block update_id
+               deallocate(idmap)
+               ! Finish compacting and renumbering
+               allocate(tmp(stmin:stmax))
+               nstruct_=0
+               do n=1,size(this%struct,dim=1)
+                  if (this%struct(n)%n_.gt.0) then
+                     nstruct_=nstruct_+1
+                     tmp(stmin+nstruct_-1)=this%struct(n)
+                  end if
+               end do
+               call move_alloc(tmp,this%struct)
+            end if
          end block compact_tree
-         
+
          ! Interprocessor treatment of our structures
          interproc_handling: block
             use mpi_f08, only: MPI_ALLREDUCE,MPI_MIN,MPI_MAX,MPI_INTEGER
@@ -470,8 +475,8 @@ contains
             call this%id%sync()
          end block interproc_handling
 
-         ! Now we need to compact the data based on id only
-         compact_struct: block
+         ! Now we need to compact the data based on id only if on finest level
+         renumber_ids: block
             use mpi_f08, only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER,MPI_IN_PLACE
             use amrex_amr_module, only: amrex_mfiter,amrex_box
             integer :: i,j,k,n,nn,ierr,count
@@ -480,6 +485,8 @@ contains
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
+            ! Only renumber of finest level
+            if (.not.finest) exit renumber_ids
             ! Prepare global id map
             allocate(   idmap(1:this%nstruct));    idmap=0
             ! Traverse id array and tag used id values
@@ -516,8 +523,10 @@ contains
                   if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
                end do; end do; end do
             end do
-            call this%id%sync()
-         end block compact_struct
+         end block renumber_ids
+
+         ! Sync final ids
+         call this%id%sync()
 
          ! Release scratch
          call idp%finalize()
@@ -719,6 +728,124 @@ contains
             y=parent_own(y)
          end if
       end function find_own
+
+      subroutine restrict_unique_id(cmf, fmf, ratio, geom)
+         use amrex_multifab_module, only : amrex_multifab,amrex_multifab_build,amrex_multifab_destroy
+         use amrex_amr_module,   only : amrex_mfiter, amrex_mfiter_build, amrex_mfiter_destroy
+         use amrex_amr_module,   only : amrex_box, amrex_long, amrex_geometry
+         use amrex_boxarray_module,   only : amrex_boxarray, amrex_boxarray_build, amrex_boxarray_destroy
+         implicit none
+         type(amrex_multifab), intent(inout) :: cmf
+         type(amrex_multifab), intent(in)    :: fmf
+         integer,              intent(in)    :: ratio(3)
+         type(amrex_geometry), intent(in)    :: geom
+
+         type(amrex_multifab) :: fine_tmp
+         type(amrex_boxarray) :: fba
+         type(amrex_mfiter)   :: mfi
+         type(amrex_box)      :: bx
+
+         real(WP), contiguous, pointer :: cp(:,:,:,:) => null()
+         real(WP), contiguous, pointer :: fp(:,:,:,:) => null()
+
+         integer(amrex_long) :: nb, n
+         integer, allocatable :: bxs(:,:,:)   ! (2, 3, nboxes) — lo/hi, dim, box index
+
+         integer, dimension(3) :: clo,chi,flo,fhi
+
+         ! Build refined boxarray by scaling each coarse box's lo/hi
+         nb = cmf%ba%nboxes()
+         allocate(bxs(2, 3, nb))
+         do n = 1, nb
+            bx = cmf%ba%get_box(int(n-1))   ! get_box is 0-indexed on the C side
+            bxs(1,:,n) = bx%lo * ratio
+            bxs(2,:,n) = (bx%hi + 1) * ratio - 1
+         end do
+         call amrex_boxarray_build(fba, bxs)
+         deallocate(bxs)
+
+         call amrex_multifab_build(fine_tmp, fba, cmf%dm, 1, 0)
+         call amrex_boxarray_destroy(fba)
+
+         call fine_tmp%setval(0.0_WP)
+         call fine_tmp%parallel_copy(fmf, geom)   
+
+         call amrex_mfiter_build(mfi, cmf)
+         do while (mfi%next())
+            bx =  mfi%validbox()
+            cp => cmf%dataptr(mfi)
+            fp => fine_tmp%dataptr(mfi)
+
+            clo = [lbound(cp,1), lbound(cp,2), lbound(cp,3)]
+            chi = [ubound(cp,1), ubound(cp,2), ubound(cp,3)]
+            flo = [lbound(fp,1), lbound(fp,2), lbound(fp,3)]
+            fhi = [ubound(fp,1), ubound(fp,2), ubound(fp,3)]
+
+
+            call restrict_kernel(cp(:,:,:,1), clo, chi, &
+                     fp(:,:,:,1), flo, fhi, &
+                     bx%lo, bx%hi, ratio)
+
+            nullify(cp, fp)
+         end do
+         call amrex_mfiter_destroy(mfi)
+         call amrex_multifab_destroy(fine_tmp)
+
+      end subroutine restrict_unique_id
+
+      !---------------------------------------------------------------------------
+      ! Private kernel — operates on a single patch
+      !---------------------------------------------------------------------------
+      subroutine restrict_kernel(crse, clo, chi, fine, flo, fhi, lo, hi, ratio)
+         implicit none
+         integer,  intent(in)    :: clo(3), chi(3)
+         integer,  intent(in)    :: flo(3), fhi(3)
+         integer,  intent(in)    :: lo(3), hi(3), ratio(3)
+         real(WP), intent(inout) :: crse(clo(1):chi(1), clo(2):chi(2), clo(3):chi(3))
+         real(WP), intent(in)    :: fine(flo(1):fhi(1), flo(2):fhi(2), flo(3):fhi(3))
+
+         integer :: i,  j,  k
+         integer :: ii, jj, kk
+         integer :: id_val, id_store
+         logical :: found, conflict
+
+         do k = lo(3), hi(3)
+         do j = lo(2), hi(2)
+         do i = lo(1), hi(1)
+
+               found    = .false.
+               conflict = .false.
+               id_store = 0
+
+               do kk = k*ratio(3), k*ratio(3) + ratio(3) - 1
+               do jj = j*ratio(2), j*ratio(2) + ratio(2) - 1
+               do ii = i*ratio(1), i*ratio(1) + ratio(1) - 1
+
+                  if (abs(fine(ii,jj,kk)) > 0.5_WP) then
+                     id_val = nint(fine(ii,jj,kk))
+                     if (.not. found) then
+                           id_store = id_val
+                           found    = .true.
+                     else if (id_val /= id_store) then
+                           conflict = .true.
+                     end if
+                  end if
+
+               end do
+               end do
+               end do
+
+               if (found .and. .not. conflict) then
+                  crse(i,j,k) = real(id_store, WP)
+               else
+                  crse(i,j,k) = 0.0_WP
+               end if
+
+         end do
+         end do
+         end do
+
+      end subroutine restrict_kernel
       
    end subroutine build
    
