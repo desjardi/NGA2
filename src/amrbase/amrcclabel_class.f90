@@ -182,9 +182,9 @@ contains
 
          ! Add any ids from finer levels to struct array
          previous_ids: block 
-            use mpi_f08, only: MPI_ALLREDUCE,MPI_INTEGER,MPI_MAX,MPI_IN_PLACE
+            use mpi_f08, only: MPI_ALLREDUCE,MPI_INTEGER,MPI_MAX
             use amrex_amr_module, only: amrex_mfiter,amrex_box
-            integer :: i,j,k,ierr
+            integer :: i,j,k
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
@@ -272,7 +272,7 @@ contains
             integer :: i,j,k
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp
+            real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
             ! Loop over tiles
             call data%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
@@ -371,10 +371,10 @@ contains
             integer :: i,j,k
             integer :: ii,jj,kk,dim
             integer, dimension(3) :: pos
-            integer ::stop_global,stop_,counter,n,m,ierr,find_parent,find_parent_own
+            integer ::stop_global,stop_,counter,n,ierr,find_parent,find_parent_own
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
-            real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp,pdata
+            real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pdata
             ! Allocate to total number of structures
             allocate(parent    (nstruct_work)); parent    =0
             allocate(parent_all(nstruct_work)); parent_all=0
@@ -481,9 +481,8 @@ contains
          renumber_ids: block
             use mpi_f08, only: MPI_ALLREDUCE,MPI_MAX,MPI_INTEGER,MPI_IN_PLACE
             use amrex_amr_module, only: amrex_mfiter,amrex_box
-            integer :: i,j,k,n,nn,ierr,count
-            integer, dimension(:), allocatable :: idmap,counter
-            type(struct_type), dimension(:), allocatable :: tmp
+            integer :: i,j,k,n,ierr,count
+            integer, dimension(:), allocatable :: idmap
             type(amrex_mfiter) :: mfi
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
@@ -500,7 +499,7 @@ contains
                ! Perform local loop
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  if (pid(i,j,k,1).gt.0) idmap(pid(i,j,k,1))=1
+                  if (pid(i,j,k,1).gt.0) idmap(nint(pid(i,j,k,1)))=1
                end do; end do; end do
             end do
             call MPI_ALLREDUCE(MPI_IN_PLACE,idmap,nstruct_work,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
@@ -522,7 +521,7 @@ contains
                ! Perform local loop
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
-                  if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(pid(i,j,k,1))
+                  if (pid(i,j,k,1).gt.0) pid(i,j,k,1)=idmap(nint(pid(i,j,k,1)))
                end do; end do; end do
             end do
          end block renumber_ids
@@ -547,10 +546,10 @@ contains
          real(WP), dimension(:,:,:,:), contiguous, pointer :: pid
          type(amrex_mfiter) :: mfi
          type(amrex_box) :: bx
-         integer, parameter :: max_id = 100000   ! adjust as needed
+         integer, parameter :: max_id = 10000   ! adjust as needed
          logical :: seen(0:max_id) 
          integer :: count(0:max_id) 
-         integer :: id,i,j,k,root
+         integer :: id,i,j,k
 
          seen = .false.
          count = 0
@@ -644,7 +643,6 @@ contains
       subroutine add_existing(id)
          implicit none
          integer, intent(in) :: id
-         integer :: x
          integer :: size_now,size_new
          type(struct_type), dimension(:), allocatable :: tmp
          ! Check if there is enough room for storing a new structure
@@ -856,7 +854,6 @@ contains
    subroutine empty(this)
       implicit none
       class(amrcclabel), intent(inout) :: this
-      integer :: n
       ! Deallocate structure array
       if (allocated(this%struct)) deallocate(this%struct)
    end subroutine empty
@@ -880,7 +877,6 @@ contains
       type(stats_type), allocatable, dimension(:), intent(out) :: stats
       real(WP), allocatable, dimension(:)   :: vol_map
       real(WP), allocatable, dimension(:,:) :: com_map
-      logical :: id_seen(this%nstruct)
       type(amrex_mfiter)   :: mfi
       type(amrex_box)      :: bx
       type(amrex_boxarray) :: fine_ba_crse
@@ -935,12 +931,9 @@ contains
             ihi = [ubound(pid,1), ubound(pid,2), ubound(pid,3)]
 
             accumulate_stats: block 
-               real(WP) :: id_arr(ilo(1):ihi(1), ilo(2):ihi(2), ilo(3):ihi(3))
-
                do k = lo(3), hi(3)
                do j = lo(2), hi(2)
                do i = lo(1), hi(1)
-
                   id_val = nint(pid(i,j,k,1))
                   VF_val =      pVF(i,j,k,1)
                   if (id_val <= 0) cycle
