@@ -101,8 +101,8 @@ contains
       integer :: lvl,i,j,k
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
-      real(WP), dimension(:,:,:,:), contiguous, pointer :: pTG,pVF,pQ,pVisc,pBeta,pDiff,pRHOL,pRHOG
-      real(WP) :: r_cyl,blend,nu_spg,mu_spg,mu_g,mu_l,k_g,k_l
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pTG,pVF,pQ,pVisc,pBeta,pDiffL,pDiffG,pRHOL,pRHOG
+      real(WP) :: r_cyl,blend,nu_spg,mu_spg,mu_g,mu_l
       real(WP), parameter :: Tmax_visc=10.0_WP
       real(WP), parameter :: myeps=1.0e-15_WP
       real(WP), parameter :: max_cfl=0.5_WP
@@ -122,7 +122,8 @@ contains
             pQ=>fs%Q%mf(lvl)%dataptr(mfi)
             pVisc=>fs%visc%mf(lvl)%dataptr(mfi)
             pBeta=>fs%beta%mf(lvl)%dataptr(mfi)
-            pDiff=>fs%diff%mf(lvl)%dataptr(mfi)
+            pDiffL=>fs%diffL%mf(lvl)%dataptr(mfi)
+            pDiffG=>fs%diffG%mf(lvl)%dataptr(mfi)
             pRHOL=>fs%RHOL%mf(lvl)%dataptr(mfi)
             pRHOG=>fs%RHOG%mf(lvl)%dataptr(mfi)
             ! Get tilebox with overlap
@@ -137,13 +138,9 @@ contains
                pVisc(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(mu_l,myeps)+(1.0_WP-pVF(i,j,k,1))/max(mu_g,myeps)) ! Harmonic averaging
                ! Zero bulk viscosity
                pBeta(i,j,k,1)=0.0_WP
-               ! Gas heat diffusivity: k=Cv*Gamma*mu/Pr
-               k_g=air%gamma*air%cv*mu_g/Prandtl
-               ! Liquid heat diffusivity from ratio
-               k_l=diff_ratio*air%gamma*air%cv/(Reynolds*Prandtl)
-               ! Mixture diffusivity
-               !pDiff(i,j,k,1)=pVF(i,j,k,1)*k_l+(1.0_WP-pVF(i,j,k,1))*k_g ! Arithmetic averaging
-               pDiff(i,j,k,1)=1.0_WP/(pVF(i,j,k,1)/max(k_l,myeps)+(1.0_WP-pVF(i,j,k,1))/max(k_g,myeps)) ! Harmonic averaging
+               ! Phasic heat diffusivities: gas k=cp*mu/Pr, liquid from ratio (no blending - solver uses phasic fields)
+               pDiffG(i,j,k,1)=air%gamma*air%cv*mu_g/Prandtl
+               pDiffL(i,j,k,1)=diff_ratio*air%gamma*air%cv/(Reynolds*Prandtl)
                ! Apply sponge layer viscosity
                r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2+(amr%zlo+(real(k,WP)+0.5_WP)*amr%dz(lvl))**2)
                if (amr%nz.eq.1) r_cyl=sqrt((amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl))**2) ! Enable quasi-2D runs
@@ -151,7 +148,8 @@ contains
                   blend=min((r_cyl-R_spg)/L_spg,1.0_WP)**2
                   mu_spg=nu_spg/(pVF(i,j,k,1)/max(pRHOL(i,j,k,1),myeps)+(1.0_WP-pVF(i,j,k,1))/max(pRHOG(i,j,k,1),myeps))
                   pVisc(i,j,k,1)=max(pVisc(i,j,k,1),blend*mu_spg)
-                  pDiff(i,j,k,1)=max(pDiff(i,j,k,1),Cdiff*blend*mu_spg)
+                  pDiffL(i,j,k,1)=max(pDiffL(i,j,k,1),Cdiff*blend*mu_spg)
+                  pDiffG(i,j,k,1)=max(pDiffG(i,j,k,1),Cdiff*blend*mu_spg)
                end if
             end do; end do; end do
          end do
@@ -729,8 +727,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=0.5_WP*time%dt,mask=IBw)
          ! Add surface tension term
@@ -754,8 +752,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=time%dt,mask=IBw)
          ! Add surface tension term

@@ -5,9 +5,11 @@ Base nz:   1
 Max level: 6
 
 # Regridding parameters
-Regrid nsteps: 10
-Tagging Re:    100
-Tagging Rho:   0.1
+Regrid nsteps:      10
+Tag Reynolds value: 100
+Tag density error:  0.6
+Tag pressure error: 0.3
+Tag Ducros value:   0.5
 
 # Geometry
 Drop location:  10
@@ -18,14 +20,17 @@ Wall BC:        slip
 ###########################################
 ##### CONDITIONS FOR PARZIALE Ms=5.12 #####
 ###########################################
-# Gammas
+# EOS parameters
+# Air
 GammaG: 1.3
-GammaL: 6.12
+# Liquid water
+GammaL: 1.43617
+Liquid pinf:      55.2625
+Liquid covolume:  0.003655
+Liquid cv:        2.22961
+Liquid qp:        7.1209
 # Shock parameters
 Gas Mach number: 1.95
-# Liquid state
-Density ratio:      133.5
-Liquid Mach number: 1.0
 # Surface tension
 Weber number:       3.69e5
 # Viscous parameters

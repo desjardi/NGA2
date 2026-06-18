@@ -571,8 +571,8 @@ contains
             call fs%Q%lincomb(a=1.0_WP,src1=fs%Qold,b=time%dt,src2=dQdt)
             call fs%Q%average_down(); call fs%Q%fill(time%t)
 
-            ! Interpolate velocity to the faces
-            call fs%get_face_velocity()
+            ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
 
             ! Increment both velocities with current pressure term
             call fs%get_primitive(Q=fs%Q)

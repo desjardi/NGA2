@@ -66,7 +66,7 @@ contains
       implicit none
       call fs%visc%setval(val=0.0_WP)
       call fs%beta%setval(val=0.0_WP)
-      call fs%diff%setval(val=0.0_WP)
+      call fs%diffL%setval(val=0.0_WP); call fs%diffG%setval(val=0.0_WP)
    end subroutine get_viscosities
 
    !> User init callback - set Q and VF for 1D shocktube
@@ -397,8 +397,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
          ! Add surface tension term
@@ -420,8 +420,8 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! Rebuild sub-cell VF
          call fs%build_subVF()
-         ! Compute face velocities
-         call fs%get_face_velocity()
+         ! Compute face velocities and ensure C/F consistency
+         call fs%get_face_velocity(); call fs%average_down_velocity()
          ! Add pressure term
          call fs%add_phasic_pressure(scale=time%dt)
          ! Add surface tension term

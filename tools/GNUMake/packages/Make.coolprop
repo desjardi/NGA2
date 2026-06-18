@@ -1,7 +1,13 @@
 # Add appropriate COOLPROP includes and libraries
 ifdef COOLPROP_DIR
   LIBRARY_LOCATIONS += $(COOLPROP_DIR)/lib
-  LIBRARIES += -lCoolProp -lstdc++ -ldl
+  # CoolProp is C++: pick the matching C++ runtime (libstdc++ for g++, libc++ for clang)
+  is_gnu = $(shell expr `mpic++ --version | awk '{print substr($$1,1,3); exit}'` = 'g++')
+  ifeq ($(is_gnu), 1)
+    LIBRARIES += -lCoolProp -lstdc++ -ldl
+  else
+    LIBRARIES += -lCoolProp -lc++ -ldl
+  endif
 else
   $(error COOLPROP_DIR not defined, but it is currently required by NGA2)
 endif
