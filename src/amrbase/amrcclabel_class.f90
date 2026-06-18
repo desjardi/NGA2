@@ -1,7 +1,3 @@
-!> TODO
-! - Be more careful with this%nstruct should be set on finest level and then not touched on coarser levels. 
-
-
 !> Connected component labeling class: identifies Lagrangian objects from a Eulerian logical field
 !> and provides unstructured mapping to traverse these objects
 module amrcclabel_class
@@ -166,6 +162,7 @@ contains
          procedure(make_label_ftype) :: make_label
          procedure(same_label_ftype) :: same_label
          logical :: finest
+         integer :: nstruct_work
 
          ! Set finest logical
          finest=.false.
@@ -194,10 +191,8 @@ contains
             ! Only do if on coarser level
             if (finest) exit previous_ids
             ! Set structure counter to not overwrite any existing structures
-            nstruct_=this%id%get_max(lvl)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,nstruct_,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
-            this%nstruct=nstruct_
-
+            nstruct_=this%nstruct
+            
             ! Loop over tiles
             call this%amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
@@ -298,7 +293,7 @@ contains
             end do
          end block collapse_tree
          
-         ! Compact structure array on finest level
+         ! Compact structure array
          compact_tree: block
             use mpi_f08, only: MPI_ALLREDUCE,MPI_SUM,MPI_INTEGER,MPI_MAX
             integer :: i,j,k,n,ierr
@@ -312,7 +307,7 @@ contains
                do n=1,size(this%struct,dim=1)
                   if (this%struct(n)%n_.gt.0) nstruct_=n
                end do
-               call MPI_ALLREDUCE(nstruct_,this%nstruct,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+               call MPI_ALLREDUCE(nstruct_,nstruct_work,1,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
             else
                ! Count exact number of local structures
                nstruct_=0
@@ -324,7 +319,7 @@ contains
                allocate(all_nstruct(0:this%amr%nproc-1)); call MPI_ALLREDUCE(my_nstruct,all_nstruct,this%amr%nproc,MPI_INTEGER,MPI_SUM,this%amr%comm,ierr)
                stmin=1
                if (this%amr%rank.gt.0) stmin=stmin+sum(all_nstruct(0:this%amr%rank-1))
-               this%nstruct=sum(all_nstruct)
+               nstruct_work=sum(all_nstruct)
                deallocate(my_nstruct,all_nstruct)
                stmax=stmin+nstruct_-1
                ! Generate an index map
@@ -381,11 +376,11 @@ contains
             type(amrex_box) :: bx
             real(WP), dimension(:,:,:,:), contiguous, pointer :: pid,pidp,pdata
             ! Allocate to total number of structures
-            allocate(parent    (this%nstruct)); parent    =0
-            allocate(parent_all(this%nstruct)); parent_all=0
-            allocate(parent_own(this%nstruct)); parent_own=0
+            allocate(parent    (nstruct_work)); parent    =0
+            allocate(parent_all(nstruct_work)); parent_all=0
+            allocate(parent_own(nstruct_work)); parent_own=0
             ! Fill global lineage with selves
-            do n=1,this%nstruct
+            do n=1,nstruct_work
                parent(n)=n
             end do
             ! Synchronize id array
@@ -426,17 +421,17 @@ contains
                ! Remember own parents
                parent_own=parent
                ! Set self-parents to huge(1)
-               do n=1,this%nstruct
+               do n=1,nstruct_work
                   if (parent(n).eq.n) parent(n)=huge(1)
                end do
                ! Take global min
-               call MPI_ALLREDUCE(parent,parent_all,this%nstruct,MPI_INTEGER,MPI_MIN,this%amr%comm,ierr)
+               call MPI_ALLREDUCE(parent,parent_all,nstruct_work,MPI_INTEGER,MPI_MIN,this%amr%comm,ierr)
                ! Set self-parents back to selves
-               do n=1,this%nstruct
+               do n=1,nstruct_work
                   if (parent_all(n).eq.huge(1)) parent_all(n)=n
                end do
                ! Flatten trees
-               do n=1,this%nstruct
+               do n=1,nstruct_work
                   parent_all(n)=find_all(n)
                   parent_own(n)=find_own(n)
                end do
@@ -445,7 +440,7 @@ contains
                ! Increment counter
                counter=counter+1
                ! Reconcile conflicts between parent_all and parent_own
-               do n=1,this%nstruct
+               do n=1,nstruct_work
                   if (parent_own(n).ne.n) then
                      find_parent_own=rootify_parent(parent_own(n))
                      find_parent    =rootify_parent(parent(n))
@@ -495,7 +490,7 @@ contains
             ! Only renumber of finest level
             if (.not.finest) exit renumber_ids
             ! Prepare global id map
-            allocate(   idmap(1:this%nstruct));    idmap=0
+            allocate(   idmap(1:nstruct_work));    idmap=0
             ! Traverse id array and tag used id values
             ! Loop over tiles
             call this%amr%mfiter_build(lvl,mfi)
@@ -508,8 +503,8 @@ contains
                   if (pid(i,j,k,1).gt.0) idmap(pid(i,j,k,1))=1
                end do; end do; end do
             end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,idmap,this%nstruct,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
-            ! Count number of used structures and create the map
+            call MPI_ALLREDUCE(MPI_IN_PLACE,idmap,nstruct_work,MPI_INTEGER,MPI_MAX,this%amr%comm,ierr)
+            ! Count number of used structures, set nstruct, and create map
             this%nstruct=sum(idmap)
             count=0
             do n=1,size(idmap,dim=1)
@@ -864,8 +859,6 @@ contains
       integer :: n
       ! Deallocate structure array
       if (allocated(this%struct)) deallocate(this%struct)
-      ! Zero structures
-      this%nstruct=0
    end subroutine empty
 
 
