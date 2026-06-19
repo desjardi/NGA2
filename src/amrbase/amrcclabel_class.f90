@@ -585,20 +585,18 @@ contains
          integer, intent(in) :: id
          integer :: size_now,size_new
          type(struct_type), dimension(:), allocatable :: tmp
-         ! Check if there is enough room for storing a new structure
          size_now=size(this%struct,dim=1)
          if (id.gt.size_now) then
-            size_new = max(id, nstruct_, nint(real(size_now,WP)*coeff_up))
+            size_new=max(id, nstruct_, nint(real(size_now,WP)*coeff_up))
             allocate(tmp(size_new))
-            tmp(1:nstruct_)=this%struct
-            tmp(nstruct_+1:)%parent=0
-            tmp(nstruct_+1:)%per(1)=0
-            tmp(nstruct_+1:)%per(2)=0
-            tmp(nstruct_+1:)%per(3)=0
-            tmp(nstruct_+1:)%n_=0
+            tmp(1:size_now)=this%struct       ! copy only what actually exists
+            tmp(size_now+1:)%parent=0        ! zero-init everything beyond that
+            tmp(size_now+1:)%per(1)=0
+            tmp(size_now+1:)%per(2)=0
+            tmp(size_now+1:)%per(3)=0
+            tmp(size_now+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
-         ! Add new root if doesn't already exist
          if (this%struct(id)%parent.ne.id) then
             nstruct_=nstruct_+1
             this%struct(id)%parent=id
