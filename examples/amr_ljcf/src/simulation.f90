@@ -452,6 +452,48 @@ contains
       end if
    end function coarse_same_label
 
+   !> Write droplet statistics to monitor files
+   subroutine write_stats()
+      use monitor_class, only: iformat,rformat
+      use string,    only: str_medium
+      implicit none
+      character(len=str_medium) :: filename,struct_name
+      type(stats_type) :: buf   ! single-structure buffer monitor points into
+      integer :: n
+      ! Create a file to write Weber numbers
+      write(filename, rformat) time%t
+      filename = 'structStats_'//trim(adjustl(filename))
+      cclabel_file=monitor(fs%amr%amRoot,filename)
+      
+      ! Register columns with buffer
+      call cclabel_file%add_column(buf%id,      'Structure ID')
+      call cclabel_file%add_column(buf%vol,     'Drop Volume')
+      call cclabel_file%add_column(buf%Deq,     'Equiv Diameter')
+      call cclabel_file%add_column(buf%com(1),  'X Drop Pos')
+      call cclabel_file%add_column(buf%com(2),  'Y Drop Pos')
+      call cclabel_file%add_column(buf%com(3),  'Z Drop Pos')
+      call cclabel_file%add_column(buf%vel(1),  'X Drop Vel')
+      call cclabel_file%add_column(buf%vel(2),  'Y Drop Vel')
+      call cclabel_file%add_column(buf%vel(3),  'Z Drop Vel')
+      call cclabel_file%add_column(buf%gvel(1), 'X Gas Vel')
+      call cclabel_file%add_column(buf%gvel(2), 'Y Gas Vel')
+      call cclabel_file%add_column(buf%gvel(3), 'Z Gas Vel')
+      call cclabel_file%add_column(buf%moi(1,1),'Ixx')
+      call cclabel_file%add_column(buf%moi(2,2),'Iyy')
+      call cclabel_file%add_column(buf%moi(3,3),'Izz')
+      call cclabel_file%add_column(buf%moi(1,2),'Ixy')
+      call cclabel_file%add_column(buf%moi(1,3),'Ixz')
+      call cclabel_file%add_column(buf%moi(2,3),'Iyz')
+      call cclabel_file%add_column(buf%weber,   'Weber')
+      do n=1,cclabel%nstruct
+         ! Set buffer and write the data for this structure
+         buf = stats(n)
+         call cclabel_file%write()
+      end do
+      ! Close file
+      call cclabel_file%close()
+   end subroutine write_stats
+
    !> Initialization hook
    subroutine simulation_init()
       use param, only: param_read
@@ -608,6 +650,8 @@ contains
       call param_read('CCLabel period',cclabel_evt%tper)
       call cclabel%initialize(amr,name='amr_ljcf')
       call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF) 
+      call cclabel%compute_stats(fs%VF, fs%Q, fs%rhoG, fs%sigma, stats)
+      call write_stats()
 
       ! Initialize visualization
       create_visualization: block
@@ -769,46 +813,7 @@ contains
          if (cclabel_evt%occurs()) then 
             call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF)
             call cclabel%compute_stats(fs%VF, fs%Q, fs%rhoG, fs%sigma, stats)
-
-            write_stats: block
-               use monitor_class, only: iformat,rformat
-               use string,    only: str_medium
-               character(len=str_medium) :: filename,struct_name
-               type(stats_type) :: buf   ! single-structure buffer monitor points into
-               integer :: n
-               ! Create a file to write Weber numbers
-               write(filename, rformat) time%t
-               filename = 'structStats_'//trim(adjustl(filename))
-               cclabel_file=monitor(fs%amr%amRoot,filename)
-               
-               ! Register columns with buffer
-               call cclabel_file%add_column(buf%id,      'Structure ID')
-               call cclabel_file%add_column(buf%vol,     'Drop Volume')
-               call cclabel_file%add_column(buf%Deq,     'Equiv Diameter')
-               call cclabel_file%add_column(buf%com(1),  'X Drop Pos')
-               call cclabel_file%add_column(buf%com(2),  'Y Drop Pos')
-               call cclabel_file%add_column(buf%com(3),  'Z Drop Pos')
-               call cclabel_file%add_column(buf%vel(1),  'X Drop Vel')
-               call cclabel_file%add_column(buf%vel(2),  'Y Drop Vel')
-               call cclabel_file%add_column(buf%vel(3),  'Z Drop Vel')
-               call cclabel_file%add_column(buf%gvel(1), 'X Gas Vel')
-               call cclabel_file%add_column(buf%gvel(2), 'Y Gas Vel')
-               call cclabel_file%add_column(buf%gvel(3), 'Z Gas Vel')
-               call cclabel_file%add_column(buf%moi(1,1),'Ixx')
-               call cclabel_file%add_column(buf%moi(2,2),'Iyy')
-               call cclabel_file%add_column(buf%moi(3,3),'Izz')
-               call cclabel_file%add_column(buf%moi(1,2),'Ixy')
-               call cclabel_file%add_column(buf%moi(1,3),'Ixz')
-               call cclabel_file%add_column(buf%moi(2,3),'Iyz')
-               call cclabel_file%add_column(buf%weber,   'Weber')
-               do n=1,cclabel%nstruct
-                  ! Set buffer and write the data for this structure
-                  buf = stats(n)
-                  call cclabel_file%write()
-               end do
-               ! Close file
-               call cclabel_file%close()
-            end block write_stats
+            call write_stats()
          end if
 
          ! Monitor output
