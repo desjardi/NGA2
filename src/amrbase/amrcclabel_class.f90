@@ -588,7 +588,7 @@ contains
          ! Check if there is enough room for storing a new structure
          size_now=size(this%struct,dim=1)
          if (id.gt.size_now) then
-            size_new=id
+            size_new = max(id, nstruct_, nint(real(size_now,WP)*coeff_up))
             allocate(tmp(size_new))
             tmp(1:nstruct_)=this%struct
             tmp(nstruct_+1:)%parent=0
