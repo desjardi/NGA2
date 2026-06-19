@@ -313,7 +313,17 @@ contains
       call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,vof%VF)
 
       ! Compute structure statistics
-      call cclabel%compute_stats(vof%VF,stats)
+      compute_stats: block 
+         type(amrdata) :: Q
+         real(WP) :: rhoG = 1.0_WP
+         real(WP) :: sigma = 1.0_WP
+         call Q%initialize(amr,name='Q',ncomp=3,ng=vof%nover);! this%id%parent=>this
+         call Q%register() ! Update with regriding
+         call Q%reset() ! Update with current grids
+         call Q%setval(0.0_WP)
+      
+         call cclabel%compute_stats(vof%VF,Q,rhoG,sigma, stats)
+      end block compute_stats
 
       print_stats: block
          integer :: n 
