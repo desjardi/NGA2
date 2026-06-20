@@ -1,0 +1,57 @@
+# AMR grid (2D: nz=1)
+Base nx:   32
+Base ny:   32
+Base nz:   1
+Max level: 4
+
+# Regridding parameters
+Regrid nsteps:     10
+Tagging Re:        10
+Tagging Rho:       0.1
+Tagging VF:        0.1
+
+# EoS
+Gamma: 1.4
+
+# Quiescent ambient gas (reference T0=1 sets Cv from p0,rho0)
+Ambient pressure:  1.0
+Ambient density:   1.0
+
+# Isothermal degassing source (injected into open pores)
+Source rate:         0.005   # per unit SURFACE AREA now (rate = src_mdot*|grad VFf|); ~1/50 of old volumetric -- TUNE
+Source temperature:  5.0     # hot gas (x ambient T0=1); e_inj = Cv*Tsrc
+Source VF threshold: 0.5     # inject only where fluid fraction exceeds this
+
+# Viscous parameters
+Reynolds number:   1e4
+Prandtl number:    0.71
+
+# Solid pellet (peridynamics porous disk)
+Material density:  10.0
+Elastic modulus:   20.0
+Poisson ratio:     0.25
+Element size:      0.0125
+Disk radius:       1.0
+Number of pores:   30
+Pore radius min:   0.05
+Pore radius max:   0.10
+
+# Coupling direction switches (absent -> fully coupled)
+Couple solid to fluid: .true.
+Couple fluid to solid: .true.
+Critical energy:   1.0e-3      # G_c-derived brittle s0 (overridden by Failure stretch below if set)
+Failure stretch:   0.5         # ductile: bonds tolerate 50% stretch before tearing (overrides G_c s0; auto-sizes search radius)
+Relaxation time:   0.1         # Maxwell tau: small=ductile/viscous flow (bubbles), large/omit=brittle (De=tau/t_load)
+Relaxation fraction: 1.0       # SLS lambda: 1=pure Maxwell (full flow), <1 keeps long-term elastic stiffness
+#Horizon:          0.0377    # default is 3.0125*Element size
+#Gravity:          0 0 0
+
+# Time integration
+Use projection: .false.   # 2D must run explicit
+Subiterations:  2
+Max dt:   0.5e-2
+Max CFL:  0.75
+Max time: 5
+
+# Output
+Output period: 0.05

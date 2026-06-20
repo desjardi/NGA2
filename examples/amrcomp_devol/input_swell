@@ -1,0 +1,62 @@
+# DEMO CASE B -- SWELLING + PROGRESSIVE RELEASE, low Deborah number
+# Differs from input_brittle ONLY in the material response (Relaxation time +
+# Failure stretch) -> same loading, ductile regime. tau=0.1 => matrix flows;
+# failure stretch 0.3 => flows then tears (the knob for *release*: larger=oozes
+# forever, smaller=tears early/brittle-ish). Expect swelling then localized
+# surface venting; nb_broken climbs gradually/stepwise.
+
+# AMR grid (2D: nz=1)
+Base nx:   32
+Base ny:   32
+Base nz:   1
+Max level: 4
+
+# Regridding parameters
+Regrid nsteps:     10
+Tagging Re:        10
+Tagging Rho:       0.1
+Tagging VF:        0.1
+
+# EoS
+Gamma: 1.4
+
+# Quiescent ambient gas (reference T0=1 sets Cv from p0,rho0)
+Ambient pressure:  1.0
+Ambient density:   1.0
+
+# Isothermal degassing source (injected into open pores)
+Source rate:         0.02    # per unit SURFACE AREA (rate = src_mdot*|grad VFf|); ~1/50 of old volumetric -- TUNE
+Source temperature:  5.0     # hot gas (x ambient T0=1); e_inj = Cv*Tsrc
+Source VF threshold: 0.5     # inject only where fluid fraction exceeds this
+
+# Viscous parameters
+Reynolds number:   1e4
+Prandtl number:    0.71
+
+# Solid pellet (peridynamics porous disk)
+Material density:  10.0
+Elastic modulus:   20.0
+Poisson ratio:     0.25
+Element size:      0.0125
+Disk radius:       1.0
+Number of pores:   55
+Pore radius min:   0.03
+Pore radius max:   0.08
+
+# Coupling direction switches (absent -> fully coupled)
+Couple solid to fluid: .true.
+Couple fluid to solid: .true.
+Critical energy:   1.0e-3      # (overridden by Failure stretch below)
+Failure stretch:   0.3         # ductile: flows then tears -- the *release* knob
+Relaxation time:   0.1         # Maxwell tau: ductile/viscous flow (low De)
+Relaxation fraction: 1.0       # SLS lambda: 1=pure Maxwell (full flow)
+
+# Time integration
+Use projection: .false.   # 2D must run explicit
+Subiterations:  2
+Max dt:   0.5e-2
+Max CFL:  0.75
+Max time: 8
+
+# Output
+Output period: 0.05

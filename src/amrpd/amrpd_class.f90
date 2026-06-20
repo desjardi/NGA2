@@ -68,7 +68,7 @@ module amrpd_class
    end type part
 
    !> Bond struct -- must match C++ Particle<4,5> memory layout:
-   !> pos[3], rdata[4], idcpu, idata[5]
+   !> pos[3], rdata[5], idcpu, idata[5]
    !> pos is the position of the LOWER-GID endpoint (ownership invariant).
    type, bind(C), public :: bond
       real(c_double) :: pos(3)                  !< AMReX-managed; = pos(lower-GID endpoint)
@@ -76,6 +76,7 @@ module amrpd_class
       real(c_double) :: w                       !< rdata[1]: cached influence weight
       real(c_double) :: damage                  !< rdata[2]: scalar damage (0=intact, 1=broken)
       real(c_double) :: hist1                   !< rdata[3]: packed periodic image offset (n_x,n_y,n_z) of the higher endpoint
+      real(c_double) :: e_v                     !< rdata[4]: inelastic (Maxwell) deviatoric bond stretch
       integer(c_int64_t), private :: idcpu      !< AMReX packed id+cpu of this bond
       integer(c_int) :: id_lo_lo                !< idata[0]: low  32 bits of lower-GID endpoint idcpu
       integer(c_int) :: id_lo_hi                !< idata[1]: high 32 bits
@@ -402,6 +403,9 @@ module amrpd_class
       real(WP) :: rho             = 0.0_WP      !< Material density
       real(WP) :: crit_energy     = 0.0_WP      !< Critical energy release rate G_c
       real(WP) :: s0              = huge(1.0_WP)!< Critical bond stretch (set by bond_init from G_c if >0; huge() = no damage)
+      real(WP) :: tau             = huge(1.0_WP)!< Maxwell deviatoric relaxation time (huge = purely elastic, no viscoplastic flow)
+      real(WP) :: visc_lambda     = 1.0_WP      !< SLS relaxing fraction [0,1] (1 = pure Maxwell/full flow; <1 keeps long-term elastic stiffness)
+      real(WP) :: fail_stretch    = huge(1.0_WP)!< Direct failure-stretch override (huge = use G_c-derived s0; finite = ductile, decoupled from G_c)
       real(WP) :: dV              = 0.0_WP      !< Element (representative) volume
 
       !> Short-range contact (soft-sphere model ported from amrlpt%collide).
@@ -477,6 +481,7 @@ module amrpd_class
       real(WP) :: CFLp=0.0_WP                                  !< convective: max(|v_d|) * dt / dp -- binds, limit 0.1 (scaled by 5)
       real(WP) :: CFLe=0.0_WP                                  !< elastic-wave: c_p * dt / dp -- binds, limit 0.5
       real(WP) :: CFLc=0.0_WP                                  !< contact: dt / tau_col -- diagnostic only, does not bind dt
+      real(WP) :: CFLv=0.0_WP                                  !< viscous: dt / tau -- diagnostic only (exponential relaxation is unconditionally stable)
 
    contains
       ! Lifecycle
@@ -1439,6 +1444,22 @@ contains
          K_bulk=this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
          this%s0=sqrt(5.0_WP*this%crit_energy/(9.0_WP*K_bulk*this%delta))
       end if
+      ! Direct failure-stretch override: decouples rupture from the brittle G_c
+      ! value (large -> ductile). Wins over the G_c-derived s0 when set.
+      if (this%fail_stretch.lt.huge(1.0_WP)) this%s0=this%fail_stretch
+
+      ! Search radius MUST cover the largest a LIVE bond can stretch (= failure
+      ! stretch s0): a bond stretched beyond that has already ruptured, so its
+      ! partner is never needed. This keeps every live bond's partner inside the
+      ! ghost layer under large (ductile) deformation. Enlarge only; never shrink
+      ! (and the radius is fixed for the run -- the AMReX neighbor mask is sized
+      ! on the first fill_ghosts below). 1.2 = one-step drift margin.
+      if (this%s0.lt.huge(1.0_WP)) then
+         this%search_radius=max(this%search_radius,(1.0_WP+this%s0)*this%delta*1.2_WP)
+      else if (this%tau.lt.huge(1.0_WP)) then
+         call log('[amrpd] WARNING: viscoelastic flow (finite tau) with no failure stretch (s0=huge) &
+         &-- bonds may stretch beyond search_radius and be silently dropped; set Critical energy or Failure stretch.')
+      end if
 
       ! Short-range contact: only contact_dist gets defaulted here. The
       ! collision duration tau_col is set fresh each step inside compute_contact
@@ -1513,6 +1534,7 @@ contains
                      blist(nb_local)%w      =w(dist,this%delta)
                      blist(nb_local)%damage =0.0_WP
                      blist(nb_local)%hist1  =real((nx+128)+(ny+128)*256+(nz+128)*65536,WP)
+                     blist(nb_local)%e_v    =0.0_WP
                      parts_lo=transfer(key_i,parts_lo)
                      parts_hi=transfer(key_j,parts_hi)
                      blist(nb_local)%id_lo_lo=parts_lo(1)
@@ -1825,11 +1847,12 @@ contains
    !>   1) called fill_ghosts(search_radius) with current positions
    !>   2) called compute_dilatation
    !>   3) called update_ghosts so aux-buffer dil/mw match current owner values
-   subroutine compute_force(this)
+   subroutine compute_force(this,dt)
       use amrex_amr_module, only: amrex_mfiter
       use amrpd_hash_class, only: gid_hash
       implicit none
       class(amrpd), intent(inout) :: this
+      real(WP), intent(in) :: dt
       type(amrex_mfiter) :: mfi
       type(part), dimension(:), pointer :: p,pg
       type(bond), dimension(:), pointer :: b
@@ -1839,7 +1862,7 @@ contains
       integer(c_int64_t), allocatable :: keys(:)
       integer(c_int64_t) :: key_lo,key_hi
       integer(c_int) :: parts(2)
-      real(WP) :: K_bulk,mu_shear,c_dil,c_iso
+      real(WP) :: K_bulk,mu_shear,coef_vol,coef_dev,e_d_avg,decay
       real(WP) :: dx,dy,dz,curr_len,e_bond,Lx,Ly,Lz
       real(WP), dimension(3) :: xlo,xhi
       real(WP) :: t_lo,t_hi,pair_mag
@@ -1850,8 +1873,8 @@ contains
       ! Elastic moduli from (E, nu)
       K_bulk  =this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
       mu_shear=this%elastic_modulus/(2.0_WP*(1.0_WP+this%poisson_ratio))
-      c_dil   =3.0_WP*K_bulk-5.0_WP*mu_shear
-      c_iso   =15.0_WP*mu_shear
+      coef_vol=3.0_WP*K_bulk                       ! volumetric (elastic)
+      coef_dev=15.0_WP*mu_shear                    ! deviatoric (carries Maxwell relaxation; e_v=0 recovers LPS)
 
       ! Zero F_bond on every owned particle AND every ghost in the aux buffer.
       ! Also zero damage on GHOSTS only (owned damage is accumulated state and
@@ -1935,13 +1958,17 @@ contains
                end if
                ! Force-density magnitudes along M_hat at each endpoint
                ! (uses each owner's own theta and m_w; e is symmetric)
+               ! Volumetric part elastic; deviatoric extension e_d=e-theta*d0/3 carries
+               ! the Maxwell inelastic stretch e_v. e_v=0 -> identical to the LPS form.
                if (p(lid_lo)%mw.gt.0.0_WP) then
-                  t_lo=b(ib)%w/p(lid_lo)%mw*(c_dil*p(lid_lo)%dil*b(ib)%d0+c_iso*e_bond)
+                  t_lo=b(ib)%w/p(lid_lo)%mw*(coef_vol*p(lid_lo)%dil*b(ib)%d0 &
+                  &    +coef_dev*(e_bond-p(lid_lo)%dil*b(ib)%d0/3.0_WP-this%visc_lambda*b(ib)%e_v))
                else
                   t_lo=0.0_WP
                end if
                if (p(lid_hi)%mw.gt.0.0_WP) then
-                  t_hi=b(ib)%w/p(lid_hi)%mw*(c_dil*p(lid_hi)%dil*b(ib)%d0+c_iso*e_bond)
+                  t_hi=b(ib)%w/p(lid_hi)%mw*(coef_vol*p(lid_hi)%dil*b(ib)%d0 &
+                  &    +coef_dev*(e_bond-p(lid_hi)%dil*b(ib)%d0/3.0_WP-this%visc_lambda*b(ib)%e_v))
                else
                   t_hi=0.0_WP
                end if
@@ -1971,6 +1998,15 @@ contains
                      pg(lid_hi-int(np_valid))%F_bond(2)=pg(lid_hi-int(np_valid))%F_bond(2)-fy
                      pg(lid_hi-int(np_valid))%F_bond(3)=pg(lid_hi-int(np_valid))%F_bond(3)-fz
                   end if
+               end if
+               ! Maxwell relaxation of the bond's inelastic deviatoric stretch
+               ! (owner-local; tau=huge -> e_v frozen -> purely elastic LPS).
+               ! Exact exponential integration (Peridigm-style) -> unconditionally
+               ! stable for any dt, so no viscous CFL constraint.
+               if (this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP)) then
+                  e_d_avg=e_bond-0.5_WP*(p(lid_lo)%dil+p(lid_hi)%dil)*b(ib)%d0/3.0_WP
+                  decay=exp(-dt/this%tau)
+                  b(ib)%e_v=e_d_avg*(1.0_WP-decay)+b(ib)%e_v*decay
                end if
             end do
             call hash%finalize()
@@ -2316,7 +2352,7 @@ contains
       call this%fill_ghosts(radius=this%search_radius)
       call this%compute_dilatation()
       call this%update_ghosts()
-      call this%compute_force()
+      call this%compute_force(dt)
       call this%compute_contact(dt=dt,Gib=Gib,Gibcomp=Gibcomp)
       call this%clear_ghosts()
 
@@ -2423,6 +2459,11 @@ contains
       end if
       this%CFLc=dt/tau_eff
 
+      ! Viscous (Maxwell) relaxation: dt/tau -- DIAGNOSTIC ONLY. The relaxation
+      ! uses exact exponential integration (unconditionally stable), so it does
+      ! NOT bind dt; reported for monitoring how resolved tau is.
+      this%CFLv=0.0_WP
+      if (this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP)) this%CFLv=dt/this%tau
       ! Combine BINDING constraints only. Convective has tighter raw limit
       ! (0.1) than wave (0.5); scale by 5 to bind against the same Max CFL.
       cfl=max(CFL_scale_conv*this%CFLp,this%CFLe)

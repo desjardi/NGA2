@@ -7,8 +7,8 @@
 //               * 1  extra int  : flag
 //               * setEnableInverse(true) so fillNeighbors records inverse_tags,
 //                 enabling sumNeighbors for ghost-to-owner force/state reductions
-//   - AMRPDBC: ParticleContainer<4,5> for bonds (no neighbor machinery)
-//               * 4 extra reals: d0, w, damage, hist1 (reserved)
+//   - AMRPDBC: ParticleContainer<5,5> for bonds (no neighbor machinery)
+//               * 5 extra reals: d0, w, damage, hist1, e_v (Maxwell inelastic stretch)
 //               * 5 extra ints : id_lo_lo, id_lo_hi, id_hi_lo, id_hi_hi, alive
 //
 // Bonds are one-sided: each physical bond is stored once, with bond.pos anchored
@@ -31,7 +31,7 @@ using namespace amrex;
 // Layout constants -- MUST match Fortran AMRPD_NREAL_PART/NINT_PART/NREAL_BOND/NINT_BOND
 #define AMRPD_NREAL_PART 13
 #define AMRPD_NINT_PART   1
-#define AMRPD_NREAL_BOND  4
+#define AMRPD_NREAL_BOND  5
 #define AMRPD_NINT_BOND   5
 
 namespace {
