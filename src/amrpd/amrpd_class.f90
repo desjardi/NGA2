@@ -75,7 +75,7 @@ module amrpd_class
       real(c_double) :: d0                      !< rdata[0]: reference distance
       real(c_double) :: w                       !< rdata[1]: cached influence weight
       real(c_double) :: damage                  !< rdata[2]: scalar damage (0=intact, 1=broken)
-      real(c_double) :: hist1                   !< rdata[3]: reserved for future material history
+      real(c_double) :: hist1                   !< rdata[3]: packed periodic image offset (n_x,n_y,n_z) of the higher endpoint
       integer(c_int64_t), private :: idcpu      !< AMReX packed id+cpu of this bond
       integer(c_int) :: id_lo_lo                !< idata[0]: low  32 bits of lower-GID endpoint idcpu
       integer(c_int) :: id_lo_hi                !< idata[1]: high 32 bits
@@ -515,8 +515,8 @@ module amrpd_class
       procedure :: tagging
       ! Particle volume fraction + AMR tagging
       procedure :: update_VF                         !< Compute VF from particle positions (trilinear deposit)
-      procedure, private :: process_deposit          !< Post-process a deposited field (extensive -> intensive + C/F transfers)
-      procedure, private :: filter                   !< Optional explicit-diffusion smoothing of a cell-centered amrdata
+      procedure :: process_deposit                   !< Post-process a deposited field (extensive -> intensive + C/F transfers; public: also used on driver-deposited fields)
+      procedure :: filter                            !< Explicit-diffusion smoothing of a cell-centered amrdata (public: also used on driver-deposited fields)
       ! Physics -- STUBBED in skeleton
       procedure :: bond_init
       procedure :: compute_dilatation
@@ -1463,14 +1463,15 @@ contains
          type(bond), dimension(:), allocatable, target :: blist
          integer(I8) :: np_total,np_valid,i,j
          integer(I8) :: nb_local,ncap
-         integer :: lvl
+         integer :: lvl,nx,ny,nz
          integer(c_int64_t) :: key_i,key_j
          integer(c_int) :: parts_lo(2),parts_hi(2)
-         real(WP) :: r2,dist
+         real(WP) :: r2,dist,Lx,Ly,Lz
 
          ncap=1024_I8
          allocate(blist(ncap))
          nb_local=0_I8
+         Lx=this%amr%xhi-this%amr%xlo; Ly=this%amr%yhi-this%amr%ylo; Lz=this%amr%zhi-this%amr%zlo
 
          do lvl=0,this%amr%clvl()
             call this%mfiter_build(lvl,mfi)
@@ -1484,8 +1485,10 @@ contains
                      r2=sum((p(j)%pos-p(i)%pos)**2)
                      if (r2.gt.r2_cut) cycle
                      key_j=p(j)%idcpu
-                     ! Lower-GID owns the bond. Skip when i is NOT lower.
-                     if (key_i.ge.key_j) cycle
+                     ! Lower-GID owns the bond. Skip when i is strictly higher;
+                     ! equal ids are kept so a particle bonds to its own periodic
+                     ! images (self-image bonds when period < horizon).
+                     if (key_i.gt.key_j) cycle
                      ! Grow buffer if needed
                      nb_local=nb_local+1_I8
                      if (nb_local.gt.ncap) then
@@ -1497,13 +1500,19 @@ contains
                            call move_alloc(tmp,blist)
                         end block grow
                      end if
-                     ! Stamp the bond
+                     ! Stamp the bond. hist1 packs the higher endpoint's periodic
+                     ! image offset (n_x,n_y,n_z) so the exact bonded image is
+                     ! reconstructed at force time instead of guessed by proximity.
+                     nx=0; ny=0; nz=0
+                     if (this%amr%xper) nx=floor((p(j)%pos(1)-this%amr%xlo)/Lx)
+                     if (this%amr%yper) ny=floor((p(j)%pos(2)-this%amr%ylo)/Ly)
+                     if (this%amr%zper) nz=floor((p(j)%pos(3)-this%amr%zlo)/Lz)
                      dist=sqrt(r2)
                      blist(nb_local)%pos    =p(i)%pos
                      blist(nb_local)%d0     =dist
                      blist(nb_local)%w      =w(dist,this%delta)
                      blist(nb_local)%damage =0.0_WP
-                     blist(nb_local)%hist1  =0.0_WP
+                     blist(nb_local)%hist1  =real((nx+128)+(ny+128)*256+(nz+128)*65536,WP)
                      parts_lo=transfer(key_i,parts_lo)
                      parts_hi=transfer(key_j,parts_hi)
                      blist(nb_local)%id_lo_lo=parts_lo(1)
@@ -1610,12 +1619,16 @@ contains
                      pg(lid_lo-int(np_valid))%mw =pg(lid_lo-int(np_valid))%mw +contrib
                      pg(lid_lo-int(np_valid))%nb0=pg(lid_lo-int(np_valid))%nb0+1.0_WP
                   end if
-                  if (lid_hi.le.int(np_valid)) then
-                     p(lid_hi)%mw =p(lid_hi)%mw +contrib
-                     p(lid_hi)%nb0=p(lid_hi)%nb0+1.0_WP
-                  else
-                     pg(lid_hi-int(np_valid))%mw =pg(lid_hi-int(np_valid))%mw +contrib
-                     pg(lid_hi-int(np_valid))%nb0=pg(lid_hi-int(np_valid))%nb0+1.0_WP
+                  ! Self-image bonds (id_lo==id_hi) scatter to lo only; the
+                  ! opposite-side self-image bond supplies the hi contribution.
+                  if (key_lo.ne.key_hi) then
+                     if (lid_hi.le.int(np_valid)) then
+                        p(lid_hi)%mw =p(lid_hi)%mw +contrib
+                        p(lid_hi)%nb0=p(lid_hi)%nb0+1.0_WP
+                     else
+                        pg(lid_hi-int(np_valid))%mw =pg(lid_hi-int(np_valid))%mw +contrib
+                        pg(lid_hi-int(np_valid))%nb0=pg(lid_hi-int(np_valid))%nb0+1.0_WP
+                     end if
                   end if
                end do
                call hash%finalize()
@@ -1677,11 +1690,14 @@ contains
       type(bond), dimension(:), pointer :: b
       type(gid_hash) :: hash
       integer(I8) :: np_total,np_valid,ng,nb_tile,n,ib
-      integer :: lvl,np_int,lid_lo,lid_hi
+      integer :: lvl,np_int,lid_lo,lid_hi,nx,ny,nz,ip
       integer(c_int64_t), allocatable :: keys(:)
       integer(c_int64_t) :: key_lo,key_hi
       integer(c_int) :: parts(2)
-      real(WP) :: dx,dy,dz,curr_len,e_bond,contrib
+      real(WP) :: dx,dy,dz,curr_len,e_bond,contrib,Lx,Ly,Lz
+      real(WP), dimension(3) :: xlo,xhi
+
+      Lx=this%amr%xhi-this%amr%xlo; Ly=this%amr%yhi-this%amr%ylo; Lz=this%amr%zhi-this%amr%zlo
 
       ! Zero dil on every owned particle AND every ghost in the aux buffer.
       do lvl=0,this%amr%clvl()
@@ -1722,19 +1738,19 @@ contains
                key_lo=transfer(parts,0_c_int64_t)
                parts(1)=b(ib)%id_hi_lo; parts(2)=b(ib)%id_hi_hi
                key_hi=transfer(parts,0_c_int64_t)
-               ! Periodic-image-aware lookup: the bond's pos is the (wrapped)
-               ! lower-GID position, so use it as the anchor for lid_lo. Then
-               ! use lid_lo's pos as the anchor for lid_hi -- this picks the
-               ! periodic image of the upper-GID closest to the lower endpoint,
-               ! giving a correct (minimum-image) bond vector below.
-               lid_lo=pick_image(key_lo,b(ib)%pos)
-               if (lid_lo.lt.1) cycle
-               lid_hi=pick_image(key_hi,p(lid_lo)%pos)
-               if (lid_hi.lt.1) cycle
+               ! Resolve endpoint LIDs (any copy; the scatter is folded to owners
+               ! by sum_ghosts). The exact bonded image of the higher endpoint is
+               ! reconstructed from the stored periodic offset, not guessed.
+               lid_lo=hash%lookup(key_lo)
+               lid_hi=hash%lookup(key_hi)
+               if (lid_lo.lt.1.or.lid_hi.lt.1) cycle
+               ip=nint(b(ib)%hist1)
+               nx=mod(ip,256)-128; ny=mod(ip/256,256)-128; nz=ip/65536-128
+               xlo=canon(p(lid_lo)%pos)
+               xhi=canon(p(lid_hi)%pos)
+               xhi(1)=xhi(1)+real(nx,WP)*Lx; xhi(2)=xhi(2)+real(ny,WP)*Ly; xhi(3)=xhi(3)+real(nz,WP)*Lz
                ! Current deformed bond length and extension
-               dx=p(lid_hi)%pos(1)-p(lid_lo)%pos(1)
-               dy=p(lid_hi)%pos(2)-p(lid_lo)%pos(2)
-               dz=p(lid_hi)%pos(3)-p(lid_lo)%pos(3)
+               dx=xhi(1)-xlo(1); dy=xhi(2)-xlo(2); dz=xhi(3)-xlo(3)
                curr_len=sqrt(dx*dx+dy*dy+dz*dz)
                e_bond=curr_len-b(ib)%d0
                contrib=b(ib)%w*b(ib)%d0*e_bond*this%dV
@@ -1743,10 +1759,13 @@ contains
                else
                   pg(lid_lo-int(np_valid))%dil=pg(lid_lo-int(np_valid))%dil+contrib
                end if
-               if (lid_hi.le.int(np_valid)) then
-                  p(lid_hi)%dil=p(lid_hi)%dil+contrib
-               else
-                  pg(lid_hi-int(np_valid))%dil=pg(lid_hi-int(np_valid))%dil+contrib
+               ! Self-image bonds scatter to lo only (see compute_mw rationale)
+               if (key_lo.ne.key_hi) then
+                  if (lid_hi.le.int(np_valid)) then
+                     p(lid_hi)%dil=p(lid_hi)%dil+contrib
+                  else
+                     pg(lid_hi-int(np_valid))%dil=pg(lid_hi-int(np_valid))%dil+contrib
+                  end if
                end if
             end do
             call hash%finalize()
@@ -1775,35 +1794,17 @@ contains
 
    contains
 
-      !> Periodic-image-aware hash lookup. With periodic BCs, a particle within
-      !> search_radius of a periodic boundary appears multiple times in the
-      !> per-tile hash (once at owned position, once as a periodic-image ghost
-      !> with shifted position; same idcpu). Walk all duplicates and return
-      !> the LID whose position is closest to the supplied anchor. Falls back
-      !> to plain lookup when no duplicates exist (cheap: n_dup=1 path).
-      !> Returns -1 on key miss.
-      function pick_image(key,anchor) result(lid)
-         integer(c_int64_t), intent(in) :: key
-         real(WP), dimension(3), intent(in) :: anchor
-         integer :: lid
-         integer :: ifirst,ndup,kk,cand
-         real(WP) :: dxh,dyh,dzh,r2,r2_min
-         call hash%lookup_range(key,ifirst,ndup)
-         if (ndup.le.0) then; lid=-1; return; end if
-         if (ndup.eq.1) then; lid=hash%vals(ifirst); return; end if
-         r2_min=huge(1.0_WP); lid=-1
-         do kk=1,ndup
-            cand=hash%vals(ifirst+kk-1)
-            dxh=p(cand)%pos(1)-anchor(1)
-            dyh=p(cand)%pos(2)-anchor(2)
-            dzh=p(cand)%pos(3)-anchor(3)
-            r2=dxh*dxh+dyh*dyh+dzh*dzh
-            if (r2.lt.r2_min) then
-               r2_min=r2
-               lid=cand
-            end if
-         end do
-      end function pick_image
+      !> Wrap a position into the base domain [lo,hi) along periodic directions.
+      !> Used with the per-bond stored offset to reconstruct the exact bonded
+      !> periodic image (host-associated Lx/Ly/Lz).
+      function canon(pos) result(c)
+         real(WP), dimension(3), intent(in) :: pos
+         real(WP), dimension(3) :: c
+         c=pos
+         if (this%amr%xper) c(1)=pos(1)-Lx*floor((pos(1)-this%amr%xlo)/Lx)
+         if (this%amr%yper) c(2)=pos(2)-Ly*floor((pos(2)-this%amr%ylo)/Ly)
+         if (this%amr%zper) c(3)=pos(3)-Lz*floor((pos(3)-this%amr%zlo)/Lz)
+      end function canon
 
    end subroutine compute_dilatation
 
@@ -1834,14 +1835,17 @@ contains
       type(bond), dimension(:), pointer :: b
       type(gid_hash) :: hash
       integer(I8) :: np_total,np_valid,ng,nb_tile,n,ib
-      integer :: lvl,np_int,lid_lo,lid_hi
+      integer :: lvl,np_int,lid_lo,lid_hi,nx,ny,nz,ip
       integer(c_int64_t), allocatable :: keys(:)
       integer(c_int64_t) :: key_lo,key_hi
       integer(c_int) :: parts(2)
       real(WP) :: K_bulk,mu_shear,c_dil,c_iso
-      real(WP) :: dx,dy,dz,curr_len,e_bond
+      real(WP) :: dx,dy,dz,curr_len,e_bond,Lx,Ly,Lz
+      real(WP), dimension(3) :: xlo,xhi
       real(WP) :: t_lo,t_hi,pair_mag
       real(WP) :: fx,fy,fz,mhat_x,mhat_y,mhat_z
+
+      Lx=this%amr%xhi-this%amr%xlo; Ly=this%amr%yhi-this%amr%ylo; Lz=this%amr%zhi-this%amr%zlo
 
       ! Elastic moduli from (E, nu)
       K_bulk  =this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
@@ -1889,15 +1893,18 @@ contains
                key_lo=transfer(parts,0_c_int64_t)
                parts(1)=b(ib)%id_hi_lo; parts(2)=b(ib)%id_hi_hi
                key_hi=transfer(parts,0_c_int64_t)
-               ! Periodic-image-aware lookup (see compute_dilatation for rationale)
-               lid_lo=pick_image(key_lo,b(ib)%pos)
-               if (lid_lo.lt.1) cycle
-               lid_hi=pick_image(key_hi,p(lid_lo)%pos)
-               if (lid_hi.lt.1) cycle
+               ! Resolve LIDs and reconstruct the exact bonded image from the
+               ! stored periodic offset (see compute_dilatation)
+               lid_lo=hash%lookup(key_lo)
+               lid_hi=hash%lookup(key_hi)
+               if (lid_lo.lt.1.or.lid_hi.lt.1) cycle
+               ip=nint(b(ib)%hist1)
+               nx=mod(ip,256)-128; ny=mod(ip/256,256)-128; nz=ip/65536-128
+               xlo=canon(p(lid_lo)%pos)
+               xhi=canon(p(lid_hi)%pos)
+               xhi(1)=xhi(1)+real(nx,WP)*Lx; xhi(2)=xhi(2)+real(ny,WP)*Ly; xhi(3)=xhi(3)+real(nz,WP)*Lz
                ! Deformed bond vector, length, extension
-               dx=p(lid_hi)%pos(1)-p(lid_lo)%pos(1)
-               dy=p(lid_hi)%pos(2)-p(lid_lo)%pos(2)
-               dz=p(lid_hi)%pos(3)-p(lid_lo)%pos(3)
+               dx=xhi(1)-xlo(1); dy=xhi(2)-xlo(2); dz=xhi(3)-xlo(3)
                curr_len=sqrt(dx*dx+dy*dy+dz*dz)
                if (curr_len.le.0.0_WP) cycle
                e_bond=curr_len-b(ib)%d0
@@ -1915,12 +1922,14 @@ contains
                   b(ib)%damage=1.0_WP
                   ! Lower-GID is owned on this rank (bond is co-located with it)
                   if (p(lid_lo)%nb0.gt.0.0_WP) p(lid_lo)%damage=p(lid_lo)%damage+1.0_WP/p(lid_lo)%nb0
-                  ! Upper-GID is owned-or-ghost. Route the increment accordingly.
-                  if (lid_hi.le.int(np_valid)) then
-                     if (p(lid_hi)%nb0.gt.0.0_WP) p(lid_hi)%damage=p(lid_hi)%damage+1.0_WP/p(lid_hi)%nb0
-                  else
-                     if (pg(lid_hi-int(np_valid))%nb0.gt.0.0_WP) &
-                     &  pg(lid_hi-int(np_valid))%damage=pg(lid_hi-int(np_valid))%damage+1.0_WP/pg(lid_hi-int(np_valid))%nb0
+                  ! Upper-GID (skip for self-image bonds; lo already counted it)
+                  if (key_lo.ne.key_hi) then
+                     if (lid_hi.le.int(np_valid)) then
+                        if (p(lid_hi)%nb0.gt.0.0_WP) p(lid_hi)%damage=p(lid_hi)%damage+1.0_WP/p(lid_hi)%nb0
+                     else
+                        if (pg(lid_hi-int(np_valid))%nb0.gt.0.0_WP) &
+                        &  pg(lid_hi-int(np_valid))%damage=pg(lid_hi-int(np_valid))%damage+1.0_WP/pg(lid_hi-int(np_valid))%nb0
+                     end if
                   end if
                   cycle
                end if
@@ -1950,14 +1959,18 @@ contains
                   pg(lid_lo-int(np_valid))%F_bond(2)=pg(lid_lo-int(np_valid))%F_bond(2)+fy
                   pg(lid_lo-int(np_valid))%F_bond(3)=pg(lid_lo-int(np_valid))%F_bond(3)+fz
                end if
-               if (lid_hi.le.int(np_valid)) then
-                  p(lid_hi)%F_bond(1)=p(lid_hi)%F_bond(1)-fx
-                  p(lid_hi)%F_bond(2)=p(lid_hi)%F_bond(2)-fy
-                  p(lid_hi)%F_bond(3)=p(lid_hi)%F_bond(3)-fz
-               else
-                  pg(lid_hi-int(np_valid))%F_bond(1)=pg(lid_hi-int(np_valid))%F_bond(1)-fx
-                  pg(lid_hi-int(np_valid))%F_bond(2)=pg(lid_hi-int(np_valid))%F_bond(2)-fy
-                  pg(lid_hi-int(np_valid))%F_bond(3)=pg(lid_hi-int(np_valid))%F_bond(3)-fz
+               ! Self-image bonds apply +f to lo only; the opposite-side self-image
+               ! bond supplies the reaction (no -f onto the same owner DOF).
+               if (key_lo.ne.key_hi) then
+                  if (lid_hi.le.int(np_valid)) then
+                     p(lid_hi)%F_bond(1)=p(lid_hi)%F_bond(1)-fx
+                     p(lid_hi)%F_bond(2)=p(lid_hi)%F_bond(2)-fy
+                     p(lid_hi)%F_bond(3)=p(lid_hi)%F_bond(3)-fz
+                  else
+                     pg(lid_hi-int(np_valid))%F_bond(1)=pg(lid_hi-int(np_valid))%F_bond(1)-fx
+                     pg(lid_hi-int(np_valid))%F_bond(2)=pg(lid_hi-int(np_valid))%F_bond(2)-fy
+                     pg(lid_hi-int(np_valid))%F_bond(3)=pg(lid_hi-int(np_valid))%F_bond(3)-fz
+                  end if
                end if
             end do
             call hash%finalize()
@@ -1973,29 +1986,16 @@ contains
 
    contains
 
-      !> Periodic-image-aware hash lookup (see compute_dilatation for rationale).
-      function pick_image(key,anchor) result(lid)
-         integer(c_int64_t), intent(in) :: key
-         real(WP), dimension(3), intent(in) :: anchor
-         integer :: lid
-         integer :: ifirst,ndup,kk,cand
-         real(WP) :: dxh,dyh,dzh,r2,r2_min
-         call hash%lookup_range(key,ifirst,ndup)
-         if (ndup.le.0) then; lid=-1; return; end if
-         if (ndup.eq.1) then; lid=hash%vals(ifirst); return; end if
-         r2_min=huge(1.0_WP); lid=-1
-         do kk=1,ndup
-            cand=hash%vals(ifirst+kk-1)
-            dxh=p(cand)%pos(1)-anchor(1)
-            dyh=p(cand)%pos(2)-anchor(2)
-            dzh=p(cand)%pos(3)-anchor(3)
-            r2=dxh*dxh+dyh*dyh+dzh*dzh
-            if (r2.lt.r2_min) then
-               r2_min=r2
-               lid=cand
-            end if
-         end do
-      end function pick_image
+      !> Wrap a position into the base domain [lo,hi) along periodic directions
+      !> (see compute_dilatation). Host-associated Lx/Ly/Lz.
+      function canon(pos) result(c)
+         real(WP), dimension(3), intent(in) :: pos
+         real(WP), dimension(3) :: c
+         c=pos
+         if (this%amr%xper) c(1)=pos(1)-Lx*floor((pos(1)-this%amr%xlo)/Lx)
+         if (this%amr%yper) c(2)=pos(2)-Ly*floor((pos(2)-this%amr%ylo)/Ly)
+         if (this%amr%zper) c(3)=pos(3)-Lz*floor((pos(3)-this%amr%zlo)/Lz)
+      end function canon
 
    end subroutine compute_force
 

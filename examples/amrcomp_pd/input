@@ -1,0 +1,48 @@
+# AMR grid
+Base nx:   32
+Base ny:   32
+Base nz:   32         # 3D run (1 = quasi-2D)
+Max level: 5
+
+# Regridding parameters
+Regrid nsteps:     10
+Tagging Re:        10
+Tagging Rho:       0.1
+Tagging VF:        0.1
+
+# EoS parameters
+Gamma: 1.4
+
+# Shock parameters
+Mach number:     1.8
+Shock location: -0.6
+
+# Viscous parameters
+Reynolds number:   1e4
+Prandtl number:    0.71
+
+# Solid body (peridynamics)
+Material density:  10.0
+Elastic modulus:   20.0
+Poisson ratio:     0.25
+Element size:      0.0125
+Beam length:       1.0
+Beam thickness:    0.125
+Beam angle:        75.0
+
+# Coupling direction switches (absent -> fully coupled)
+Couple solid to fluid: .true.
+Couple fluid to solid: .true.
+Critical energy:   1.0e-3    # finite -> bonds can break; lower = more brittle
+#Horizon:          0.075     # default is 3.0125*Element size
+#Gravity:          0 0 0
+
+# Time integration
+Use projection: .false.   # all-Mach projection is 3D-only; 2D must run explicit
+Subiterations:  2
+Max dt:   0.5e-2
+Max CFL:  0.75
+Max time: 10
+
+# Output
+Output period: 0.1
