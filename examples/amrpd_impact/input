@@ -1,0 +1,72 @@
+# ============================================================================
+#  amrpd_impact -- PHASE 1: pure-PD sphere(disk) -> PD wall impact.
+#  The multiphase fluid (amrmpcomp) is present but DEACTIVATED (its advance is
+#  wrapped in if(.false.)). Drop/shock are parked OUTSIDE the (shortened) domain
+#  so the frozen fluid IC is uniform gas -- harmless. Phase 2: re-enable the
+#  fluid block + add the drop + IB coupling.
+# ============================================================================
+
+# AMR grid
+Base nx:   32
+Base ny:   32
+Base nz:   1
+Max level: 5            # phase 1; original case uses 6 (bump for resolution)
+
+# Regridding parameters
+Regrid nsteps:      10
+Tag Reynolds value: 100
+Tag density error:  0.6
+Tag pressure error: 0.3
+Tag Ducros value:   0.5
+
+# Geometry: true (reflecting) wall BC shifted to x=-Wall thickness; PD wall in [-Wall thickness,0]
+Domain length:  20      # length unchanged; domain SHIFTED to [-Wall thickness, 20-Wall thickness] = [-1,19]
+Drop location:  25      # outside domain -> no drop in phase 1 (frozen fluid is uniform)
+Shock location: 24      # outside domain -> no shock in phase 1
+Wall BC:        slip
+
+# ---- PD solid bodies (clamped wall slab + incoming disk projectile) ----
+# Copper wall, viscoplastic, nondim by (rhoG2, Delta-u, p_ref=rhoG2*Delta-u^2=14.8 MPa)
+Material density:    1197.0    # rho_Cu/rho_ref = 8960/7.49
+Elastic modulus:     7900.0    # E_Cu/p_ref = 117 GPa / 14.8 MPa
+Poisson ratio:       0.34
+Yield stretch:       0.0013    # sigma_Y/E ~ 150 MPa / 117 GPa -> yields then flows plastically
+Relaxation time:     0.01      # viscoplastic flow rate (small -> near rate-independent)
+Relaxation fraction: 1.0       # full deviatoric plastic flow above yield
+Failure stretch:     0.3       # ductile: ~30% elongation before tearing
+#Critical energy:    1.0e-3    # unused (ductile failure via Failure stretch)
+Element size:       0.0125     # fine dx (L4)=0.0391 -> ~1.56x elem -> ~2.4 particles/fine cell (smooth VF)
+Tagging VF:         0.1
+# Wall: x in [0,Wall thickness], y in [-Wall half-height, +half]; back layer clamped
+Wall thickness:     1.0
+Wall half-height:   2.0
+# Disk: center (Disk location,0), radius Disk radius, moving -x at Impact velocity
+Disk radius:        0.5        # diameter 1 = drop diameter (the length scale)
+Disk location:      0.65       # start just above the wall: gap = 0.65 - 0.5 = 0.15 > horizon (0.075)
+Impact velocity:    0.33       # downscaled sqrt(rho_w/rho_Cu): copper disk -> water-drop energy/pressure (~2 GPa)
+
+# EOS parameters (fluid -- read at init, fluid stays frozen in phase 1)
+GammaG: 1.3
+GammaL: 1.43617
+Liquid pinf:      55.2625
+Liquid covolume:  0.003655
+Liquid cv:        2.22961
+Liquid qp:        7.1209
+Gas Mach number: 1.95
+Weber number:       3.69e5
+Reynolds number:    3e5
+Prandtl number:     0.71
+Viscosity ratio:    21.05
+Diffusivity ratio:  8.34
+Sutherland exponent:    1.5
+Sutherland temperature: 0.073
+
+# Time integration
+Max dt:   2e-3
+Max CFL:  0.75
+Max time: 10
+
+# Output
+Output period:     5e-2
+Checkpoint period: -1
+Restart from:

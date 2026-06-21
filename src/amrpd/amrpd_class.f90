@@ -406,6 +406,7 @@ module amrpd_class
       real(WP) :: tau             = huge(1.0_WP)!< Maxwell deviatoric relaxation time (huge = purely elastic, no viscoplastic flow)
       real(WP) :: visc_lambda     = 1.0_WP      !< SLS relaxing fraction [0,1] (1 = pure Maxwell/full flow; <1 keeps long-term elastic stiffness)
       real(WP) :: fail_stretch    = huge(1.0_WP)!< Direct failure-stretch override (huge = use G_c-derived s0; finite = ductile, decoupled from G_c)
+      real(WP) :: yield_stretch   = 0.0_WP      !< Viscoplastic yield strain (0 = pure Maxwell viscoelastic; >0 = elastic below yield, plastic flow above)
       real(WP) :: dV              = 0.0_WP      !< Element (representative) volume
 
       !> Short-range contact (soft-sphere model ported from amrlpt%collide).
@@ -1862,7 +1863,7 @@ contains
       integer(c_int64_t), allocatable :: keys(:)
       integer(c_int64_t) :: key_lo,key_hi
       integer(c_int) :: parts(2)
-      real(WP) :: K_bulk,mu_shear,coef_vol,coef_dev,e_d_avg,decay
+      real(WP) :: K_bulk,mu_shear,coef_vol,coef_dev,e_d_avg,decay,e_e,over
       real(WP) :: dx,dy,dz,curr_len,e_bond,Lx,Ly,Lz
       real(WP), dimension(3) :: xlo,xhi
       real(WP) :: t_lo,t_hi,pair_mag
@@ -1999,14 +2000,17 @@ contains
                      pg(lid_hi-int(np_valid))%F_bond(3)=pg(lid_hi-int(np_valid))%F_bond(3)-fz
                   end if
                end if
-               ! Maxwell relaxation of the bond's inelastic deviatoric stretch
+               ! Viscoplastic relaxation of the bond's inelastic deviatoric stretch
                ! (owner-local; tau=huge -> e_v frozen -> purely elastic LPS).
-               ! Exact exponential integration (Peridigm-style) -> unconditionally
-               ! stable for any dt, so no viscous CFL constraint.
+               ! Only the OVERSTRESS beyond the yield strain flows (Perzyna), with
+               ! exact exponential integration (unconditionally stable, no viscous
+               ! CFL). yield_stretch=0 reduces exactly to Maxwell viscoelasticity.
                if (this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP)) then
                   e_d_avg=e_bond-0.5_WP*(p(lid_lo)%dil+p(lid_hi)%dil)*b(ib)%d0/3.0_WP
                   decay=exp(-dt/this%tau)
-                  b(ib)%e_v=e_d_avg*(1.0_WP-decay)+b(ib)%e_v*decay
+                  e_e=e_d_avg-b(ib)%e_v                          ! elastic deviatoric stretch
+                  over=abs(e_e)-this%yield_stretch*b(ib)%d0      ! overstress beyond yield
+                  if (over.gt.0.0_WP) b(ib)%e_v=b(ib)%e_v+sign(over*(1.0_WP-decay),e_e)
                end if
             end do
             call hash%finalize()
@@ -2265,6 +2269,10 @@ contains
                   if (iand(p(n)%flag,PART_INTEGRATES).ne.0) then
                      p(n)%vel=p(n)%vel+0.5_WP*dt*acc
                   end if
+                  ! Zero velocity in collapsed direction
+                  if (this%amr%nx.eq.1) p(n)%vel(1)=0.0_WP
+                  if (this%amr%ny.eq.1) p(n)%vel(2)=0.0_WP
+                  if (this%amr%nz.eq.1) p(n)%vel(3)=0.0_WP
                   if (iand(p(n)%flag,PART_MOVES).ne.0) then
                      p(n)%pos=p(n)%pos+dt*p(n)%vel
                   end if
@@ -2378,6 +2386,10 @@ contains
                      acc=this%gravity+(p(n)%F_bond+p(n)%F_fluid)*rho_inv
                      p(n)%vel=p(n)%vel+0.5_WP*dt*acc
                   end if
+                  ! Zero velocity in collapsed direction
+                  if (this%amr%nx.eq.1) p(n)%vel(1)=0.0_WP
+                  if (this%amr%ny.eq.1) p(n)%vel(2)=0.0_WP
+                  if (this%amr%nz.eq.1) p(n)%vel(3)=0.0_WP
                end do
             end do
             call this%mfiter_destroy(mfi)

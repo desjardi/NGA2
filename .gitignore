@@ -19,6 +19,9 @@
 .DS_Store
 *.dSYM/
 
+# Claude settings
+.claude/
+
 # Temporary files/folders
 _*
 
