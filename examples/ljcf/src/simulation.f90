@@ -72,12 +72,12 @@ contains
          xcpl=coupler(src_grp=hit_group,dst_grp=group,name='turb2atom')
          ycpl=coupler(src_grp=hit_group,dst_grp=group,name='turb2atom')
          zcpl=coupler(src_grp=hit_group,dst_grp=group,name='turb2atom')
-         if (isInHITGrp) call xcpl%set_src(turb%cfg,'x')
-         if (isInHITGrp) call ycpl%set_src(turb%cfg,'y')
-         if (isInHITGrp) call zcpl%set_src(turb%cfg,'z')
-         call xcpl%set_dst(atom%cfg,'x'); call xcpl%initialize()
-         call ycpl%set_dst(atom%cfg,'y'); call ycpl%initialize()
-         call zcpl%set_dst(atom%cfg,'z'); call zcpl%initialize()
+         if (isInHITGrp) call xcpl%set_src(turb%cfg)
+         if (isInHITGrp) call ycpl%set_src(turb%cfg)
+         if (isInHITGrp) call zcpl%set_src(turb%cfg)
+         call xcpl%set_dst(atom%cfg); call xcpl%initialize()
+         call ycpl%set_dst(atom%cfg); call ycpl%initialize()
+         call zcpl%set_dst(atom%cfg); call zcpl%initialize()
       end block create_coupler
       
    end subroutine simulation_init
@@ -110,15 +110,15 @@ contains
                   real(WP) :: rescaling,tinterp
                   rescaling=turb%ti/turb%Urms_tgt
                   tinterp=(turb%time%t-atom%time%t)/(turb%time%t-turb%time%told)
-                  turb%resU=rescaling*((1.0_WP-tinterp)*turb%fs%U+tinterp*turb%fs%Uold); call xcpl%push(turb%resU)
-                  turb%resV=rescaling*((1.0_WP-tinterp)*turb%fs%V+tinterp*turb%fs%Vold); call ycpl%push(turb%resV)
-                  turb%resW=rescaling*((1.0_WP-tinterp)*turb%fs%W+tinterp*turb%fs%Wold); call zcpl%push(turb%resW)
+                  turb%resU=rescaling*((1.0_WP-tinterp)*turb%fs%U+tinterp*turb%fs%Uold); call xcpl%push(turb%resU,'x')
+                  turb%resV=rescaling*((1.0_WP-tinterp)*turb%fs%V+tinterp*turb%fs%Vold); call ycpl%push(turb%resV,'y')
+                  turb%resW=rescaling*((1.0_WP-tinterp)*turb%fs%W+tinterp*turb%fs%Wold); call zcpl%push(turb%resW,'z')
                   end block push_velocity
             end if
             ! Transfer and pull
-            call xcpl%transfer(); call xcpl%pull(atom%resU)
-            call ycpl%transfer(); call ycpl%pull(atom%resV)
-            call zcpl%transfer(); call zcpl%pull(atom%resW)
+            call xcpl%transfer(); call xcpl%pull(atom%resU,'x')
+            call ycpl%transfer(); call ycpl%pull(atom%resV,'y')
+            call zcpl%transfer(); call zcpl%pull(atom%resW,'z')
             ! Apply time-dependent Dirichlet condition
             apply_boundary_condition: block
                use tpns_class, only: bcond
