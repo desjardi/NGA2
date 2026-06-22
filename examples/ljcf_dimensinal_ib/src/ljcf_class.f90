@@ -1,7 +1,7 @@
 !> Definition for a ljcf atomization class
 module ljcf_class
    use precision,         only: WP
-   use config_class,      only: config
+   use ibconfig_class,    only: ibconfig
    use iterator_class,    only: iterator
    use ensight_class,     only: ensight
    use surfmesh_class,    only: surfmesh
@@ -27,7 +27,7 @@ module ljcf_class
    type :: ljcf
       
       !> Config
-      type(config) :: cfg
+      type(ibconfig) :: cfg
       
       !> Flow solver
       type(vfs)         :: vf    !< Volume fraction solver
@@ -72,7 +72,7 @@ module ljcf_class
       real(WP) :: djet, Vjet
       real(WP), dimension(:), allocatable :: xjet
       integer :: relax_model, nwall
-      real(WP) :: gravity, liqVol, liqVolInjected, InjectionVelocity
+      real(WP) :: gravity, endInjectionTime, InjectionVelocity
       
    contains
       procedure :: init     !< Initialize nozzle simulation
@@ -117,7 +117,102 @@ contains
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
-         this%cfg=config(grp=group,decomp=partition,grid=grid)
+         this%cfg=ibconfig(grp=group,decomp=partition,grid=grid)
+
+
+         ! Create IB walls for this config
+         create_walls: block
+            use mathtools,      only: twoPi
+            use ibconfig_class, only: bigot, sharp
+            use param,          only: param_read
+            integer  :: i,j,k
+            real(WP) :: r, y, y1, y2 
+            real(WP) :: G1, G2, Gcap
+            real(WP) :: R1, R2, h1, h2
+            real(WP) :: y0, ycap, d_cyln, d_wall
+
+            ! Read parameters
+            call param_read('Injector radius 1', R1)
+            call param_read('Injector radius 2', R2)
+            call param_read('Injector height 1', h1)
+            call param_read('Injector height 2', h2)
+
+            ! Reference axial location (start of nozzle)
+            y0 = this%cfg%y(this%cfg%jmino)
+            y1 = y0 + h1
+            y2 = y0 + h2 
+            
+            do k =  this%cfg%kmino_,  this%cfg%kmaxo_
+               do j =  this%cfg%jmino_,  this%cfg%jmaxo_
+                  do i =  this%cfg%imino_,  this%cfg%imaxo_
+
+                     ! Coordinates of this point
+                     y =  this%cfg%ym(j)
+                     r = sqrt( this%cfg%xm(i)**2 +  this%cfg%zm(k)**2)
+
+
+                     ! Start with fluid everywhere
+                      this%cfg%Gib(i,j,k) = 0.0 !-huge(1.0)
+
+                     ! Lower region (y < y1)
+                     ! --------------------------------------------------
+                     if (y < y1 ) then
+                        
+                        if (r < R1) then ! Inside cylinder 
+                           ! Distance to wall between cylinders 
+                           if (r < R2) then ! Inside injector
+                              d_wall = sqrt( (r-R2)**2 + (y-y1)**2 )
+                           else ! Between cylinders
+                              d_wall = y1 - y
+                           end if
+                           ! Distance to cylinder 
+                           d_cyln = R1 - r
+                           this%cfg%Gib(i,j,k) = -min(d_wall, d_cyln)
+                        else ! Outside cylinder
+                           ! Distance to top wall 
+                           d_wall = y2 - y
+                           ! Distance to cylinder 
+                           d_cyln = r - R1
+                           this%cfg%Gib(i,j,k) = min(d_wall, d_cyln)
+                        end if
+                     
+                     ! Middle region (y1 < y < y2)
+                     ! --------------------------------------------------
+                     else if (y < y2) then 
+                        if (r < R2) then ! Inside cylinder
+                           this%cfg%Gib(i,j,k) = r - R2
+                        else ! Outside cylinder 
+                           d_wall = y2 - y ! distance to top wall 
+                           if (r < R1) then ! Between cylinders 
+                              d_wall = min(d_wall, y - y1)
+                           else ! Distance to edge of lower cylinder
+                              d_wall = min(d_wall, sqrt( (r-R1)**2 + (y-y1)**2 ) )
+                           end if
+                           d_cyln = r - R2 
+                           this%cfg%Gib(i,j,k) = min(d_wall, d_cyln)
+                        end if
+
+                     ! Upper region (y > y2)
+                     ! --------------------------------------------------
+                     else
+                        if (r < R2) then ! Inside injector 
+                           this%cfg%Gib(i,j,k) = -sqrt( (r-R2)**2 + (y-y2)**2 )
+                        else
+                           this%cfg%Gib(i,j,k) = y2-y
+                        end if   
+                     end if
+
+                  end do
+               end do
+            end do
+
+            ! Compute normals
+            call this%cfg%calculate_normal()
+
+            ! Compute volume fraction
+            call this%cfg%calculate_vf(method=sharp, allow_zero_vf=.false.)
+
+         end block create_walls
 
       end block create_config
       
@@ -153,9 +248,8 @@ contains
          njet = param_getsize('Jet location')
          allocate(this%xjet(njet))
          call param_read('Jet location',this%xjet)
-         call param_read('Froude number',this%gravity); this%gravity = 1.0_WP/this%gravity**2
-         call param_read('Liquid Volume',this%liqVol)
-         this%liqVolInjected = 0.0_WP
+         call param_read('Gravitational acceleration',this%gravity)
+         call param_read('End Injection Time',this%endInjectionTime)
          ! Number of wall cells
          call param_read('Wall cells in domain', this%nwall, default=0)
          do k=this%cfg%kmino_,this%cfg%kmaxo_
@@ -180,7 +274,7 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2pnet,transport_method=remap,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          this%vf%thin_thld_min=0.0_WP
          this%vf%flotsam_thld=0.0_WP
          this%vf%maxcurv_times_mesh=1.0_WP
@@ -199,7 +293,7 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  if (j.lt.this%vf%cfg%jmin) then
+                  if (j.le.this%vf%cfg%jmin) then
                      call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_halfdrop,0.0_WP,amr_ref_lvl)
                   else
                      ! do nothing
@@ -221,22 +315,29 @@ contains
          call this%vf%build_interface()
          ! Set interface planes at the boundaries
          call this%vf%set_full_bcond()
+
          ! Now apply Neumann condition on interface at inlet to have proper round injection
          neumann_irl: block
             use irl_fortran_interface, only: getPlane,new,construct_2pt,RectCub_type,&
             &                                setNumberOfPlanes,setPlane,matchVolumeFraction
             real(WP), dimension(1:4) :: plane
+            real(WP) :: eps_plane
+            integer :: nplanes_src
             type(RectCub_type) :: cell
             call new(cell)
-            if (this%vf%cfg%iproc.eq.1) then
+            if (this%vf%cfg%jproc.eq.1) then
                do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
-                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
-                     do i=this%vf%cfg%imino,this%vf%cfg%imin-1
+                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmin-1
+                     do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
                         ! Extract plane data and copy in overlap
-                        plane=getPlane(this%vf%liquid_gas_interface(this%vf%cfg%imin,j,k),0)
+                        plane=getPlane(this%vf%liquid_gas_interface(i,this%vf%cfg%jmin,k),0)
+                        eps_plane = 1.0e-30_WP
+                        nplanes_src = getNumberOfPlanes(this%vf%liquid_gas_interface(i,this%vf%cfg%jmin,k))
+                        if (nplanes_src.eq.0) cycle
                         call construct_2pt(cell,[this%vf%cfg%x(i  ),this%vf%cfg%y(j  ),this%vf%cfg%z(k  )],&
                         &                       [this%vf%cfg%x(i+1),this%vf%cfg%y(j+1),this%vf%cfg%z(k+1)])
                         plane(4)=dot_product(plane(1:3),[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)])
+                        if (sum(plane(1:3)**2) .le. eps_plane) cycle
                         call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
                         call setPlane(this%vf%liquid_gas_interface(i,j,k),0,plane(1:3),plane(4))
                         call matchVolumeFraction(cell,this%vf%VF(i,j,k),this%vf%liquid_gas_interface(i,j,k))
@@ -245,6 +346,7 @@ contains
                end do
             end if
          end block neumann_irl
+
          ! Create discontinuous polygon mesh from IRL interface
          call this%vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -256,8 +358,7 @@ contains
          ! Reset moments to guarantee compatibility with interface reconstruction
          call this%vf%reset_volume_moments()
       end block create_and_initialize_vof
-      
-      
+
       ! Create an iterator for removing VOF at edges
       create_iterator: block
          this%vof_removal_layer=iterator(this%cfg,'VOF removal',vof_removal_layer_locator)
@@ -275,10 +376,12 @@ contains
          ! Create flow solver
          this%fs=tpns(cfg=this%cfg,name='Two-phase NS')
          ! Set fluid properties
-         this%fs%rho_g=1.0_WP; call param_read('Density ratio',this%fs%rho_l)
-         call param_read('Reynolds number',this%fs%visc_g); this%fs%visc_g=1.0_WP/this%fs%visc_g
-         call param_read('Viscosity ratio',this%fs%visc_l); this%fs%visc_l=this%fs%visc_g*this%fs%visc_l
-         call param_read('Weber number',this%fs%sigma); this%fs%sigma=1.0_WP/this%fs%sigma
+         call param_read("Liquid density",this%fs%rho_l);
+         call param_read("Gas density",this%fs%rho_g);
+         call param_read("Liquid viscosity",this%fs%visc_l);
+         call param_read("Gas viscosity",this%fs%visc_g);
+         call param_read("Surface tension",this%fs%sigma);
+
          ! Define inflow boundary condition on the left
          call this%fs%add_bcond(name='inflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Define outflow boundary condition on the right
@@ -433,24 +536,24 @@ contains
          this%smesh%varname(2)='thickness'
          ! Transfer polygons to smesh
          call this%vf%update_surfmesh(this%smesh)
-         ! Calculate thickness
-         call this%vf%get_thickness()
-         ! Populate nplane and thickness variables
-         this%smesh%var(1,:)=1.0_WP
-         np=0
-         do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
-            do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
-               do i=this%vf%cfg%imin_,this%vf%cfg%imax_
-                  if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
-                  do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
-                     if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                        np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                        this%smesh%var(2,np)=this%vf%thickness(i,j,k)
-                     end if
-                  end do
-               end do
-            end do
-         end do
+         ! ! Calculate thickness
+         ! call this%vf%get_thickness()
+         ! ! Populate nplane and thickness variables
+         ! this%smesh%var(1,:)=1.0_WP
+         ! np=0
+         ! do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
+         !    do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+         !       do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+         !          if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
+         !          do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+         !             if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+         !                np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
+         !                this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+         !             end if
+         !          end do
+         !       end do
+         !    end do
+         ! end do
       end block create_smesh
       
       
@@ -468,6 +571,7 @@ contains
          call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('pressure',this%fs%P)
          call this%ens_out%add_surface('plic',this%smesh)
+         call this%ens_out%add_scalar('Gib',this%cfg%Gib)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
@@ -493,7 +597,7 @@ contains
          call this%mfile%add_column(this%vf%SDint,'SD integral')
          call this%mfile%add_column(this%vof_removed,'VOF removed')
          call this%mfile%add_column(this%vf%flotsam_error,'Flotsam error')
-         call this%mfile%add_column(this%vf%thinstruct_error,'Film error')
+         ! call this%mfile%add_column(this%vf%thinstruct_error,'Film error')
          call this%mfile%add_column(this%fs%divmax,'Maximum divergence')
          call this%mfile%add_column(this%fs%psolv%it,'Pressure iteration')
          call this%mfile%add_column(this%fs%psolv%rerr,'Pressure error')
@@ -514,7 +618,6 @@ contains
          this%ljcf_file=monitor(this%fs%cfg%amRoot,'ljcf')
          call this%ljcf_file%add_column(this%time%n,'Timestep number')
          call this%ljcf_file%add_column(this%time%t,'Time')
-         call this%ljcf_file%add_column(this%liqVolInjected,'Liq Vol Injected')
          call this%ljcf_file%add_column(this%InjectionVelocity,'Injection Velocity')
          call this%ljcf_file%write()
       end block create_monitor
@@ -588,11 +691,23 @@ contains
          implicit none
          class(pgrid), intent(in) :: pg
          integer, intent(in) :: i,j,k
+         integer :: ii,kk
          real(WP), dimension(3) :: xyz
          logical :: isIn
+         ! isIn=.false.
+         ! xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
+         ! if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) isIn=.true.
          isIn=.false.
-         xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
-         if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) isIn=.true.
+         ! Check if any of cell corners are in jet
+         do ii = i,i+1
+            do kk = k,k+1
+               xyz(1)=pg%x(ii); xyz(2)=pg%y(pg%jmin); xyz(3)=pg%z(kk)
+               if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) then
+                  isIn=.true.
+                  return
+               end if
+            end do
+         end do
       end function jet
       
       !> Function that localizes the walls surrounding the jets
@@ -650,22 +765,17 @@ contains
          real(WP) :: liqVolInjected_dt
          integer :: n,i,j,k
          ! Compute injection velocity
-         if (this%liqVolInjected .lt. this%liqVol) then
+         if (this%time%t .lt. this%endInjectionTime) then
             this%InjectionVelocity=this%gravity*this%time%t  ! Velocity increases linearly with time
          else
             this%InjectionVelocity=0.0_WP                    ! Velocity stops once volume is reached
          end if
          ! Apply injection velocity to the jet boundary condition 
          call this%fs%get_bcond('jet',mybc)
-         liqVolInjected_dt = 0.0_WP
          do n=1,mybc%itr%no_
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
-            
             this%fs%V(i,j,k) = this%InjectionVelocity
-            liqVolInjected_dt = liqVolInjected_dt + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
          end do
-         call MPI_ALLREDUCE(MPI_IN_PLACE,liqVolInjected_dt,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
-         this%liqVolInjected = this%liqVolInjected + liqVolInjected_dt
       end block apply_bc
 
       ! Remember old VOF
@@ -703,9 +813,6 @@ contains
 
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
-
-         ! Add momentum source terms
-         call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
@@ -719,6 +826,23 @@ contains
          this%fs%U=2.0_WP*this%fs%U-this%fs%Uold+this%resU
          this%fs%V=2.0_WP*this%fs%V-this%fs%Vold+this%resV
          this%fs%W=2.0_WP*this%fs%W-this%fs%Wold+this%resW
+
+         ! Apply IB forcing to enforce BC at the pipe walls
+         ibforcing: block
+            integer :: i,j,k
+            do k=this%fs%cfg%kmin_,this%fs%cfg%kmax_
+               do j=this%fs%cfg%jmin_,this%fs%cfg%jmax_
+                  do i=this%fs%cfg%imin_,this%fs%cfg%imax_
+                     this%fs%U(i,j,k)=this%fs%U(i,j,k)*sum(this%fs%itpr_x(:,i,j,k)*this%cfg%VF(i-1:i,j,k))
+                     this%fs%V(i,j,k)=this%fs%V(i,j,k)*sum(this%fs%itpr_y(:,i,j,k)*this%cfg%VF(i,j-1:j,k))
+                     this%fs%W(i,j,k)=this%fs%W(i,j,k)*sum(this%fs%itpr_z(:,i,j,k)*this%cfg%VF(i,j,k-1:k))
+                  end do
+               end do
+            end do
+            call this%fs%cfg%sync(this%fs%U)
+            call this%fs%cfg%sync(this%fs%V)
+            call this%fs%cfg%sync(this%fs%W)
+         end block ibforcing
          
          ! Apply boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
@@ -731,8 +855,8 @@ contains
          call this%fs%update_laplacian()
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         !call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
-         call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         ! call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
@@ -776,7 +900,8 @@ contains
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%vof_removed,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
          call this%vf%clean_irl_and_band()
       end block remove_vof
-      
+
+
       ! Output to ensight
       if (this%ens_evt%occurs()) then
          ! Update surface mesh
@@ -785,22 +910,22 @@ contains
             integer :: i,j,k,np,nplane
             ! Transfer polygons to smesh
             call this%vf%update_surfmesh(this%smesh)
-            ! Also populate nplane variable
-            this%smesh%var(1,:)=1.0_WP
-            np=0
-            do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
-               do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
-                  do i=this%vf%cfg%imin_,this%vf%cfg%imax_
-                     if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
-                     do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
-                        if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
-                           np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                           this%smesh%var(2,np)=this%vf%thickness(i,j,k)
-                        end if
-                     end do
-                  end do
-               end do
-            end do
+            ! ! Also populate nplane variable
+            ! this%smesh%var(1,:)=1.0_WP
+            ! np=0
+            ! do k=this%vf%cfg%kmin_,this%vf%cfg%kmax_
+            !    do j=this%vf%cfg%jmin_,this%vf%cfg%jmax_
+            !       do i=this%vf%cfg%imin_,this%vf%cfg%imax_
+            !          if (this%cfg%VF(i,j,k).lt.2.0_WP*epsilon(1.0_WP)) cycle ! Skip cells below VF threshold
+            !          do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
+            !             if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
+            !                np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
+            !                this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+            !             end if
+            !          end do
+            !       end do
+            !    end do
+            ! end do
          end block update_smesh
          call this%ens_out%write_data(this%time%t)
       end if
@@ -873,6 +998,30 @@ contains
             deallocate(P11,P12,P13,P14,P21,P22,P23,P24)
          end block save_restart
       end if
+
+   contains
+      !> Function that identifies cells that need a label
+      logical function make_label(i,j,k)
+         implicit none
+         integer, intent(in) :: i,j,k
+         if (this%vf%VF(i,j,k).gt.0.0_WP) then
+            make_label=.true.
+         else
+            make_label=.false.
+         end if
+      end function make_label
+
+      !> Function that identifies if cell pairs have same label
+      logical function same_label(i1,j1,k1,i2,j2,k2)
+         implicit none
+         integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         if (this%vf%VF(i1,j1,k1).gt.0.0_WP .and. this%vf%VF(i2,j2,k2).gt.0.0_WP) then
+            same_label=.true.
+         else
+             same_label=.false.
+         end if
+         same_label=.true.
+      end function same_label
       
    end subroutine step
    
