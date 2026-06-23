@@ -35,6 +35,14 @@ module simulation
    real(WP) :: wall_thick,wall_half    !< wall slab geometry
    real(WP) :: disk_R,disk_x,disk_vel  !< projectile geometry + impact speed
    integer  :: n_sub=1                 !< PD sub-steps per fluid step
+
+   !> Two-way IB coupling workspaces (PD solid <-> multiphase fluid)
+   type(amrdata) :: Usolid             !< Solid velocity deposited on the mesh (3 comp)
+   type(amrdata) :: VFf                !< Fluid volume fraction = 1 - pd%VF
+   type(amrdata) :: dStress            !< Divergence of the fluid stress tensor (3 comp) -> F_fluid
+   real(WP), dimension(3) :: Fib       !< Net fluid force on the solid (diagnostic)
+   logical :: couple_s2f=.true.        !< Solid->fluid (IB forcing of the flow)
+   logical :: couple_f2s=.true.        !< Fluid->solid (F_fluid reaction on particles)
    
    !> Visualization
    type(event) :: viz_evt
@@ -244,7 +252,14 @@ contains
             pQ(i,j,k,2)=(1.0_WP-myVF)*rhoG
             pQ(i,j,k,3)=pQ(i,j,k,1)*IEL
             pQ(i,j,k,4)=pQ(i,j,k,2)*gas%get_e_from_p_rho(p=pG,rho=rhoG,y=[1.0_WP])
-            pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*uG
+            ! Launch the drop at the impact velocity (-x) into the at-rest gas; pure-gas cells
+            ! keep their local velocity uG (=0 in the post-shock region). The t=0 slip at the
+            ! drop surface is an accepted initial disequilibrium.
+            if (myVF.ge.VFlo) then
+               pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*(-disk_vel)
+            else
+               pQ(i,j,k,5)=(pQ(i,j,k,1)+pQ(i,j,k,2))*uG
+            end if
             pQ(i,j,k,6)=0.0_WP
             pQ(i,j,k,7)=0.0_WP
          end do; end do; end do
@@ -396,16 +411,17 @@ contains
                   call set_part(plist(iflat),[x,y,zb],[0.0_WP,0.0_WP,0.0_WP],i.eq.0.or.abs(j).eq.nyh)
                end if
             end do; end do; end do
-            ! Disk projectile: center (disk_x,0), radius disk_R, moving -x
-            do k=-khi,khi; do j=-nr,nr; do i=-nr,nr
-               x=real(i,WP)*pd_elem; y=real(j,WP)*pd_elem
-               if (x*x+y*y.gt.disk_R**2) cycle
-               iflat=iflat+1_I8
-               if (pass.eq.2) then
-                  zb=real(k,WP)*pd_elem; if (amr%nz.eq.1) zb=0.0_WP
-                  call set_part(plist(iflat),[disk_x+x,y,zb],[-disk_vel,0.0_WP,0.0_WP],.false.)
-               end if
-            end do; end do; end do
+            ! Disk projectile: COMMENTED OUT -- replaced by the liquid water drop (fluid phase,
+            ! seeded via shockdrop_init / Drop location). Preserved for the copper stand-in; re-enable to revert.
+            !do k=-khi,khi; do j=-nr,nr; do i=-nr,nr
+            !   x=real(i,WP)*pd_elem; y=real(j,WP)*pd_elem
+            !   if (x*x+y*y.gt.disk_R**2) cycle
+            !   iflat=iflat+1_I8
+            !   if (pass.eq.2) then
+            !      zb=real(k,WP)*pd_elem; if (amr%nz.eq.1) zb=0.0_WP
+            !      call set_part(plist(iflat),[disk_x+x,y,zb],[-disk_vel,0.0_WP,0.0_WP],.false.)
+            !   end if
+            !end do; end do; end do
             if (pass.eq.1) then; ntot=iflat; allocate(plist(ntot)); end if
          end do
       else
@@ -629,10 +645,19 @@ contains
 
       ! Initialize workspaces
       create_workspace: block
-         use amrdata_class, only: interp_none
+         use amrdata_class,    only: interp_none
+         use amrex_amr_module, only: amrex_bc_foextrap
          call dQdt%initialize(amr,name='dQdt',ncomp=fs%nQ,ng=0,interp=interp_none); call dQdt%register()
          call Umag%initialize(amr,name='Umag',ncomp=1    ,ng=0,interp=interp_none); call Umag%register()
          call Mach%initialize(amr,name='Mach',ncomp=1    ,ng=0,interp=interp_none); call Mach%register()
+         ! IB coupling fields (interp_none: recomputed each step, allocate-don't-fill on regrid).
+         ! x is non-periodic (wall/open) -> zero-gradient extrapolation in ghosts; y,z periodic.
+         call Usolid%initialize(amr,name='Usolid',ncomp=3,ng=fs%nover,interp=interp_none); call Usolid%register()
+         call VFf%initialize(amr,name='VFf',ncomp=1,ng=fs%nover,interp=interp_none); call VFf%register()
+         call dStress%initialize(amr,name='dStress',ncomp=3,ng=fs%nover,interp=interp_none); call dStress%register()
+         Usolid%lo_bc(1,:)=amrex_bc_foextrap; Usolid%hi_bc(1,:)=amrex_bc_foextrap
+         VFf%lo_bc(1,:)=amrex_bc_foextrap;    VFf%hi_bc(1,:)=amrex_bc_foextrap
+         dStress%lo_bc(1,:)=amrex_bc_foextrap; dStress%hi_bc(1,:)=amrex_bc_foextrap
       end block create_workspace
 
       ! Initialize the peridynamics solid (registers VF-based AMR tagging)
@@ -662,6 +687,9 @@ contains
          pd%lo_bc(1)=AMRPD_WALL
          ! Refine the AMR mesh wherever the solid volume fraction exceeds VF_tag
          call param_read('Tagging VF',pd%VF_tag,default=0.1_WP)
+         ! Two-way coupling switches (default on)
+         call param_read('Couple solid to fluid',couple_s2f,default=.true.)
+         call param_read('Couple fluid to solid',couple_f2s,default=.true.)
       end block init_solid
 
       ! Initialize regridding
@@ -707,6 +735,11 @@ contains
          ! Add SGS models
          call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
+         ! Prime the IB coupling: deposit solid velocity, build fluid VF, and the
+         ! initial fluid load (get_force needs the viscosities just computed above)
+         call deposit_solid_velocity()
+         call update_VFf()
+         call get_force()
          ! Compute Umag and Mach number
          call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
@@ -741,6 +774,8 @@ contains
          call viz%add_scalar(Mach,1,'Mach')
          call viz%add_surfmesh(fs%smesh,'plic')
          call viz%add_scalar(pd%VF,1,'solidVF')
+         call viz%add_scalar(VFf,1,'VFf')
+         call viz%add_scalar(Usolid,1,'Us')
          ! Particle visualization
          call pviz%initialize(pd,name='impact')
          call pviz%select_comp('flag',on=.true.)
@@ -862,6 +897,8 @@ contains
          call pdfile%add_column(n_sub,'Subcycles')
          call pdfile%add_column(pd%CFLe,'CFLe')
          call pdfile%add_column(pd%Umax,'Umax')
+         call pdfile%add_column(Fib(1),'Ffluid_x')
+         call pdfile%add_column(Fib(2),'Ffluid_y')
          call pdfile%write()
       end block create_solid_monitor
 
@@ -874,25 +911,12 @@ contains
       ! Perform time integration
       do while (.not.time%done())
          
-         ! Increment time (dt set by the PD solid; fluid is frozen in phase 1)
-         call pd%get_cfl(dt=time%dt,cfl=time%cfl)
+         ! Increment time -- dt is set by the FLUID CFL; the stiff PD solid
+         ! sub-cycles inside it (with F_fluid held fixed) further down.
+         call fs%get_cfl(dt=time%dt,cfl=time%cfl)
          call time%adjust_dt()
          call time%increment()
 
-         ! --- Sub-cycle the PD solid; contact handles the sphere<->wall impact ---
-         pd_subcycle: block
-            real(WP) :: dt_sub,cfl_pd
-            integer :: i_sub
-            call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
-            n_sub=1
-            if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
-            dt_sub=time%dt/real(n_sub,WP)
-            do i_sub=1,n_sub; call pd%advance(dt_sub); end do
-         end block pd_subcycle
-
-         ! ===== FLUID SOLVER DEACTIVATED (phase 1: pure PD impact). =====
-         ! Re-enable this block (+ post-processing below) in phase 2 (drop coupling).
-         if (.false.) then
          ! Remember old state
          call fs%store_old()
 
@@ -910,15 +934,20 @@ contains
          call fs%build_subVF()
          ! Compute face velocities and ensure C/F consistency
          call fs%get_face_velocity(); call fs%average_down_velocity()
-         ! Add pressure term
-         call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
-         ! Add surface tension term
+         ! Add pressure (masked to the fluid fraction), then force the fluid toward the solid
+         if (couple_s2f) then
+            call fs%add_phasic_pressure(scale=0.5_WP*time%dt,mask=VFf)
+         else
+            call fs%add_phasic_pressure(scale=0.5_WP*time%dt)
+         end if
          call fs%add_surface_tension(scale=0.5_WP*time%dt)
+         if (couple_s2f) call apply_ib_forcing()
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%tmid)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
          ! Get primitive variables
          call fs%get_primitive(Q=fs%Q)
+         call fs%dbg_scan('rk1')   ! per-stage NaN/positivity monitor (grep [GDQ)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
          ! Increment Q without pressure gradient
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
@@ -933,17 +962,38 @@ contains
          call fs%build_subVF()
          ! Compute face velocities and ensure C/F consistency
          call fs%get_face_velocity(); call fs%average_down_velocity()
-         ! Add pressure term
-         call fs%add_phasic_pressure(scale=time%dt)
-         ! Add surface tension term
+         ! Add pressure (masked to the fluid fraction), then force the fluid toward the solid
+         if (couple_s2f) then
+            call fs%add_phasic_pressure(scale=time%dt,mask=VFf)
+         else
+            call fs%add_phasic_pressure(scale=time%dt)
+         end if
          call fs%add_surface_tension(scale=time%dt)
+         if (couple_s2f) call apply_ib_forcing()
          ! Average down and fill ghosts
          call fs%Q%average_down(); call fs%Q%fill(time=time%t)
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          ! Get primitive variables
          call fs%get_primitive(Q=fs%Q)
+         call fs%dbg_scan('rk2')   ! per-stage NaN/positivity monitor (grep [GDQ)
          ! ======================================================================================
-         end if  ! end FLUID SOLVER DEACTIVATED
+
+         ! Fluid->solid load: divergence of the fluid stress tensor -> F_fluid.
+         ! (get_force uses the current-grid viscosities from the previous step.)
+         call get_force()
+         if (couple_f2s) call get_fluid_force()
+
+         ! Sub-cycle the PD solid over the fluid step with F_fluid held fixed.
+         ! Contact handles the disk<->wall impact inside pd%advance.
+         pd_subcycle: block
+            real(WP) :: dt_sub,cfl_pd
+            integer :: i_sub
+            call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
+            n_sub=1
+            if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
+            dt_sub=time%dt/real(n_sub,WP)
+            do i_sub=1,n_sub; call pd%advance(dt_sub); end do
+         end block pd_subcycle
 
          ! Regrid if event triggers
          if (regrid_evt%occurs()) then
@@ -951,19 +1001,18 @@ contains
             call gridfile%write()
          end if
 
-         ! ===== fluid post-processing DEACTIVATED (phase 1) =====
-         if (.false.) then
-         ! Compute viscosities
-         call get_viscosities()
+         ! Refresh IB coupling fields on the (possibly new) grid for the next step
+         call deposit_solid_velocity()
+         call update_VFf()
 
-         ! Add SGS models
+         ! Compute viscosities and SGS models (fresh on the new grid)
+         call get_viscosities()
          call fs%add_viscartif(dt=time%dt,Cvisc=1.0e-2_WP)
          call fs%add_vreman(dt=time%dt)
 
          ! Compute Umag and Mach number
          call Umag%get_magnitude(srcX=fs%UVW,srcY=fs%UVW,srcZ=fs%UVW,compX=1,compY=2,compZ=3)
          call Mach%copy(src=Umag); call Mach%divide(src=fs%C)
-         end if
 
          ! Visualization output
          if (viz_evt%occurs()) call viz%write(time=time%t)
@@ -985,8 +1034,109 @@ contains
          call consfile%write()
          call cflfile%write()
          call tfile%write()
-         
+
       end do
+
+   contains
+
+      !> Solid->fluid IB forcing (multiphase Q-layout): drive the mixture momentum
+      !> Q(5:7) toward rho_mix*Usolid over the solid fraction, VF-weighted neighbor
+      !> average for the phasic Q(1:4), and blend face velocities toward Usolid.
+      subroutine apply_ib_forcing()
+         use amrex_amr_module, only: amrex_mfiter,amrex_box
+         use amrmpcomp_class,  only: VFlo,VFhi
+         type(amrex_mfiter) :: mfi
+         type(amrex_box) :: bx
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pU,pV,pW,pVF,pUs,pVFL
+         real(WP), dimension(:,:,:,:), allocatable :: pQold
+         real(WP) :: sum_VF,sum_VFQ(4),rho_mix,VFface
+         integer :: i,j,k,lvl,ii,jj,kk
+         ! Compressible IB scheme requires updated ghosts for Q
+         call fs%Q%average_down(); call fs%Q%fill(time=time%t)
+         do lvl=0,amr%clvl()
+            call amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pQ =>fs%Q%mf(lvl)%dataptr(mfi)
+               pU =>fs%U%mf(lvl)%dataptr(mfi)
+               pV =>fs%V%mf(lvl)%dataptr(mfi)
+               pW =>fs%W%mf(lvl)%dataptr(mfi)
+               pVF=>VFf%mf(lvl)%dataptr(mfi)
+               pUs=>Usolid%mf(lvl)%dataptr(mfi)
+               pVFL=>fs%VF%mf(lvl)%dataptr(mfi)        ! liquid volume fraction (for the cleanup)
+               bx=mfi%tilebox()
+               allocate(pQold,source=pQ)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  if (pVF(i,j,k,1).eq.1.0_WP) cycle           ! pure fluid cell
+                  ! VF-weighted neighbor average for the phasic mass+energy Q(1:4)
+                  sum_VF=0.0_WP; sum_VFQ=0.0_WP
+                  do kk=-1,1; do jj=-1,1; do ii=-1,1
+                     if (ii.eq.0.and.jj.eq.0.and.kk.eq.0) cycle
+                     sum_VF      =sum_VF      +pVF(i+ii,j+jj,k+kk,1)
+                     sum_VFQ(1:4)=sum_VFQ(1:4)+pVF(i+ii,j+jj,k+kk,1)*pQold(i+ii,j+jj,k+kk,1:4)
+                  end do; end do; end do
+                  if (sum_VF.gt.0.0_WP) pQ(i,j,k,1:4)=pVF(i,j,k,1)*pQold(i,j,k,1:4)+(1.0_WP-pVF(i,j,k,1))*sum_VFQ(1:4)/sum_VF
+                  ! Light cleanup: keep the IB-extended Q strictly consistent with the liquid
+                  ! VF so get_primitive/relax can't hit eL=Q(3)/rhoL=0/0 (or eG=Q(4)/rhoG=0/0).
+                  if (pVFL(i,j,k,1).lt.VFlo) then
+                     pQ(i,j,k,1)=0.0_WP; pQ(i,j,k,3)=0.0_WP    ! no liquid here
+                  else if (pVFL(i,j,k,1).gt.VFhi) then
+                     pQ(i,j,k,2)=0.0_WP; pQ(i,j,k,4)=0.0_WP    ! no gas here
+                  end if
+                  ! Mixture momentum toward rho_mix*Usolid in the solid fraction, using the
+                  ! POST-average/cleanup density so the recovered velocity is exactly Usolid
+                  ! in the solid (removes the old/new-density mismatch at the receding edge).
+                  rho_mix=pQ(i,j,k,1)+pQ(i,j,k,2)
+                  pQ(i,j,k,5)=pVF(i,j,k,1)*pQ(i,j,k,5)+(1.0_WP-pVF(i,j,k,1))*rho_mix*pUs(i,j,k,1)
+                  pQ(i,j,k,6)=pVF(i,j,k,1)*pQ(i,j,k,6)+(1.0_WP-pVF(i,j,k,1))*rho_mix*pUs(i,j,k,2)
+                  pQ(i,j,k,7)=pVF(i,j,k,1)*pQ(i,j,k,7)+(1.0_WP-pVF(i,j,k,1))*rho_mix*pUs(i,j,k,3)
+               end do; end do; end do
+               deallocate(pQold)
+               ! Face velocities toward the face-interpolated solid velocity
+               bx=mfi%nodaltilebox(1)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  VFface=0.5_WP*sum(pVF(i-1:i,j,k,1))
+                  pU(i,j,k,1)=VFface*pU(i,j,k,1)+(1.0_WP-VFface)*0.5_WP*sum(pUs(i-1:i,j,k,1))
+               end do; end do; end do
+               bx=mfi%nodaltilebox(2)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  VFface=0.5_WP*sum(pVF(i,j-1:j,k,1))
+                  pV(i,j,k,1)=VFface*pV(i,j,k,1)+(1.0_WP-VFface)*0.5_WP*sum(pUs(i,j-1:j,k,2))
+               end do; end do; end do
+               bx=mfi%nodaltilebox(3)
+               do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+                  VFface=0.5_WP*sum(pVF(i,j,k-1:k,1))
+                  pW(i,j,k,1)=VFface*pW(i,j,k,1)+(1.0_WP-VFface)*0.5_WP*sum(pUs(i,j,k-1:k,3))
+               end do; end do; end do
+            end do
+            call amr%mfiter_destroy(mfi)
+         end do
+      end subroutine apply_ib_forcing
+
+      !> Fluid->solid load: F_fluid = interp(div(sigma)) at each particle.
+      !> dStress must have been filled by get_force first.
+      subroutine get_fluid_force()
+         use amrex_amr_module, only: amrex_mfiter
+         use precision,        only: I8
+         type(amrex_mfiter) :: mfi
+         type(part), dimension(:), pointer :: p
+         real(WP), dimension(:,:,:,:), contiguous, pointer :: pdS
+         integer(I8) :: np_,n
+         integer :: lvl
+         do lvl=0,amr%clvl()
+            call amr%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               pdS=>dStress%mf(lvl)%dataptr(mfi)
+               call pd%get_particles(lvl,mfi,p,np_)
+               do n=1,np_
+                  if (p(n)%flag.eq.PART_IS_DEAD) cycle
+                  p(n)%F_fluid(1)=pd%interp(lvl,p(n)%pos,pdS,1)
+                  p(n)%F_fluid(2)=pd%interp(lvl,p(n)%pos,pdS,2)
+                  p(n)%F_fluid(3)=pd%interp(lvl,p(n)%pos,pdS,3)
+               end do
+            end do
+            call amr%mfiter_destroy(mfi)
+         end do
+      end subroutine get_fluid_force
 
    end subroutine simulation_run
    
@@ -1004,6 +1154,9 @@ contains
       call dQdt%finalize()
       call Umag%finalize()
       call Mach%finalize()
+      call Usolid%finalize()
+      call VFf%finalize()
+      call dStress%finalize()
       ! Finalize materials
       call water%finalize()
       call gas%finalize()
@@ -1022,5 +1175,222 @@ contains
       call tfile%finalize()
       call pdfile%finalize()
    end subroutine simulation_final
+
+   !> Refresh fluid volume fraction VFf = clip(1 - pd%VF, 0, 1) with ghosts filled.
+   !> Additionally wall off the lateral gaps so the flow can't get around the finite-height
+   !> target: x<0 AND |y|>wall_half (outside the slab footprint) -> VFf=0 (full solid). The
+   !> footprint itself (|y|<=wall_half), including the crater, keeps its computed VFf, so the
+   !> crater fills with fluid where copper is gone. Usolid=0 in the gaps -> static wall.
+   subroutine update_VFf()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF
+      integer :: lvl,i,j,k
+      real(WP) :: xc,yc
+      call VFf%setval(1.0_WP)
+      call VFf%subtract(pd%VF)
+      call VFf%clip(0.0_WP,1.0_WP)
+      do lvl=0,amr%clvl()
+         call amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pVF=>VFf%mf(lvl)%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               xc=amr%xlo+(real(i,WP)+0.5_WP)*amr%dx(lvl)
+               yc=amr%ylo+(real(j,WP)+0.5_WP)*amr%dy(lvl)
+               if (xc.lt.0.0_WP.and.abs(yc).gt.wall_half) pVF(i,j,k,1)=0.0_WP
+            end do; end do; end do
+         end do
+         call amr%mfiter_destroy(mfi)
+      end do
+      call VFf%fill(time=time%t)
+   end subroutine update_VFf
+
+   !> Deposit the PD particle velocity onto the mesh (Usolid). Trilinear PIC
+   !> deposit of vel*dV, then process_deposit reconciles coarse/fine exactly like
+   !> VF, fill+filter, and normalize by pd%VF to recover an intensive velocity.
+   subroutine deposit_solid_velocity()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box
+      use precision,        only: I8
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx
+      type(part), dimension(:), pointer :: p
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pUs,pVF
+      integer(I8) :: np_,n
+      integer :: lvl,ii,jj,kk,i,j,k,c
+      real(WP) :: dxi,dyi,dzi,wx,wy,wz,Vp
+      real(WP), parameter :: VFtiny=1.0e-12_WP
+      call Usolid%setval(0.0_WP)
+      Vp=pd%dV
+      do lvl=0,amr%clvl()
+         dxi=1.0_WP/amr%dx(lvl); dyi=1.0_WP/amr%dy(lvl); dzi=1.0_WP/amr%dz(lvl)
+         call amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pUs=>Usolid%mf(lvl)%dataptr(mfi)
+            call pd%get_particles(lvl,mfi,p,np_)
+            do n=1,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               ii=floor((p(n)%pos(1)-amr%xlo)*dxi-0.5_WP); wx=(p(n)%pos(1)-amr%xlo)*dxi-0.5_WP-real(ii,WP)
+               jj=floor((p(n)%pos(2)-amr%ylo)*dyi-0.5_WP); wy=(p(n)%pos(2)-amr%ylo)*dyi-0.5_WP-real(jj,WP)
+               kk=floor((p(n)%pos(3)-amr%zlo)*dzi-0.5_WP); wz=(p(n)%pos(3)-amr%zlo)*dzi-0.5_WP-real(kk,WP)
+               do c=1,3
+                  pUs(ii:ii+1,jj:jj+1,kk:kk+1,c)=pUs(ii:ii+1,jj:jj+1,kk:kk+1,c)+Vp*p(n)%vel(c)*reshape([ &
+                  &  (1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz), &
+                  &  (1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])
+               end do
+            end do
+         end do
+         call amr%mfiter_destroy(mfi)
+      end do
+      ! Post-process exactly like VF: extensive->intensive, C/F reconcile, fill, filter
+      call pd%process_deposit(Usolid)
+      call Usolid%fill(time=time%t)
+      call pd%filter(Usolid)
+      ! Normalize the (filtered) momentum density by the (filtered) VF -> velocity
+      do lvl=0,amr%clvl()
+         call amr%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            pUs=>Usolid%mf(lvl)%dataptr(mfi)
+            pVF=>pd%VF%mf(lvl)%dataptr(mfi)
+            bx=mfi%tilebox()
+            do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+               if (pVF(i,j,k,1).gt.VFtiny) then
+                  pUs(i,j,k,1:3)=pUs(i,j,k,1:3)/pVF(i,j,k,1)
+               else
+                  pUs(i,j,k,1:3)=0.0_WP
+               end if
+            end do; end do; end do
+         end do
+         call amr%mfiter_destroy(mfi)
+      end do
+      call Usolid%average_down(); call Usolid%fill(time=time%t)
+   end subroutine deposit_solid_velocity
+
+   !> Fluid stress-tensor divergence inside the IB. Builds face-centered stresses
+   !> sigma = -p*I + mu(grad u + grad u^T) + (beta-2/3 mu)(div u) I at the finest
+   !> level (pressure = gas pressure PG; no liquid present), takes the cell-centered
+   !> divergence into dStress (force/volume, interpolated to particles as F_fluid),
+   !> and accumulates the net (1-VFf)-weighted force Fib for monitoring.
+   subroutine get_force()
+      use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_multifab
+      use mpi_f08,   only: MPI_SUM,MPI_ALLREDUCE,MPI_IN_PLACE
+      use parallel,  only: MPI_REAL_WP
+      implicit none
+      integer :: lvl,i,j,k,ierr
+      type(amrex_mfiter) :: mfi
+      type(amrex_box) :: bx,fbx
+      type(amrex_multifab) :: Sx,Sy,Sz
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pUVW,pVisc,pBeta,pP,pPL,pVFL,pVF,pdS
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pSx,pSy,pSz
+      real(WP) :: dxi,dyi,dzi,vol,mu_f,beta_f,div
+      real(WP), dimension(3,3) :: gradU
+      ! Zero out net force
+      Fib=0.0_WP
+      ! Work at finest level only (the solid is fully refined there)
+      lvl=amr%clvl()
+      dxi=1.0_WP/amr%dx(lvl); dyi=1.0_WP/amr%dy(lvl); dzi=1.0_WP/amr%dz(lvl)
+
+      ! Build face-centered stress MultiFabs (3 force components each)
+      call amr%mfab_build(lvl,Sx,ncomp=3,nover=0,atface=[.true. ,.false.,.false.]); call Sx%setval(0.0_WP)
+      call amr%mfab_build(lvl,Sy,ncomp=3,nover=0,atface=[.false.,.true. ,.false.]); call Sy%setval(0.0_WP)
+      call amr%mfab_build(lvl,Sz,ncomp=3,nover=0,atface=[.false.,.false.,.true. ]); call Sz%setval(0.0_WP)
+      call amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         pUVW =>fs%UVW%mf(lvl)%dataptr(mfi)
+         pVisc=>fs%visc%mf(lvl)%dataptr(mfi)
+         pBeta=>fs%beta%mf(lvl)%dataptr(mfi)
+         pP   =>fs%PG%mf(lvl)%dataptr(mfi)   ! gas pressure
+         pPL  =>fs%PL%mf(lvl)%dataptr(mfi)   ! liquid pressure
+         pVFL =>fs%VF%mf(lvl)%dataptr(mfi)   ! liquid VF (for the mixture pressure VF*PL+(1-VF)*PG)
+         pSx  =>Sx%dataptr(mfi)
+         pSy  =>Sy%dataptr(mfi)
+         pSz  =>Sz%dataptr(mfi)
+         ! X-face stresses
+         fbx=mfi%nodaltilebox(1)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            gradU(1,1)=dxi*(pUVW(i,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=0.25_WP*dyi*(pUVW(i-1,j+1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=0.25_WP*dzi*(pUVW(i-1,j,k+1,1)-pUVW(i-1,j,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=dxi*(pUVW(i,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=0.25_WP*dyi*(pUVW(i-1,j+1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=0.25_WP*dzi*(pUVW(i-1,j,k+1,2)-pUVW(i-1,j,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=dxi*(pUVW(i,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=0.25_WP*dyi*(pUVW(i-1,j+1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=0.25_WP*dzi*(pUVW(i-1,j,k+1,3)-pUVW(i-1,j,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            mu_f=0.5_WP*sum(pVisc(i-1:i,j,k,1)); beta_f=0.5_WP*sum(pBeta(i-1:i,j,k,1))
+            pSx(i,j,k,1)=-0.5_WP*sum(pVFL(i-1:i,j,k,1)*pPL(i-1:i,j,k,1)+(1.0_WP-pVFL(i-1:i,j,k,1))*pP(i-1:i,j,k,1))+mu_f*2.0_WP*gradU(1,1)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+            pSx(i,j,k,2)=mu_f*(gradU(2,1)+gradU(1,2))
+            pSx(i,j,k,3)=mu_f*(gradU(3,1)+gradU(1,3))
+         end do; end do; end do
+         ! Y-face stresses
+         fbx=mfi%nodaltilebox(2)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j-1,k,1)-pUVW(i-1,j-1,k,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=dyi*(pUVW(i,j,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=0.25_WP*dzi*(pUVW(i,j-1,k+1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j,k+1,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j-1,k,2)-pUVW(i-1,j-1,k,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=dyi*(pUVW(i,j,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=0.25_WP*dzi*(pUVW(i,j-1,k+1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j,k+1,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j-1,k,3)-pUVW(i-1,j-1,k,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=dyi*(pUVW(i,j,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=0.25_WP*dzi*(pUVW(i,j-1,k+1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j,k+1,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            mu_f=0.5_WP*sum(pVisc(i,j-1:j,k,1)); beta_f=0.5_WP*sum(pBeta(i,j-1:j,k,1))
+            pSy(i,j,k,1)=mu_f*(gradU(1,2)+gradU(2,1))
+            pSy(i,j,k,2)=-0.5_WP*sum(pVFL(i,j-1:j,k,1)*pPL(i,j-1:j,k,1)+(1.0_WP-pVFL(i,j-1:j,k,1))*pP(i,j-1:j,k,1))+mu_f*2.0_WP*gradU(2,2)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+            pSy(i,j,k,3)=mu_f*(gradU(3,2)+gradU(2,3))
+         end do; end do; end do
+         ! Z-face stresses
+         fbx=mfi%nodaltilebox(3)
+         do k=fbx%lo(3),fbx%hi(3); do j=fbx%lo(2),fbx%hi(2); do i=fbx%lo(1),fbx%hi(1)
+            gradU(1,1)=0.25_WP*dxi*(pUVW(i+1,j,k-1,1)-pUVW(i-1,j,k-1,1)+pUVW(i+1,j,k,1)-pUVW(i-1,j,k,1))
+            gradU(2,1)=0.25_WP*dyi*(pUVW(i,j+1,k-1,1)-pUVW(i,j-1,k-1,1)+pUVW(i,j+1,k,1)-pUVW(i,j-1,k,1))
+            gradU(3,1)=dzi*(pUVW(i,j,k,1)-pUVW(i,j,k-1,1))
+            gradU(1,2)=0.25_WP*dxi*(pUVW(i+1,j,k-1,2)-pUVW(i-1,j,k-1,2)+pUVW(i+1,j,k,2)-pUVW(i-1,j,k,2))
+            gradU(2,2)=0.25_WP*dyi*(pUVW(i,j+1,k-1,2)-pUVW(i,j-1,k-1,2)+pUVW(i,j+1,k,2)-pUVW(i,j-1,k,2))
+            gradU(3,2)=dzi*(pUVW(i,j,k,2)-pUVW(i,j,k-1,2))
+            gradU(1,3)=0.25_WP*dxi*(pUVW(i+1,j,k-1,3)-pUVW(i-1,j,k-1,3)+pUVW(i+1,j,k,3)-pUVW(i-1,j,k,3))
+            gradU(2,3)=0.25_WP*dyi*(pUVW(i,j+1,k-1,3)-pUVW(i,j-1,k-1,3)+pUVW(i,j+1,k,3)-pUVW(i,j-1,k,3))
+            gradU(3,3)=dzi*(pUVW(i,j,k,3)-pUVW(i,j,k-1,3))
+            div=gradU(1,1)+gradU(2,2)+gradU(3,3)
+            mu_f=0.5_WP*sum(pVisc(i,j,k-1:k,1)); beta_f=0.5_WP*sum(pBeta(i,j,k-1:k,1))
+            pSz(i,j,k,1)=mu_f*(gradU(1,3)+gradU(3,1))
+            pSz(i,j,k,2)=mu_f*(gradU(2,3)+gradU(3,2))
+            pSz(i,j,k,3)=-0.5_WP*sum(pVFL(i,j,k-1:k,1)*pPL(i,j,k-1:k,1)+(1.0_WP-pVFL(i,j,k-1:k,1))*pP(i,j,k-1:k,1))+mu_f*2.0_WP*gradU(3,3)+(beta_f-2.0_WP/3.0_WP*mu_f)*div
+         end do; end do; end do
+      end do
+      call amr%mfiter_destroy(mfi)
+      ! Cell-centered divergence of the stress tensor -> dStress (force/volume)
+      call dStress%setval(0.0_WP)
+      call amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         pSx=>Sx%dataptr(mfi)
+         pSy=>Sy%dataptr(mfi)
+         pSz=>Sz%dataptr(mfi)
+         pVF=>VFf%mf(lvl)%dataptr(mfi)
+         pdS=>dStress%mf(lvl)%dataptr(mfi)
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            pdS(i,j,k,1)=dxi*(pSx(i+1,j,k,1)-pSx(i,j,k,1))+dyi*(pSy(i,j+1,k,1)-pSy(i,j,k,1))+dzi*(pSz(i,j,k+1,1)-pSz(i,j,k,1))
+            pdS(i,j,k,2)=dxi*(pSx(i+1,j,k,2)-pSx(i,j,k,2))+dyi*(pSy(i,j+1,k,2)-pSy(i,j,k,2))+dzi*(pSz(i,j,k+1,2)-pSz(i,j,k,2))
+            pdS(i,j,k,3)=dxi*(pSx(i+1,j,k,3)-pSx(i,j,k,3))+dyi*(pSy(i,j+1,k,3)-pSy(i,j,k,3))+dzi*(pSz(i,j,k+1,3)-pSz(i,j,k,3))
+            ! Net body force over the solid fraction (diagnostic)
+            if (pVF(i,j,k,1).ge.1.0_WP) cycle
+            vol=(1.0_WP-pVF(i,j,k,1))*amr%cell_vol(lvl)
+            Fib(1)=Fib(1)+pdS(i,j,k,1)*vol
+            Fib(2)=Fib(2)+pdS(i,j,k,2)*vol
+            Fib(3)=Fib(3)+pdS(i,j,k,3)*vol
+         end do; end do; end do
+      end do
+      call amr%mfiter_destroy(mfi)
+      ! Fill ghosts of the stress-divergence field for the particle interpolation
+      call dStress%fill(time=time%t)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,Fib,3,MPI_REAL_WP,MPI_SUM,amr%comm,ierr)
+      call amr%mfab_destroy(Sx)
+      call amr%mfab_destroy(Sy)
+      call amr%mfab_destroy(Sz)
+   end subroutine get_force
 
 end module simulation

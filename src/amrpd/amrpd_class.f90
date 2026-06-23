@@ -603,6 +603,8 @@ contains
       this%amr => amr
       ! Default level cap: allow particles up to the AMR grid's max refinement
       this%maxlvl = amr%maxlvl
+      ! Default deposit-smoothing width
+      this%filter_width = 2.0_WP*this%amr%min_meshsize(this%amr%maxlvl)
       ! Create AMReX particle and bond containers
       call amrpd_new_pcp(this%pcp,this%amr%amrcore)
       call amrpd_new_pcb(this%pcb,this%amr%amrcore)
