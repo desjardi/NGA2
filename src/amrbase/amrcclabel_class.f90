@@ -566,21 +566,17 @@ contains
          type(struct_type), dimension(:), allocatable :: tmp
          ! Check if there is enough room for storing a new structure
          size_now=size(this%struct,dim=1)
-         if (nstruct_.eq.size_now) then
-            size_new=nint(real(size_now,WP)*coeff_up)
+         if (nstruct_.ge.size_now) then                                          ! FIX 1: .eq. → .ge.
+            size_new=max(nstruct_+1, nint(real(max(size_now,nstruct_),WP)*coeff_up))  ! FIX 2: guarantee size_new > nstruct_
             allocate(tmp(size_new))
-            tmp(1:nstruct_)=this%struct
-            tmp(nstruct_+1:)%parent=0
-            ! tmp(nstruct_+1:)%per(1)=0
-            ! tmp(nstruct_+1:)%per(2)=0
-            ! tmp(nstruct_+1:)%per(3)=0
-            tmp(nstruct_+1:)%n_=0
+            tmp(1:size_now)=this%struct                                          ! FIX 3: copy size_now, not nstruct_
+            tmp(size_now+1:)%parent=0
+            tmp(size_now+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
          ! Add new root
          nstruct_=nstruct_+1
          this%struct(nstruct_)%parent=nstruct_
-         ! this%struct(nstruct_)%per=0
          this%struct(nstruct_)%n_=0
          x=nstruct_
       end function add
