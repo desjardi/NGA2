@@ -22,7 +22,7 @@ module amrcclabel_class
    type :: struct_type
       integer :: parent                                   !< ID of parent struct
       integer :: n_                                       !< Number of local cells contained in struct
-      integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
+      ! integer, dimension(3) :: per                        !< Periodicity array - per(dim)=1 if structure is periodic in dim direction
    end type struct_type
    
    !> Statistics object
@@ -40,7 +40,7 @@ end type stats_type
    
    !> amrcclabel object definition
    type :: amrcclabel
-      character(len=str_medium) :: name = 'UNNAMED_CCLABEL'
+      character(len=str_medium) :: name = 'UNNAMED_AMRCCLABEL'
       ! ID of the structure that contains each cell
       type(amrdata) :: id
       ! Array of structures
@@ -50,6 +50,9 @@ end type stats_type
       integer :: nover=1
       ! Associated amr grid 
       class(amrgrid), pointer, private :: amr => null()
+      ! Structure creation/extension functions
+      procedure(make_label_ftype), pointer, nopass :: make_label, coarse_make_label
+      procedure(same_label_ftype), pointer, nopass :: same_label, coarse_same_label
    contains
       procedure :: initialize
       procedure :: build
@@ -60,20 +63,18 @@ end type stats_type
    
    !> Type of the make_label function used to generate a structure
    interface
-      logical function make_label_ftype(pdata,lo,i,j,k)
-         use precision,    only: WP
-         real(WP), dimension(:,:,:,:), intent(in) :: pdata
-         integer, dimension(3), intent(in) :: lo
+      logical function make_label_ftype(pdata,i,j,k)
+         import :: amrcclabel, WP
+         real(WP), dimension(:,:,:,:), intent(in), pointer :: pdata
          integer, intent(in) :: i,j,k
       end function make_label_ftype
    end interface
    
    !> Type of the same_label function used to connect two structures
    interface
-      logical function same_label_ftype(pdata,lo,i,j,k,ii,jj,kk)
-         use precision,    only: WP
-         real(WP), dimension(:,:,:,:), intent(in) :: pdata
-         integer, dimension(3), intent(in) :: lo
+      logical function same_label_ftype(pdata,i,j,k,ii,jj,kk)
+         import :: amrcclabel, WP
+         real(WP), dimension(:,:,:,:), intent(in), pointer :: pdata
          integer, intent(in) :: i,j,k,ii,jj,kk
       end function same_label_ftype
    end interface
@@ -97,13 +98,18 @@ contains
       call this%id%register() ! Update with regriding
       call this%id%reset() ! Update with current grids
       call this%id%setval(0.0_WP)
+      ! Initialize pointers to functions
+      this%make_label        => null()
+      this%coarse_make_label => null()
+      this%same_label        => null()
+      this%coarse_same_label => null()
       ! Zero structures
       this%nstruct=0
    end subroutine initialize
    
    
    !> Build structure using the user-set test functions
-   subroutine build(this,make_label,same_label,coarse_make_label,coarse_same_label,data)
+   subroutine build(this,data)
       use amrdata_class,    only: amrdata
       use amrdata_class, only: interp_none
       implicit none
@@ -121,7 +127,7 @@ contains
       call this%id%setval(0.0_WP)
 
       ! Build CCL on finest level
-      call build_lvl(data%amr%maxlvl,make_label,same_label)
+      call build_lvl(data%amr%maxlvl,this%make_label,this%same_label)
 
 
       ! Create unique IDs for each structure on coarser levels
@@ -142,7 +148,7 @@ contains
                this%amr%geom(lvl+1) )
 
             ! Build CCL on coarse level
-            call build_lvl(lvl,coarse_make_label,coarse_same_label)
+            call build_lvl(lvl,this%coarse_make_label,this%coarse_same_label)
 
          end do
       end block build_coarser
@@ -168,9 +174,9 @@ contains
          nstruct_=0
          allocate(this%struct(min_struct_size))
          this%struct(:)%parent=0
-         this%struct(:)%per(1)=0
-         this%struct(:)%per(2)=0
-         this%struct(:)%per(3)=0
+         ! this%struct(:)%per(1)=0
+         ! this%struct(:)%per(2)=0
+         ! this%struct(:)%per(3)=0
          this%struct(:)%n_=0
 
          ! Add any ids from finer levels to struct array
@@ -222,7 +228,7 @@ contains
                bx=mfi%tilebox()
                do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                   ! Find next cell in a structure
-                  if (make_label(pdata,lbound(pdata),i,j,k)) then
+                  if (make_label(pdata,i,j,k)) then
                      ! Loop through one-sided neighbors
                      do dim=1,3
                         pos=0; pos(dim)=-1
@@ -232,12 +238,12 @@ contains
                            ! Neighbor is labeled, but are we?
                            if (pid(i,j,k,1).gt.0.5_WP) then
                               ! We already have a label, perform a union of both labels
-                              if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
+                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
                                  pid(i,j,k,1)=union_struct(nint(pid(i,j,k,1)),nint(pid(ii,jj,kk,1)))
                               end if
                            else
                               ! We don't have a label, check if we take the neighbor's label
-                              if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
+                              if (same_label(pdata,i,j,k,ii,jj,kk)) then
                                  pid(i,j,k,1)=pid(ii,jj,kk,1)
                               else
                                  pid(i,j,k,1)=add()
@@ -396,7 +402,7 @@ contains
                      ii=i+pos(1); jj=j+pos(2); kk=k+pos(3)
                      if (pid(ii,jj,kk,1).lt.0.5_WP) cycle
                      ! Check if we should connect these two cells
-                     if (same_label(pdata,lbound(pdata),i,j,k,ii,jj,kk)) then
+                     if (same_label(pdata,i,j,k,ii,jj,kk)) then
                         ! Update parent array to reflect connection
                         call union_parent(nint(pid(i,j,k,1)),nint(pid(ii,jj,kk,1)))
                      end if
@@ -565,16 +571,16 @@ contains
             allocate(tmp(size_new))
             tmp(1:nstruct_)=this%struct
             tmp(nstruct_+1:)%parent=0
-            tmp(nstruct_+1:)%per(1)=0
-            tmp(nstruct_+1:)%per(2)=0
-            tmp(nstruct_+1:)%per(3)=0
+            ! tmp(nstruct_+1:)%per(1)=0
+            ! tmp(nstruct_+1:)%per(2)=0
+            ! tmp(nstruct_+1:)%per(3)=0
             tmp(nstruct_+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
          ! Add new root
          nstruct_=nstruct_+1
          this%struct(nstruct_)%parent=nstruct_
-         this%struct(nstruct_)%per=0
+         ! this%struct(nstruct_)%per=0
          this%struct(nstruct_)%n_=0
          x=nstruct_
       end function add
@@ -591,16 +597,16 @@ contains
             allocate(tmp(size_new))
             tmp(1:size_now)=this%struct       ! copy only what actually exists
             tmp(size_now+1:)%parent=0        ! zero-init everything beyond that
-            tmp(size_now+1:)%per(1)=0
-            tmp(size_now+1:)%per(2)=0
-            tmp(size_now+1:)%per(3)=0
+            ! tmp(size_now+1:)%per(1)=0
+            ! tmp(size_now+1:)%per(2)=0
+            ! tmp(size_now+1:)%per(3)=0
             tmp(size_now+1:)%n_=0
             call move_alloc(tmp,this%struct)
          end if
          if (this%struct(id)%parent.ne.id) then
             nstruct_=nstruct_+1
             this%struct(id)%parent=id
-            this%struct(id)%per=0
+            ! this%struct(id)%per=0
             this%struct(id)%n_=0
          end if
       end subroutine add_existing

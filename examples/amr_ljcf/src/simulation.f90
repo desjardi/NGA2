@@ -377,16 +377,11 @@ contains
    end subroutine jet_init
 
    !> Function that identifies cells within a structure
-   logical function make_label(pVF,lo,i,j,k)
+   logical function make_label(pVF,i,j,k)
       implicit none
-      real(WP), dimension(:,:,:,:), intent(in) :: pVF
-      integer, dimension(3), intent(in) :: lo
+      real(WP), dimension(:,:,:,:), intent(in), pointer :: pVF
       integer, intent(in) :: i,j,k
-      integer :: il,jl,kl
-      il = i - lo(1) + 1
-      jl = j - lo(2) + 1
-      kl = k - lo(3) + 1
-      if (pVF(il,jl,kl,1).gt.0.0_WP) then
+      if (pVF(i,j,k,1).gt.0.0_WP) then
          make_label=.true.
       else
          make_label=.false.
@@ -394,19 +389,11 @@ contains
    end function make_label
 
    !> Function that identifies if neighbors are within the same structure
-   logical function same_label(pVF,lo,i,j,k,ii,jj,kk)
+   logical function same_label(pVF,i,j,k,ii,jj,kk)
       implicit none
-      real(WP), dimension(:,:,:,:), intent(in) :: pVF
-      integer, dimension(3), intent(in) :: lo
+      real(WP), dimension(:,:,:,:), intent(in), pointer :: pVF
       integer, intent(in) :: i,j,k,ii,jj,kk
-      integer :: il,jl,kl,iil,jjl,kkl
-      il  = i  - lo(1) + 1
-      jl  = j  - lo(2) + 1
-      kl  = k  - lo(3) + 1
-      iil = ii - lo(1) + 1
-      jjl = jj - lo(2) + 1
-      kkl = kk - lo(3) + 1
-      if (pVF(il,jl,kl,1).gt.0.0_WP .and. pVF(iil,jjl,kkl,1).gt.0.0_WP) then
+      if (pVF(i,j,k,1).gt.0.0_WP .and. pVF(ii,jj,kk,1).gt.0.0_WP) then
          same_label=.true.
       else
          same_label=.false.
@@ -414,17 +401,12 @@ contains
    end function same_label
 
    !> Function that identifies cells within a structure on coarse level
-   logical function coarse_make_label(pVF,lo,i,j,k)
+   logical function coarse_make_label(pVF,i,j,k)
       use amrmpinc_class,   only: VFhi
       implicit none
-      real(WP), dimension(:,:,:,:), intent(in) :: pVF
-      integer, dimension(3), intent(in) :: lo
+      real(WP), dimension(:,:,:,:), intent(in), pointer :: pVF
       integer, intent(in) :: i,j,k
-      integer :: il,jl,kl
-      il = i - lo(1) + 1
-      jl = j - lo(2) + 1
-      kl = k - lo(3) + 1
-      if (pVF(il,jl,kl,1).gt.VFhi) then
+      if (pVF(i,j,k,1).gt.VFhi) then
          coarse_make_label=.true.
       else
          coarse_make_label=.false.
@@ -432,20 +414,12 @@ contains
    end function coarse_make_label
 
    !> Function that identifies if neighbors are within the same structure on coarse level
-   logical function coarse_same_label(pVF,lo,i,j,k,ii,jj,kk)
+   logical function coarse_same_label(pVF,i,j,k,ii,jj,kk)
       use amrmpinc_class,   only: VFhi
       implicit none
-      real(WP), dimension(:,:,:,:), intent(in) :: pVF
-      integer, dimension(3), intent(in) :: lo
+      real(WP), dimension(:,:,:,:), intent(in), pointer :: pVF
       integer, intent(in) :: i,j,k,ii,jj,kk
-      integer :: il,jl,kl,iil,jjl,kkl
-      il  = i  - lo(1) + 1
-      jl  = j  - lo(2) + 1
-      kl  = k  - lo(3) + 1
-      iil = ii - lo(1) + 1
-      jjl = jj - lo(2) + 1
-      kkl = kk - lo(3) + 1
-      if (pVF(il,jl,kl,1).gt.VFhi .and. pVF(iil,jjl,kkl,1).gt.VFhi) then
+      if (pVF(i,j,k,1).gt.VFhi .and. pVF(ii,jj,kk,1).gt.VFhi) then
          coarse_same_label=.true.
       else
          coarse_same_label=.false.
@@ -649,7 +623,11 @@ contains
       cclabel_evt=event(time=time,name="CCLabel output")
       call param_read('CCLabel period',cclabel_evt%tper)
       call cclabel%initialize(amr,name='amr_ljcf')
-      call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF) 
+      cclabel%make_label        => make_label
+      cclabel%coarse_make_label => coarse_make_label
+      cclabel%same_label        => same_label
+      cclabel%coarse_same_label => coarse_same_label
+      call cclabel%build(fs%VF) 
       call cclabel%compute_stats(fs%VF, fs%Q, fs%rhoG, fs%sigma, stats)
       call write_stats()
 
@@ -811,7 +789,7 @@ contains
 
          ! Construct CCLabel then compute & write stats
          if (cclabel_evt%occurs()) then 
-            call cclabel%build(make_label,same_label,coarse_make_label,coarse_same_label,fs%VF)
+            call cclabel%build(fs%VF)
             call cclabel%compute_stats(fs%VF, fs%Q, fs%rhoG, fs%sigma, stats)
             call write_stats()
          end if
