@@ -482,10 +482,11 @@ contains
       c2=[e1(2)*e2(3)-e1(3)*e2(2),e1(3)*e2(1)-e1(1)*e2(3),e1(1)*e2(2)-e1(2)*e2(1)]
       ! Total gradient (negative sign absorbed into adjustment formula)
       cross_sum=c1+c2
-      ! Compute adjustment along normal direction
+      ! Compute adjustment along normal direction; if the volume gradient degenerates, skip
       mag=sqrt(cross_sum(1)**2+cross_sum(2)**2+cross_sum(3)**2)
-      adjustment=6.0_WP*needed_change/max(mag,tiny(1.0_WP))
-      dir=cross_sum/max(mag,tiny(1.0_WP))
+      if (mag.le.1.0e3_WP*tiny(1.0_WP)) return
+      adjustment=6.0_WP*needed_change/mag
+      dir=cross_sum/mag
       ! Move vertex 9
       poly(:,9)=poly(:,9)+adjustment*dir
    end subroutine correct_flux_poly
@@ -614,16 +615,18 @@ contains
       end do
       
       ! Determine cutting case from sign pattern (0-indexed vertices)
-      ! Case bit i is set if vertex i is above plane (dist > 0)
+      ! Case bit i is set if vertex i is above plane. NOTE: uses the SAME on-plane
+      ! convention as the volume kernels (sign(0.5,d): d=+0 counts as above), so the
+      ! polygon and volume classifications of a vertex exactly on the plane agree.
       icase = 0
-      if (dist(1).gt.0.0_WP) icase = icase + 1    ! vertex 0
-      if (dist(2).gt.0.0_WP) icase = icase + 2    ! vertex 1
-      if (dist(3).gt.0.0_WP) icase = icase + 4    ! vertex 2
-      if (dist(4).gt.0.0_WP) icase = icase + 8    ! vertex 3
-      if (dist(5).gt.0.0_WP) icase = icase + 16   ! vertex 4
-      if (dist(6).gt.0.0_WP) icase = icase + 32   ! vertex 5
-      if (dist(7).gt.0.0_WP) icase = icase + 64   ! vertex 6
-      if (dist(8).gt.0.0_WP) icase = icase + 128  ! vertex 7
+      if (sign(0.5_WP,dist(1)).gt.0.0_WP) icase = icase + 1    ! vertex 0
+      if (sign(0.5_WP,dist(2)).gt.0.0_WP) icase = icase + 2    ! vertex 1
+      if (sign(0.5_WP,dist(3)).gt.0.0_WP) icase = icase + 4    ! vertex 2
+      if (sign(0.5_WP,dist(4)).gt.0.0_WP) icase = icase + 8    ! vertex 3
+      if (sign(0.5_WP,dist(5)).gt.0.0_WP) icase = icase + 16   ! vertex 4
+      if (sign(0.5_WP,dist(6)).gt.0.0_WP) icase = icase + 32   ! vertex 5
+      if (sign(0.5_WP,dist(7)).gt.0.0_WP) icase = icase + 64   ! vertex 6
+      if (sign(0.5_WP,dist(8)).gt.0.0_WP) icase = icase + 128  ! vertex 7
       
       ! Get number of polygon vertices for this case
       nvert = hex_poly_nvert(icase)

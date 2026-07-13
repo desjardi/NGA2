@@ -1132,6 +1132,7 @@ contains
 
          ! Reference point: centroid of center polygon (vertex mean for convex polygon)
          nv=poly_nv_local(i,j,k)
+         if (nv.lt.3) then; mycurv=0.0_WP; return; end if
          pref=sum(polygon_local(:,1:nv,i,j,k),dim=2)/real(nv,WP)
 
          ! Local orthonormal basis from center cell PLIC normal

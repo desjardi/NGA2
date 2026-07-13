@@ -9,7 +9,8 @@ module nasg_class
    public :: nasg
 
    type, extends(stiffened_gas) :: nasg
-      real(WP) :: b = 0.0_WP   !< Co-volume
+      real(WP) :: b = 0.0_WP        !< Co-volume
+      real(WP) :: brhomax = 0.9_WP  !< Packing clamp: (1-b*rho) floored at (1-brhomax) in all rho-based accessors — bounded monotone continuation past the fit's validity (rho>brhomax/b); bit-identical below the knee, inert for b=0
    contains
       procedure, private :: nasg_initialize
       generic   :: initialize              => nasg_initialize
@@ -53,21 +54,21 @@ contains
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      p=(this%gamma-1.0_WP)*rho*(e-this%q)/(1.0_WP-this%b*rho)-this%gamma*this%pinf
+      p=(this%gamma-1.0_WP)*rho*(e-this%q)/max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)-this%gamma*this%pinf
    end function nasg_get_p_from_rho_e
 
    real(WP) function nasg_get_T_from_p_rho(this,p,rho,y) result(T)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      T=(p+this%pinf)*(1.0_WP-this%b*rho)/(this%R*rho)
+      T=(p+this%pinf)*max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)/(this%R*rho)
    end function nasg_get_T_from_p_rho
 
    real(WP) function nasg_get_c_from_p_rho(this,p,rho,y) result(c)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*(1.0_WP-this%b*rho))))
+      c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*max(1.0_WP-this%b*rho,1.0_WP-this%brhomax))))
    end function nasg_get_c_from_p_rho
 
    !> Optimal (rho,e) primitives (NASG, co-volume b): T direct; c via one inline p; cv inherited (=this%cv).
@@ -75,30 +76,31 @@ contains
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      T=(e-this%q-this%pinf*(1.0_WP-this%b*rho)/rho)/this%cv
+      T=(e-this%q-this%pinf*max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)/rho)/this%cv
    end function nasg_get_T_from_rho_e
 
    real(WP) function nasg_get_c_from_rho_e(this,rho,e,y) result(c)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      real(WP) :: p
-      p=(this%gamma-1.0_WP)*rho*(e-this%q)/(1.0_WP-this%b*rho)-this%gamma*this%pinf
-      c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*(1.0_WP-this%b*rho))))
+      real(WP) :: p,ombm
+      ombm=max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)
+      p=(this%gamma-1.0_WP)*rho*(e-this%q)/ombm-this%gamma*this%pinf
+      c=sqrt(max(0.0_WP,this%gamma*(p+this%pinf)/(rho*ombm)))
    end function nasg_get_c_from_rho_e
 
    real(WP) function nasg_get_e_from_p_rho(this,p,rho,y) result(e)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      e=(1.0_WP-this%b*rho)*(p+this%gamma*this%pinf)/((this%gamma-1.0_WP)*rho)+this%q
+      e=max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)*(p+this%gamma*this%pinf)/((this%gamma-1.0_WP)*rho)+this%q
    end function nasg_get_e_from_p_rho
 
    real(WP) function nasg_get_p_from_rho_T(this,rho,T,y) result(p)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: rho,T
       real(WP), dimension(:), intent(in) :: y
-      p=this%R*rho*T/(1.0_WP-this%b*rho)-this%pinf
+      p=this%R*rho*T/max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)-this%pinf
    end function nasg_get_p_from_rho_T
 
    real(WP) function nasg_get_rho_from_p_T(this,p,T,y) result(rho)
@@ -106,6 +108,8 @@ contains
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
       rho=(p+this%pinf)/(this%R*T+this%b*(p+this%pinf))
+      ! Past the knee the clamped branch p+pinf=R*rho*T/(1-brhomax) holds instead (exact piecewise inverse)
+      if (this%b*rho.gt.this%brhomax) rho=(1.0_WP-this%brhomax)*(p+this%pinf)/(this%R*T)
    end function nasg_get_rho_from_p_T
 
    real(WP) function nasg_get_h_from_p_T(this,p,T,y) result(h)
@@ -134,21 +138,29 @@ contains
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: rho,e
       real(WP), dimension(:), intent(in) :: y
-      gruneisen=(this%gamma-1.0_WP)/(1.0_WP-this%b*rho)
+      gruneisen=(this%gamma-1.0_WP)/max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)
    end function nasg_get_gruneisen_from_rho_e
 
    real(WP) function nasg_get_rhoe_from_p_rho(this,p,rho,y) result(rhoe)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: p,rho
       real(WP), dimension(:), intent(in) :: y
-      rhoe=(1.0_WP-this%b*rho)*(p+this%gamma*this%pinf)/(this%gamma-1.0_WP)+rho*this%q
+      rhoe=max(1.0_WP-this%b*rho,1.0_WP-this%brhomax)*(p+this%gamma*this%pinf)/(this%gamma-1.0_WP)+rho*this%q
    end function nasg_get_rhoe_from_p_rho
 
    real(WP) function nasg_get_rhoe_from_p_T(this,p,T,y) result(rhoe)
       class(nasg), intent(in) :: this
       real(WP), intent(in) :: p,T
       real(WP), dimension(:), intent(in) :: y
-      rhoe=((p+this%gamma*this%pinf)*this%cv*T+this%q*(p+this%pinf))/(this%R*T+this%b*(p+this%pinf))
+      real(WP) :: rho
+      rho=(p+this%pinf)/(this%R*T+this%b*(p+this%pinf))
+      if (this%b*rho.gt.this%brhomax) then
+         ! Clamped branch (matches get_rho_from_p_T and get_rhoe_from_p_rho at ombm=1-brhomax)
+         rho=(1.0_WP-this%brhomax)*(p+this%pinf)/(this%R*T)
+         rhoe=(1.0_WP-this%brhomax)*(p+this%gamma*this%pinf)/(this%gamma-1.0_WP)+rho*this%q
+      else
+         rhoe=((p+this%gamma*this%pinf)*this%cv*T+this%q*(p+this%pinf))/(this%R*T+this%b*(p+this%pinf))
+      end if
    end function nasg_get_rhoe_from_p_T
 
    subroutine nasg_print(this)
@@ -161,6 +173,7 @@ contains
       write(msg,'(2x,a,es12.5)') 'gamma = ',this%gamma; call log(msg)
       write(msg,'(2x,a,es12.5)') 'pinf  = ',this%pinf;  call log(msg)
       write(msg,'(2x,a,es12.5)') 'b     = ',this%b;     call log(msg)
+      write(msg,'(2x,a,es12.5)') 'brhomax = ',this%brhomax; call log(msg)
       write(msg,'(2x,a,es12.5)') 'cv    = ',this%cv;    call log(msg)
       write(msg,'(2x,a,es12.5)') 'cp    = ',this%cp;    call log(msg)
       write(msg,'(2x,a,es12.5)') 'R     = ',this%R;     call log(msg)

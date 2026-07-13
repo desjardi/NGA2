@@ -10,16 +10,19 @@ module relax_ig_nasg_class
    private
 
    public :: relax_ig_nasg
-   public :: Prelax,PTrelax
+   public :: Prelax,PTrelax,PThybrid
 
-   integer, parameter :: Prelax =1    !< Mechanical relaxation only
-   integer, parameter :: PTrelax=2    !< Mechanical + thermal relaxation
+   integer, parameter :: Prelax  =1   !< Mechanical relaxation only
+   integer, parameter :: PTrelax =2   !< Mechanical + thermal relaxation
+   integer, parameter :: PThybrid=3   !< Mechanical below Tratmax temperature contrast, mechanical+thermal above
 
    type, extends(thermorelax) :: relax_ig_nasg
       class(ideal_gas), pointer :: gas=>null()
       class(nasg),      pointer :: liq=>null()
       integer  :: model  =Prelax
       real(WP) :: RHOGmin=1.0e-2_WP   !< Skip mechanical relax when gas density falls below this
+      real(WP) :: VFratmax=10.0_WP    !< Max per-call phase-volume change factor in p_relax (partial relax beyond)
+      real(WP) :: Tratmax=10.0_WP     !< PThybrid: temperature contrast max(TG/TL,TL/TG) above which pT_relax is used
       real(WP) :: phist  =1.0_WP      !< Temporal weighting on equilibrium pressure
       real(WP) :: phi0   =0.0_WP      !< Temporal weighting on interface pressure
    contains
@@ -50,12 +53,25 @@ contains
       real(WP), dimension(:), intent(inout) :: Q
       real(WP),               intent(in)    :: Pjump
       integer,  optional,     intent(out)   :: ierr
+      real(WP) :: TL,TG
       ! Mixture cells only
       if (VF.le.0.0_WP.or.VF.ge.1.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
       ! Dispatch
       select case (this%model)
       case (Prelax);  call this%p_relax (dt,VF,Q,Pjump,ierr)
       case (PTrelax); call this%pT_relax(dt,VF,Q,Pjump,ierr)
+      case (PThybrid)
+         if (any(Q(1:4).le.0.0_WP)) then
+            call this%p_relax(dt,VF,Q,Pjump,ierr)
+         else
+            TL=this%liq%get_T_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=[1.0_WP])
+            TG=this%gas%get_T_from_rho_e(rho=Q(2)/(1.0_WP-VF),e=Q(4)/Q(2),y=[1.0_WP])
+            if (TL.gt.0.0_WP.and.TG.gt.0.0_WP.and.max(TG/TL,TL/TG).gt.this%Tratmax) then
+               call this%pT_relax(dt,VF,Q,Pjump,ierr)
+            else
+               call this%p_relax(dt,VF,Q,Pjump,ierr)
+            end if
+         end if
       case default; call die('[relax_ig_nasg apply] unknown model')
       end select
    end subroutine apply
@@ -111,6 +127,9 @@ contains
       ! Equilibrium VF (strict bounds)
       VFeq=(n1*Peq+n0)/(d1*Peq+d0)
       if (VFeq.lt.0.0_WP.or.VFeq.gt.1.0_WP) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
+      ! Clamp per-call phase-volume change to a factor VFratmax (bounds consistent for VFratmax>=1)
+      VFeq=max(1.0_WP-this%VFratmax*(1.0_WP-VF),VF/this%VFratmax, &
+      &        min(VFeq,1.0_WP-(1.0_WP-VF)/this%VFratmax,this%VFratmax*VF))
       ! Update Q with p*dV work at the relaxed interface pressure
       Q(3)=Q(3)-(this%phist*Peq+this%phi0*Pint-this%phist*cJ*Pjump)*(VFeq-VF)
       Q(4)=Q(4)+(this%phist*Peq+this%phi0*Pint-this%phist*cJ*Pjump)*(VFeq-VF)

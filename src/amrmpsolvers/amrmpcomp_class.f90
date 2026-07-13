@@ -36,6 +36,32 @@ module amrmpcomp_class
       ! Thermodynamic relaxation model
       class(thermorelax), pointer :: relax=>null()
 
+      ! Post-relaxation small-cell agglomeration (merge_Q): symmetric pool of a sub-threshold sick phase with its fullest face-neighbour
+      logical  :: merge_on  =.true.     !< enable merge_Q (called from build_plic ahead of clean_Q, i.e. pre-relaxation)
+      real(WP) :: merge_VFlo=0.01_WP    !< small-liquid bound: only VF below this may be merged (subgrid liquid)
+      real(WP) :: merge_VFhi=0.99_WP    !< small-gas    bound: only VF above this may be merged (subgrid gas)
+      real(WP) :: merge_sick=100.0_WP   !< One-sided deficit factor: a gas whose density or specific energy is this many times BELOW its fullest neighbour's merges at any VF
+
+      ! Phase rescue: user-specified minimal (P,T) per phase, enforced in clean_Q wherever the
+      ! phase exists (all levels, every substep), by adding mass and/or energy toward the
+      ! bounded corner state (rho*,e*)(Pmin,Tmin). EOS-generic: uses material accessors only.
+      ! Defaults never fire. The relaxation model applies the same limits to the post-
+      ! relaxation equilibrium (its floor); the case sets both constant pairs together.
+      real(WP) :: Pmin_liq=-1.0e30_WP   !< Liquid rescue pressure limit (e.g. max sustainable tension)
+      real(WP) :: Tmin_liq=-1.0_WP      !< Liquid rescue temperature limit
+      real(WP) :: Pmin_gas=-1.0e30_WP   !< Gas rescue pressure limit (e.g. ~saturation pressure)
+      real(WP) :: Tmin_gas=-1.0_WP      !< Gas rescue temperature limit
+
+      ! Rescue+merge census: rank-local cumulative accumulators reduced by get_info into the
+      ! monitorable scalars (resc_acc 1-3 liq rescue n/dm/dE; 4-6 gas rescue n/dm/dE;
+      ! pool_acc merge pool adoptions). The relaxation model keeps its own ledger for what
+      ! it does (absorb/equilibrate/floor).
+      real(WP), dimension(6) :: resc_acc=0.0_WP
+      real(WP) :: resc_nl=0.0_WP,resc_ml=0.0_WP,resc_el=0.0_WP
+      real(WP) :: resc_ng=0.0_WP,resc_mg=0.0_WP,resc_eg=0.0_WP
+      real(WP) :: pool_acc=0.0_WP
+      real(WP) :: pool_n=0.0_WP
+
       ! Pressure solver for pressure projection
       logical :: use_projection=.false.
       type(amrmg) :: psolver
@@ -58,6 +84,7 @@ module amrmpcomp_class
       ! CFL numbers
       real(WP) :: CFLst=0.0_WP                               !< Surface tension
       real(WP) :: CFLp=0.0_WP                                !< Pressure+convection
+      real(WP) :: CFLd=0.0_WP                                !< Dilatational: dt*|div(u)| (protects the VF renormalization denominator 1-dt*div and scales the p*dV work terms)
       real(WP) :: CFLa_x=0.0_WP,CFLa_y=0.0_WP,CFLa_z=0.0_WP  !< Acoustic
       real(WP) :: CFLv_x=0.0_WP,CFLv_y=0.0_WP,CFLv_z=0.0_WP  !< Viscous
 
@@ -117,6 +144,7 @@ module amrmpcomp_class
       procedure :: get_dQdt
       procedure :: build_plic
       procedure :: clean_Q
+      procedure :: merge_Q
       procedure :: apply_relax
       procedure :: add_viscartif
       procedure :: add_vreman
@@ -601,7 +629,7 @@ contains
                   rhoLo=pRHOL(i-1,j,k,1)*pSubVF(i-1,j,k,2)+pRHOG(i-1,j,k,1)*(1.0_WP-pSubVF(i-1,j,k,2))
                   rhoHi=pRHOL(i  ,j,k,1)*pSubVF(i  ,j,k,1)+pRHOG(i  ,j,k,1)*(1.0_WP-pSubVF(i  ,j,k,1))
                end if
-               pU(i,j,k,1)=(rhoLo*pUVW(i-1,j,k,1)+rhoHi*pUVW(i,j,k,1))/(rhoLo+rhoHi)
+               pU(i,j,k,1)=(rhoLo*pUVW(i-1,j,k,1)+rhoHi*pUVW(i,j,k,1))/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
             ! Get Y-face velocity
             fbx=mfi%nodaltilebox(2)
@@ -611,7 +639,7 @@ contains
                   rhoLo=pRHOL(i,j-1,k,1)*pSubVF(i,j-1,k,4)+pRHOG(i,j-1,k,1)*(1.0_WP-pSubVF(i,j-1,k,4))
                   rhoHi=pRHOL(i,j  ,k,1)*pSubVF(i,j  ,k,3)+pRHOG(i,j  ,k,1)*(1.0_WP-pSubVF(i,j  ,k,3))
                end if
-               pV(i,j,k,1)=(rhoLo*pUVW(i,j-1,k,2)+rhoHi*pUVW(i,j,k,2))/(rhoLo+rhoHi)
+               pV(i,j,k,1)=(rhoLo*pUVW(i,j-1,k,2)+rhoHi*pUVW(i,j,k,2))/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
             ! Get Z-face velocity
             fbx=mfi%nodaltilebox(3)
@@ -621,7 +649,7 @@ contains
                   rhoLo=pRHOL(i,j,k-1,1)*pSubVF(i,j,k-1,6)+pRHOG(i,j,k-1,1)*(1.0_WP-pSubVF(i,j,k-1,6))
                   rhoHi=pRHOL(i,j,k  ,1)*pSubVF(i,j,k  ,5)+pRHOG(i,j,k  ,1)*(1.0_WP-pSubVF(i,j,k  ,5))
                end if
-               pW(i,j,k,1)=(rhoLo*pUVW(i,j,k-1,3)+rhoHi*pUVW(i,j,k,3))/(rhoLo+rhoHi)
+               pW(i,j,k,1)=(rhoLo*pUVW(i,j,k-1,3)+rhoHi*pUVW(i,j,k,3))/max(rhoLo+rhoHi,this%rho_floor)
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
@@ -1098,18 +1126,22 @@ contains
                pUVW(i,j,k,2)=pQ(i,j,k,6)*irho
                pUVW(i,j,k,3)=pQ(i,j,k,7)*irho
                ! Get liquid primitive variables
-               if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) then
+               if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).gt.0.0_WP) then
                   pRHOL(i,j,k,1)=pQ(i,j,k,1)/pVF(i,j,k,1)
-                  pIL  (i,j,k,1)=pQ(i,j,k,3)/pQ(i,j,k,1)
                   ! Liquid composition: cache first ns-1 species (clipped to [0,1]), close ns-th (clipped to [0,1])
                   if (this%liq%ns.gt.1) then
                      pYl(i,j,k,:)=max(0.0_WP,min(pQ(i,j,k,this%Yl_lo:this%Yl_hi)/pQ(i,j,k,1),1.0_WP))
                      yL(1:this%liq%ns-1)=pYl(i,j,k,:)
                   end if
                   yL(this%liq%ns)=max(0.0_WP,1.0_WP-sum(yL(1:this%liq%ns-1)))
-                  pPL  (i,j,k,1)=this%liq%get_p_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
-                  pTL  (i,j,k,1)=this%liq%get_T_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
-                  CL            =this%liq%get_c_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                  if (pQ(i,j,k,3).gt.0.0_WP) then
+                     pIL  (i,j,k,1)=pQ(i,j,k,3)/pQ(i,j,k,1)
+                     pPL  (i,j,k,1)=this%liq%get_p_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                     pTL  (i,j,k,1)=this%liq%get_T_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                     CL            =this%liq%get_c_from_rho_e(pRHOL(i,j,k,1),pIL(i,j,k,1),yL)
+                  else
+                     pIL(i,j,k,1)=0.0_WP; pPL(i,j,k,1)=0.0_WP; pTL(i,j,k,1)=0.0_WP; CL=0.0_WP
+                  end if
                else
                   pRHOL(i,j,k,1)=0.0_WP
                   pIL  (i,j,k,1)=0.0_WP
@@ -1119,18 +1151,22 @@ contains
                   if (this%liq%ns.gt.1) pYl(i,j,k,:)=0.0_WP
                end if
                ! Get gas primitive variables
-               if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) then
+               if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).gt.0.0_WP) then
                   pRHOG(i,j,k,1)=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
-                  pIG  (i,j,k,1)=pQ(i,j,k,4)/pQ(i,j,k,2)
                   ! Gas composition: cache first ns-1 species (clipped to [0,1]), close ns-th (clipped to [0,1])
                   if (this%gas%ns.gt.1) then
                      pYg(i,j,k,:)=max(0.0_WP,min(pQ(i,j,k,this%Yg_lo:this%Yg_hi)/pQ(i,j,k,2),1.0_WP))
                      yG(1:this%gas%ns-1)=pYg(i,j,k,:)
                   end if
                   yG(this%gas%ns)=max(0.0_WP,1.0_WP-sum(yG(1:this%gas%ns-1)))
-                  pPG  (i,j,k,1)=this%gas%get_p_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
-                  pTG  (i,j,k,1)=this%gas%get_T_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
-                  CG            =this%gas%get_c_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                  if (pQ(i,j,k,4).gt.0.0_WP) then
+                     pIG  (i,j,k,1)=pQ(i,j,k,4)/pQ(i,j,k,2)
+                     pPG  (i,j,k,1)=this%gas%get_p_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                     pTG  (i,j,k,1)=this%gas%get_T_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                     CG            =this%gas%get_c_from_rho_e(pRHOG(i,j,k,1),pIG(i,j,k,1),yG)
+                  else
+                     pIG(i,j,k,1)=0.0_WP; pPG(i,j,k,1)=0.0_WP; pTG(i,j,k,1)=0.0_WP; CG=0.0_WP
+                  end if
                else
                   pRHOG(i,j,k,1)=0.0_WP
                   pIG  (i,j,k,1)=0.0_WP
@@ -1418,7 +1454,7 @@ contains
          real(WP), dimension(-2: 0) :: wenop
          real(WP), dimension(-1:+1) :: wenom
          real(WP), dimension(1:3,1:3) :: dUdx
-         real(WP) :: w,div,visc_f,beta_f,fluxY,condL,condG
+         real(WP) :: w,div,visc_f,beta_f,fluxY,condL,condG,fluxC
          real(WP), dimension(this%liq%ns) :: ylf,hkL
          real(WP), dimension(this%gas%ns) :: ygf,hkG
          real(WP), parameter :: eps=1.0e-15_WP
@@ -1526,9 +1562,18 @@ contains
                   ! Phasic face conductances: own-phase min aperture * face diffusivity / dx (zero when phase absent/invalid on either side)
                   condL=0.0_WP; if (all(pVF(i-1:i,j,k,1).ge.VFlo).and.all(pTL(i-1:i,j,k,1).gt.0.0_WP)) condL=(       minval(pVF(i-1:i,j,k,1)))*0.5_WP*sum(pDiffL(i-1:i,j,k,1))*dxi
                   condG=0.0_WP; if (all(pVF(i-1:i,j,k,1).le.VFhi).and.all(pTG(i-1:i,j,k,1).gt.0.0_WP)) condG=(1.0_WP-maxval(pVF(i-1:i,j,k,1)))*0.5_WP*sum(pDiffG(i-1:i,j,k,1))*dxi
-                  ! Phasic heat diffusion flux
-                  pFx(i,j,k,3)=pFx(i,j,k,3)+condL*(pTL(i,j,k,1)-pTL(i-1,j,k,1))
-                  pFx(i,j,k,4)=pFx(i,j,k,4)+condG*(pTG(i,j,k,1)-pTG(i-1,j,k,1))
+                  ! Phasic heat diffusion flux, content-limited: one face may drain at most 10%
+                  ! of the donor (hotter) cell's phasic energy per stage (2*ndim faces then never
+                  ! exceed ~60%) — extraction otherwise scales with dT*aperture, not content,
+                  ! and a thin-mass hot phase can lose more than it holds (avalanche)
+                  fluxC=condL*(pTL(i,j,k,1)-pTL(i-1,j,k,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i  ,j,k,3),0.0_WP)/(dxi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i-1,j,k,3),0.0_WP)/(dxi*dt)); end if
+                  pFx(i,j,k,3)=pFx(i,j,k,3)+fluxC
+                  fluxC=condG*(pTG(i,j,k,1)-pTG(i-1,j,k,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i  ,j,k,4),0.0_WP)/(dxi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i-1,j,k,4),0.0_WP)/(dxi*dt)); end if
+                  pFx(i,j,k,4)=pFx(i,j,k,4)+fluxC
                   ! Phasic species diffusion flux (Le=1) with interdiffusion enthalpy via EOS partial enthalpies
                   if (this%liq%ns.gt.1.and.condL.gt.0.0_WP) then
                      ylf(1:this%liq%ns-1)=0.5_WP*(pYl(i-1,j,k,:)+pYl(i,j,k,:)); ylf(this%liq%ns)=max(0.0_WP,1.0_WP-sum(ylf(1:this%liq%ns-1)))
@@ -1619,8 +1664,15 @@ contains
                   condL=0.0_WP; if (all(pVF(i,j-1:j,k,1).ge.VFlo).and.all(pTL(i,j-1:j,k,1).gt.0.0_WP)) condL=(       minval(pVF(i,j-1:j,k,1)))*0.5_WP*sum(pDiffL(i,j-1:j,k,1))*dyi
                   condG=0.0_WP; if (all(pVF(i,j-1:j,k,1).le.VFhi).and.all(pTG(i,j-1:j,k,1).gt.0.0_WP)) condG=(1.0_WP-maxval(pVF(i,j-1:j,k,1)))*0.5_WP*sum(pDiffG(i,j-1:j,k,1))*dyi
                   ! Phasic heat diffusion flux
-                  pFy(i,j,k,3)=pFy(i,j,k,3)+condL*(pTL(i,j,k,1)-pTL(i,j-1,k,1))
-                  pFy(i,j,k,4)=pFy(i,j,k,4)+condG*(pTG(i,j,k,1)-pTG(i,j-1,k,1))
+                  ! Content-limited conduction (see x-direction comment)
+                  fluxC=condL*(pTL(i,j,k,1)-pTL(i,j-1,k,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i,j  ,k,3),0.0_WP)/(dyi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i,j-1,k,3),0.0_WP)/(dyi*dt)); end if
+                  pFy(i,j,k,3)=pFy(i,j,k,3)+fluxC
+                  fluxC=condG*(pTG(i,j,k,1)-pTG(i,j-1,k,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i,j  ,k,4),0.0_WP)/(dyi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i,j-1,k,4),0.0_WP)/(dyi*dt)); end if
+                  pFy(i,j,k,4)=pFy(i,j,k,4)+fluxC
                   ! Phasic species diffusion flux (Le=1) with interdiffusion enthalpy via EOS partial enthalpies
                   if (this%liq%ns.gt.1.and.condL.gt.0.0_WP) then
                      ylf(1:this%liq%ns-1)=0.5_WP*(pYl(i,j-1,k,:)+pYl(i,j,k,:)); ylf(this%liq%ns)=max(0.0_WP,1.0_WP-sum(ylf(1:this%liq%ns-1)))
@@ -1711,8 +1763,15 @@ contains
                   condL=0.0_WP; if (all(pVF(i,j,k-1:k,1).ge.VFlo).and.all(pTL(i,j,k-1:k,1).gt.0.0_WP)) condL=(       minval(pVF(i,j,k-1:k,1)))*0.5_WP*sum(pDiffL(i,j,k-1:k,1))*dzi
                   condG=0.0_WP; if (all(pVF(i,j,k-1:k,1).le.VFhi).and.all(pTG(i,j,k-1:k,1).gt.0.0_WP)) condG=(1.0_WP-maxval(pVF(i,j,k-1:k,1)))*0.5_WP*sum(pDiffG(i,j,k-1:k,1))*dzi
                   ! Phasic heat diffusion flux
-                  pFz(i,j,k,3)=pFz(i,j,k,3)+condL*(pTL(i,j,k,1)-pTL(i,j,k-1,1))
-                  pFz(i,j,k,4)=pFz(i,j,k,4)+condG*(pTG(i,j,k,1)-pTG(i,j,k-1,1))
+                  ! Content-limited conduction (see x-direction comment)
+                  fluxC=condL*(pTL(i,j,k,1)-pTL(i,j,k-1,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i,j,k  ,3),0.0_WP)/(dzi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i,j,k-1,3),0.0_WP)/(dzi*dt)); end if
+                  pFz(i,j,k,3)=pFz(i,j,k,3)+fluxC
+                  fluxC=condG*(pTG(i,j,k,1)-pTG(i,j,k-1,1))
+                  if (fluxC.gt.0.0_WP) then; fluxC=min(fluxC, 0.1_WP*max(pQ(i,j,k  ,4),0.0_WP)/(dzi*dt))
+                  else;                      fluxC=max(fluxC,-0.1_WP*max(pQ(i,j,k-1,4),0.0_WP)/(dzi*dt)); end if
+                  pFz(i,j,k,4)=pFz(i,j,k,4)+fluxC
                   ! Phasic species diffusion flux (Le=1) with interdiffusion enthalpy via EOS partial enthalpies
                   if (this%liq%ns.gt.1.and.condL.gt.0.0_WP) then
                      ylf(1:this%liq%ns-1)=0.5_WP*(pYl(i,j,k-1,:)+pYl(i,j,k,:)); ylf(this%liq%ns)=max(0.0_WP,1.0_WP-sum(ylf(1:this%liq%ns-1)))
@@ -2229,20 +2288,25 @@ contains
       real(WP), intent(in) :: time
       ! Call parent build_plic
       call this%amrmpflow%build_plic(time)
+      ! Merge first
+      call this%merge_Q(time)
       ! Clean up Q
       call this%clean_Q()
    end subroutine build_plic
-
+   
    !> Clean up Q in pure cells
    subroutine clean_Q(this)
       implicit none
       class(amrmpcomp), intent(inout) :: this
       integer :: lvl,i,j,k
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ
+      real(WP) :: eref,rref,rstar,mold,eold,m0,dV
+      logical :: valid
       type(amrex_mfiter) :: mfi
-      type(amrex_box) :: bx
+      type(amrex_box) :: bx,bxv
       ! Traverse all levels
       do lvl=0,this%amr%clvl()
+         dV=this%amr%cell_vol(lvl)
          call this%amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             ! Get pointers to data
@@ -2250,6 +2314,7 @@ contains
             pQ =>this%Q%mf(lvl)%dataptr(mfi)
             ! Loop over grown tiles
             bx=mfi%growntilebox(this%nover)
+            bxv=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                if (pVF(i,j,k,1).lt.VFlo) then
                   pQ(i,j,k,1)=0.0_WP; pQ(i,j,k,3)=0.0_WP
@@ -2258,11 +2323,288 @@ contains
                   pQ(i,j,k,2)=0.0_WP; pQ(i,j,k,4)=0.0_WP
                   if (this%gas%ns.gt.1) pQ(i,j,k,this%Yg_lo:this%Yg_hi)=0.0_WP
                end if
+               ! Minimal positivity floors at rho_floor (own energy reference only; anything
+               ! deeper belongs to the phase rescue below)
+               if (pVF(i,j,k,1).le.VFhi.and.pQ(i,j,k,2).lt.this%rho_floor*(1.0_WP-pVF(i,j,k,1))) then
+                  if (pQ(i,j,k,2).gt.0.0_WP.and.pQ(i,j,k,4).gt.0.0_WP) then
+                     eref=pQ(i,j,k,4)/pQ(i,j,k,2)
+                     pQ(i,j,k,2)=this%rho_floor*(1.0_WP-pVF(i,j,k,1)); pQ(i,j,k,4)=pQ(i,j,k,2)*eref
+                  end if
+               end if
+               if (pVF(i,j,k,1).ge.VFlo.and.pQ(i,j,k,1).lt.this%rho_floor*pVF(i,j,k,1)) then
+                  if (pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,3).gt.0.0_WP) then
+                     eref=pQ(i,j,k,3)/pQ(i,j,k,1)
+                     pQ(i,j,k,1)=this%rho_floor*pVF(i,j,k,1); pQ(i,j,k,3)=pQ(i,j,k,1)*eref
+                  end if
+               end if
+               ! Phase rescue: user-specified minimal (Pmin,Tmin) per phase, enforced wherever the
+               ! phase exists, by adding mass and/or energy. Below the corner density
+               ! rho*=rho(Pmin,Tmin) -> project to the corner state (both targets bounded by
+               ! construction — never evaluated at the sick cell's own vanishing density); above
+               ! it -> lift energy at fixed mass until both P>=Pmin and T>=Tmin (p and T are
+               ! monotone in e at fixed rho). Added mass carries the cell velocity. Census-ledgered.
+               valid=(i.ge.bxv%lo(1).and.i.le.bxv%hi(1).and.j.ge.bxv%lo(2).and.j.le.bxv%hi(2).and.k.ge.bxv%lo(3).and.k.le.bxv%hi(3))
+               m0=pQ(i,j,k,1)+pQ(i,j,k,2)
+               if (this%Tmin_liq.gt.0.0_WP.and.this%Pmin_liq.gt.-1.0e29_WP.and.pVF(i,j,k,1).ge.VFlo) then
+                  mold=pQ(i,j,k,1); eold=pQ(i,j,k,3)
+                  rstar=this%liq%get_rho_from_p_T(p=this%Pmin_liq,T=this%Tmin_liq,y=[1.0_WP])
+                  if (pQ(i,j,k,1).lt.rstar*pVF(i,j,k,1)) then
+                     pQ(i,j,k,1)=rstar*pVF(i,j,k,1)
+                     ! max(): the projection only ever ADDS energy (a hot cell keeps its content)
+                     pQ(i,j,k,3)=max(eold,pQ(i,j,k,1)*this%liq%get_e_from_p_rho(p=this%Pmin_liq,rho=rstar,y=[1.0_WP]))
+                  else
+                     rref=pQ(i,j,k,1)/pVF(i,j,k,1)
+                     eref=max(this%liq%get_e_from_p_rho(p=this%Pmin_liq,rho=rref,y=[1.0_WP]), &
+                     &        this%liq%get_e_from_p_rho(p=this%liq%get_p_from_rho_T(rho=rref,T=this%Tmin_liq,y=[1.0_WP]),rho=rref,y=[1.0_WP]))
+                     if (pQ(i,j,k,3).lt.pQ(i,j,k,1)*eref) pQ(i,j,k,3)=pQ(i,j,k,1)*eref
+                  end if
+                  if (valid.and.(pQ(i,j,k,1).ne.mold.or.pQ(i,j,k,3).ne.eold)) then
+                     this%resc_acc(1)=this%resc_acc(1)+1.0_WP
+                     this%resc_acc(2)=this%resc_acc(2)+(pQ(i,j,k,1)-mold)*dV
+                     this%resc_acc(3)=this%resc_acc(3)+(pQ(i,j,k,3)-eold)*dV
+                  end if
+               end if
+               if (this%Tmin_gas.gt.0.0_WP.and.this%Pmin_gas.gt.-1.0e29_WP.and.pVF(i,j,k,1).le.VFhi) then
+                  mold=pQ(i,j,k,2); eold=pQ(i,j,k,4)
+                  rstar=this%gas%get_rho_from_p_T(p=this%Pmin_gas,T=this%Tmin_gas,y=[1.0_WP])
+                  if (pQ(i,j,k,2).lt.rstar*(1.0_WP-pVF(i,j,k,1))) then
+                     pQ(i,j,k,2)=rstar*(1.0_WP-pVF(i,j,k,1))
+                     ! max(): the projection only ever ADDS energy (a hot cell keeps its content)
+                     pQ(i,j,k,4)=max(eold,pQ(i,j,k,2)*this%gas%get_e_from_p_rho(p=this%Pmin_gas,rho=rstar,y=[1.0_WP]))
+                  else
+                     rref=pQ(i,j,k,2)/(1.0_WP-pVF(i,j,k,1))
+                     eref=max(this%gas%get_e_from_p_rho(p=this%Pmin_gas,rho=rref,y=[1.0_WP]), &
+                     &        this%gas%get_e_from_p_rho(p=this%gas%get_p_from_rho_T(rho=rref,T=this%Tmin_gas,y=[1.0_WP]),rho=rref,y=[1.0_WP]))
+                     if (pQ(i,j,k,4).lt.pQ(i,j,k,2)*eref) pQ(i,j,k,4)=pQ(i,j,k,2)*eref
+                  end if
+                  if (valid.and.(pQ(i,j,k,2).ne.mold.or.pQ(i,j,k,4).ne.eold)) then
+                     this%resc_acc(4)=this%resc_acc(4)+1.0_WP
+                     this%resc_acc(5)=this%resc_acc(5)+(pQ(i,j,k,2)-mold)*dV
+                     this%resc_acc(6)=this%resc_acc(6)+(pQ(i,j,k,4)-eold)*dV
+                  end if
+               end if
+               ! Added mass carries the local velocity (momentum scaled with total mass)
+               if (m0.gt.0.0_WP.and.pQ(i,j,k,1)+pQ(i,j,k,2).gt.m0) pQ(i,j,k,5:7)=pQ(i,j,k,5:7)*(pQ(i,j,k,1)+pQ(i,j,k,2))/m0
             end do; end do; end do
          end do
          call this%amr%mfiter_destroy(mfi)
       end do
    end subroutine clean_Q
+
+   !> Small-cell agglomeration: a claimant (deficit-only: gas small by volume or merge_sick-fold below its fullest face-neighbour in density or
+   !> specific energy incl. non-positive; liquid small by volume or non-positive mass/energy) pools its phase with that neighbour; every group member
+   !> adopts the pooled intensive state at its own unchanged VF. Claimants never serve as partners.
+   !> Conserves phasic masses, momentum, and total energy exactly; leaves VF untouched. Finest level only; requires fresh Q ghosts on entry, re-syncs Q on exit.
+   subroutine merge_Q(this,time)
+      use amrex_amr_module, only: amrex_multifab,amrex_multifab_destroy
+      implicit none
+      class(amrmpcomp), intent(inout) :: this
+      real(WP), intent(in) :: time
+      integer :: lvl,i,j,k,f,ia,ja,ka,pdir,ncl,msk
+      integer, dimension(3,6) :: foff
+      integer, dimension(6)   :: fopp
+      type(amrex_mfiter) :: mfi
+      type(amrex_box)    :: bx
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ,pP
+      type(amrex_multifab) :: pool
+      real(WP) :: VFc,sM,sE,sVol,sKE,M1,M2,rhoG,eG,rhoL,eL,ekin
+      real(WP), dimension(3) :: uP,ua,sMom,mom,uC,uG,uL,lmom,gmom
+      logical  :: gasm,liqm
+      ! Return if disabled
+      if (.not.this%merge_on) return
+      ! Finest level only (small mixture cells live there)
+      if (this%amr%clvl().lt.this%amr%maxlvl) return
+      lvl=this%amr%maxlvl
+      foff(:,1)=[-1,0,0]; foff(:,2)=[1,0,0]; foff(:,3)=[0,-1,0]; foff(:,4)=[0,1,0]; foff(:,5)=[0,0,-1]; foff(:,6)=[0,0,1]
+      fopp=[2,1,4,3,6,5]
+      ! Pooled-state field: 1-5 gas (rho,e,ux,uy,uz), 6 gas-valid, 7-11 liq, 12 liq-valid,
+      ! 13/14 accepted-claimant face bitmasks (gas/liq) so pass 2 reproduces pass 1's decisions
+      call this%amr%mfab_build(lvl,pool,ncomp=14,nover=1,atface=[.false.,.false.,.false.])
+      call pool%setval(0.0_WP)
+      ! ---- Pass 1: each reservoir cell pools its phase with its SICK small claimants ----
+      call this%amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         pVF=>this%VF%mf(lvl)%dataptr(mfi); pQ=>this%Q%mf(lvl)%dataptr(mfi); pP=>pool%dataptr(mfi)
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            VFc=pVF(i,j,k,1)
+            ! GAS pool: is this cell a gas reservoir?
+            if (VFc.lt.this%merge_VFhi) then
+               sM=pQ(i,j,k,2); sE=pQ(i,j,k,4); sVol=1.0_WP-VFc
+               uP=pQ(i,j,k,5:7)/(pQ(i,j,k,1)+pQ(i,j,k,2)); sMom=pQ(i,j,k,2)*uP; sKE=pQ(i,j,k,2)*sum(uP**2); ncl=0; msk=0
+               do f=1,6
+                  ia=i+foff(1,f); ja=j+foff(2,f); ka=k+foff(3,f)
+                  if (gpd(ia,ja,ka).eq.fopp(f)) then                 ! it picked us...
+                     if (gclaim(ia,ja,ka)) then                      ! ...and is small/degenerate/sick
+                        ua=pQ(ia,ja,ka,5:7)/(pQ(ia,ja,ka,1)+pQ(ia,ja,ka,2))
+                        sM=sM+pQ(ia,ja,ka,2); sE=sE+pQ(ia,ja,ka,4); sKE=sKE+pQ(ia,ja,ka,2)*sum(ua**2)
+                        sVol=sVol+1.0_WP-pVF(ia,ja,ka,1); sMom=sMom+pQ(ia,ja,ka,2)*ua; ncl=ncl+1; msk=ibset(msk,f)
+                     end if
+                  end if
+               end do
+               ! Validate only a healthy pool built by a non-claimant (conservation: a claimant adopts elsewhere)
+               if (ncl.ge.1.and.sM.gt.0.0_WP.and.sVol.gt.0.0_WP.and..not.gclaim(i,j,k)) then
+                  eG=(sE+0.5_WP*(sKE-sum(sMom**2)/sM))/sM              ! mixing-dissipated KE -> internal energy
+                  if (eG.gt.0.0_WP) then
+                     pP(i,j,k,1)=sM/sVol; pP(i,j,k,2)=eG; pP(i,j,k,3:5)=sMom/sM; pP(i,j,k,6)=1.0_WP; pP(i,j,k,13)=real(msk,WP)
+                  end if
+               end if
+            end if
+            ! LIQUID pool: is this cell a liquid reservoir?
+            if (VFc.gt.this%merge_VFlo) then
+               sM=pQ(i,j,k,1); sE=pQ(i,j,k,3); sVol=VFc
+               uP=pQ(i,j,k,5:7)/(pQ(i,j,k,1)+pQ(i,j,k,2)); sMom=pQ(i,j,k,1)*uP; sKE=pQ(i,j,k,1)*sum(uP**2); ncl=0; msk=0
+               do f=1,6
+                  ia=i+foff(1,f); ja=j+foff(2,f); ka=k+foff(3,f)
+                  if (lpd(ia,ja,ka).eq.fopp(f)) then                 ! it picked us...
+                     if (lclaim(ia,ja,ka)) then                      ! ...and is small/degenerate/sick
+                        ua=pQ(ia,ja,ka,5:7)/(pQ(ia,ja,ka,1)+pQ(ia,ja,ka,2))
+                        sM=sM+pQ(ia,ja,ka,1); sE=sE+pQ(ia,ja,ka,3); sKE=sKE+pQ(ia,ja,ka,1)*sum(ua**2)
+                        sVol=sVol+pVF(ia,ja,ka,1); sMom=sMom+pQ(ia,ja,ka,1)*ua; ncl=ncl+1; msk=ibset(msk,f)
+                     end if
+                  end if
+               end do
+               ! Validate only a healthy pool built by a non-claimant (conservation: a claimant adopts elsewhere)
+               if (ncl.ge.1.and.sM.gt.0.0_WP.and.sVol.gt.0.0_WP.and..not.lclaim(i,j,k)) then
+                  eL=(sE+0.5_WP*(sKE-sum(sMom**2)/sM))/sM              ! mixing-dissipated KE -> internal energy
+                  if (eL.gt.0.0_WP) then
+                     pP(i,j,k,7)=sM/sVol; pP(i,j,k,8)=eL; pP(i,j,k,9:11)=sMom/sM; pP(i,j,k,12)=1.0_WP; pP(i,j,k,14)=real(msk,WP)
+                  end if
+               end if
+            end if
+         end do; end do; end do
+      end do
+      call this%amr%mfiter_destroy(mfi)
+      call pool%fill_boundary(this%amr%geom(lvl))
+      ! ---- Pass 2: every cell adopts its pooled state (small cell <- partner's slot; partner <- own) ----
+      call this%amr%mfiter_build(lvl,mfi)
+      do while (mfi%next())
+         pVF=>this%VF%mf(lvl)%dataptr(mfi); pQ=>this%Q%mf(lvl)%dataptr(mfi); pP=>pool%dataptr(mfi)
+         bx=mfi%tilebox()
+         do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
+            VFc=pVF(i,j,k,1)
+            M1=pQ(i,j,k,1); M2=pQ(i,j,k,2); mom=pQ(i,j,k,5:7); uC=mom/(M1+M2)
+            gasm=.false.; liqm=.false.
+            ! Gas adoption: claimant via its partner's bitmask bit (the pass-1 decision), else
+            ! partner via its own slot; mutually exclusive by pass-1 construction
+            pdir=gpd(i,j,k)
+            if (pdir.gt.0) then
+               ia=i+foff(1,pdir); ja=j+foff(2,pdir); ka=k+foff(3,pdir)
+               if (pP(ia,ja,ka,6).gt.0.5_WP.and.btest(nint(pP(ia,ja,ka,13)),fopp(pdir))) then
+                  rhoG=pP(ia,ja,ka,1); eG=pP(ia,ja,ka,2); uG=pP(ia,ja,ka,3:5); gasm=.true.
+               end if
+            end if
+            if (.not.gasm.and.pP(i,j,k,6).gt.0.5_WP) then
+               rhoG=pP(i,j,k,1); eG=pP(i,j,k,2); uG=pP(i,j,k,3:5); gasm=.true.
+            end if
+            ! Liquid adoption (mirror)
+            pdir=lpd(i,j,k)
+            if (pdir.gt.0) then
+               ia=i+foff(1,pdir); ja=j+foff(2,pdir); ka=k+foff(3,pdir)
+               if (pP(ia,ja,ka,12).gt.0.5_WP.and.btest(nint(pP(ia,ja,ka,14)),fopp(pdir))) then
+                  rhoL=pP(ia,ja,ka,7); eL=pP(ia,ja,ka,8); uL=pP(ia,ja,ka,9:11); liqm=.true.
+               end if
+            end if
+            if (.not.liqm.and.pP(i,j,k,12).gt.0.5_WP) then
+               rhoL=pP(i,j,k,7); eL=pP(i,j,k,8); uL=pP(i,j,k,9:11); liqm=.true.
+            end if
+            ! Apply: set phase to pooled (rho*,e*) at own VF; keep the un-merged phase's momentum.
+            ! Species partial masses are rescaled to the new phase mass (preserves mass fractions;
+            ! composition is not pooled across the pair)
+            if (liqm) then
+               pQ(i,j,k,1)=rhoL*VFc; pQ(i,j,k,3)=rhoL*eL*VFc; lmom=pQ(i,j,k,1)*uL
+               if (this%liq%ns.gt.1.and.M1.gt.0.0_WP) pQ(i,j,k,this%Yl_lo:this%Yl_hi)=pQ(i,j,k,this%Yl_lo:this%Yl_hi)*(pQ(i,j,k,1)/M1)
+            else
+               lmom=M1*uC
+            end if
+            if (gasm) then
+               pQ(i,j,k,2)=rhoG*(1.0_WP-VFc); pQ(i,j,k,4)=rhoG*eG*(1.0_WP-VFc); gmom=pQ(i,j,k,2)*uG
+               if (this%gas%ns.gt.1.and.M2.gt.0.0_WP) pQ(i,j,k,this%Yg_lo:this%Yg_hi)=pQ(i,j,k,this%Yg_lo:this%Yg_hi)*(pQ(i,j,k,2)/M2)
+            else
+               gmom=M2*uC
+            end if
+            pQ(i,j,k,5:7)=lmom+gmom
+            ! Census: pool adoptions (rescue monitor)
+            if (gasm.or.liqm) this%pool_acc=this%pool_acc+1.0_WP
+            ! Single-velocity collapse: thermalize the intra-cell gas-liquid relative KE into internal energy
+            if ((gasm.or.liqm).and.pQ(i,j,k,1).gt.0.0_WP.and.pQ(i,j,k,2).gt.0.0_WP) then
+               ekin=0.5_WP*pQ(i,j,k,1)*pQ(i,j,k,2)/(pQ(i,j,k,1)+pQ(i,j,k,2))*sum((lmom/pQ(i,j,k,1)-gmom/pQ(i,j,k,2))**2)
+               pQ(i,j,k,3)=pQ(i,j,k,3)+ekin*pQ(i,j,k,1)/(pQ(i,j,k,1)+pQ(i,j,k,2))
+               pQ(i,j,k,4)=pQ(i,j,k,4)+ekin*pQ(i,j,k,2)/(pQ(i,j,k,1)+pQ(i,j,k,2))
+            end if
+         end do; end do; end do
+      end do
+      call this%amr%mfiter_destroy(mfi)
+      call amrex_multifab_destroy(pool)
+      ! Re-sync Q (merge_Q is the last modifier of Q in the relaxation step)
+      call this%Q%average_down(); call this%Q%fill(time=time)
+   contains
+      !> Gas partner direction for cell (ci,cj,ck): lowest-VF reservoir (VF<merge_VFhi) face, 0 if none
+      integer function gpd(ci,cj,ck) result(d)
+         integer, intent(in) :: ci,cj,ck
+         integer :: g; real(WP) :: vm,vv
+         d=0; vm=this%merge_VFhi
+         do g=1,6
+            vv=pVF(ci+foff(1,g),cj+foff(2,g),ck+foff(3,g),1)
+            if (vv.lt.this%merge_VFhi.and.vv.lt.vm) then; vm=vv; d=g; end if
+         end do
+      end function gpd
+      !> Liquid partner direction: highest-VF reservoir (VF>merge_VFlo) face, 0 if none
+      integer function lpd(ci,cj,ck) result(d)
+         integer, intent(in) :: ci,cj,ck
+         integer :: g; real(WP) :: vm,vv
+         d=0; vm=this%merge_VFlo
+         do g=1,6
+            vv=pVF(ci+foff(1,g),cj+foff(2,g),ck+foff(3,g),1)
+            if (vv.gt.this%merge_VFlo.and.vv.gt.vm) then; vm=vv; d=g; end if
+         end do
+      end function lpd
+      !> Gas deficit of cell a vs partner b, ONE-SIDED: vanishing density or specific energy
+      !> relative to the partner (includes non-positive states). Excess never qualifies; a
+      !> broken partner cannot help.
+      logical function gsick(ai,aj,ak,bi,bj,bk)
+         integer, intent(in) :: ai,aj,ak,bi,bj,bk
+         real(WP) :: va,vb
+         gsick=.false.
+         va=1.0_WP-pVF(ai,aj,ak,1); vb=1.0_WP-pVF(bi,bj,bk,1)
+         if (va.le.0.0_WP) return
+         if (vb.le.0.0_WP.or.pQ(bi,bj,bk,2).le.0.0_WP.or.pQ(bi,bj,bk,4).le.0.0_WP) return
+         if (pQ(ai,aj,ak,2).le.0.0_WP.or.pQ(ai,aj,ak,4).le.0.0_WP) then; gsick=.true.; return; end if
+         ! Ratio-deficit claims additionally require partner DOMINANCE in both pooled
+         ! extensives (mass and energy): the pooled state stays partner-dominated, so a
+         ! large-inventory claimant can never rewrite a smaller partner
+         if (pQ(bi,bj,bk,2).ge.pQ(ai,aj,ak,2).and.pQ(bi,bj,bk,4).ge.pQ(ai,aj,ak,4)) then
+            gsick=(pQ(ai,aj,ak,2)/va)*this%merge_sick.lt.pQ(bi,bj,bk,2)/vb .or. &
+            &     (pQ(ai,aj,ak,4)/pQ(ai,aj,ak,2))*this%merge_sick.lt.pQ(bi,bj,bk,4)/pQ(bi,bj,bk,2)
+         end if
+      end function gsick
+      !> Liquid deficit: non-positive mass/energy with liquid volume present ONLY (ratio-deficit
+      !> healing would rewrite the stiff partner at rho*c^2 pressure scale)
+      logical function lsick(ai,aj,ak,bi,bj,bk)
+         integer, intent(in) :: ai,aj,ak,bi,bj,bk
+         lsick=.false.
+         if (pVF(ai,aj,ak,1).le.0.0_WP) return
+         if (pVF(bi,bj,bk,1).le.0.0_WP.or.pQ(bi,bj,bk,1).le.0.0_WP.or.pQ(bi,bj,bk,3).le.0.0_WP) return
+         lsick=(pQ(ai,aj,ak,1).le.0.0_WP.or.pQ(ai,aj,ak,3).le.0.0_WP)
+      end function lsick
+      !> Claimant predicates: has a partner and is small by volume or deficient vs it
+      logical function gclaim(ci,cj,ck)
+         integer, intent(in) :: ci,cj,ck
+         integer :: d
+         gclaim=.false.
+         d=gpd(ci,cj,ck)
+         if (d.eq.0) return
+         gclaim=(pVF(ci,cj,ck,1).gt.this%merge_VFhi).or.gsick(ci,cj,ck,ci+foff(1,d),cj+foff(2,d),ck+foff(3,d))
+      end function gclaim
+      logical function lclaim(ci,cj,ck)
+         integer, intent(in) :: ci,cj,ck
+         integer :: d
+         lclaim=.false.
+         d=lpd(ci,cj,ck)
+         if (d.eq.0) return
+         lclaim=(pVF(ci,cj,ck,1).lt.this%merge_VFlo).or.lsick(ci,cj,ck,ci+foff(1,d),cj+foff(2,d),ck+foff(3,d))
+      end function lclaim
+   end subroutine merge_Q
 
    !> Apply relaxation to mixture cells
    subroutine apply_relax(this,dt,time)
@@ -2272,7 +2614,7 @@ contains
       class(amrmpcomp), intent(inout) :: this
       real(WP), intent(in) :: dt
       real(WP), intent(in) :: time
-      integer :: lvl,i,j,k,relax_ierr
+      integer :: lvl,i,j,k
       real(WP) :: t0
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx
@@ -2308,8 +2650,7 @@ contains
             ! Check if mixture cell prior to relaxation
             oldmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
             ! Apply user-provided relaxation model (modifies VF and Q)
-            ! relax_ierr returns the per-cell status (RELAX_* codes); captured but not yet consumed
-            call this%relax%apply(dt=dt,VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1),ierr=relax_ierr)
+            call this%relax%apply(dt=dt,VF=pVF(i,j,k,1),Q=pQ(i,j,k,:),Pjump=this%sigma*pCurv(i,j,k,1))
             ! Check if mixture cell after relaxation
             newmix=(pVF(i,j,k,1).ge.VFlo.and.pVF(i,j,k,1).le.VFhi)
 
@@ -2472,6 +2813,7 @@ contains
       type(amrex_box) :: bx
       integer :: lvl,i,j,k,ierr
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pQ,pUVW,pVisc,pBeta,pDiffL,pDiffG,pVF,pPL,pPG,pC,pTL,pTG,pRHOL,pRHOG,pIL,pIG,pYl,pYg
+      real(WP), dimension(:,:,:,:), contiguous, pointer :: pU,pV,pW
       real(WP) :: dxi,dyi,dzi,rho,viscmax,conv,pgrad,cvL,cvG,alpha_heat
       real(WP) :: Pmix_ip,Pmix_im,Pmix_jp,Pmix_jm,Pmix_kp,Pmix_km
       real(WP), dimension(this%liq%ns) :: yL
@@ -2479,7 +2821,7 @@ contains
       ! Get convective CFL from parent
       call this%amrmpflow%get_cflc(dt=dt)
       ! Reset child CFLs
-      this%CFLp=0.0_WP; this%CFLst=0.0_WP
+      this%CFLp=0.0_WP; this%CFLst=0.0_WP; this%CFLd=0.0_WP
       this%CFLa_x=0.0_WP; this%CFLa_y=0.0_WP; this%CFLa_z=0.0_WP
       this%CFLv_x=0.0_WP; this%CFLv_y=0.0_WP; this%CFLv_z=0.0_WP
       ! Compute CFL at each level
@@ -2494,6 +2836,9 @@ contains
             ! Get pointers to data
             pQ   =>this%Q%mf(lvl)%dataptr(mfi)
             pUVW =>this%UVW%mf(lvl)%dataptr(mfi)
+            pU   =>this%U%mf(lvl)%dataptr(mfi)
+            pV   =>this%V%mf(lvl)%dataptr(mfi)
+            pW   =>this%W%mf(lvl)%dataptr(mfi)
             pVisc=>this%visc%mf(lvl)%dataptr(mfi)
             pBeta=>this%beta%mf(lvl)%dataptr(mfi)
             pDiffL=>this%diffL%mf(lvl)%dataptr(mfi)
@@ -2555,6 +2900,8 @@ contains
                end if
                pgrad=pgrad/rho
                this%CFLp=max(this%CFLp,0.5_WP*dt*(conv+sqrt(conv**2+4.0_WP*pgrad)))
+               ! Dilatational CFL
+               this%CFLd=max(this%CFLd,dt*abs(dxi*(pU(i+1,j,k,1)-pU(i,j,k,1))+dyi*(pV(i,j+1,k,1)-pV(i,j,k,1))+dzi*(pW(i,j,k+1,1)-pW(i,j,k,1))))
                ! Acoustic CFL
                if (this%amr%nx.gt.1) this%CFLa_x=max(this%CFLa_x,(abs(pUVW(i,j,k,1))+pC(i,j,k,1))*dt*dxi)
                if (this%amr%ny.gt.1) this%CFLa_y=max(this%CFLa_y,(abs(pUVW(i,j,k,2))+pC(i,j,k,1))*dt*dyi)
@@ -2570,6 +2917,7 @@ contains
       ! Reduce across ranks
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLst ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLp  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLd  ,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_x,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_y,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLa_z,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
@@ -2577,7 +2925,7 @@ contains
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLv_y,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%CFLv_z,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
       ! Return max CFL
-      cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst)
+      cfl=max(this%CFLc_x,this%CFLc_y,this%CFLc_z,this%CFLv_x,this%CFLv_y,this%CFLv_z,this%CFLst,this%CFLd)
       if (.not.this%use_projection) cfl=max(cfl,this%CFLa_x,this%CFLa_y,this%CFLa_z)
    end subroutine get_cfl
 
@@ -2596,6 +2944,16 @@ contains
 
       ! Use parent's method first
       call this%amrmpflow%get_info()
+
+      ! Reduce the rescue+merge census (cumulative counters; accumulators stay rank-local)
+      rescue_census: block
+         real(WP), dimension(7) :: tmp
+         tmp(1:6)=this%resc_acc; tmp(7)=this%pool_acc
+         call MPI_ALLREDUCE(MPI_IN_PLACE,tmp,7,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr)
+         this%resc_nl=tmp(1); this%resc_ml=tmp(2); this%resc_el=tmp(3)
+         this%resc_ng=tmp(4); this%resc_mg=tmp(5); this%resc_eg=tmp(6)
+         this%pool_n =tmp(7)
+      end block rescue_census
 
       ! VF-conditional phasic extrema
       phasic_extrema: block

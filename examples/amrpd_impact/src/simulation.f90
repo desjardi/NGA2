@@ -947,7 +947,6 @@ contains
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%tmid)
          ! Get primitive variables
          call fs%get_primitive(Q=fs%Q)
-         call fs%dbg_scan('rk1')   ! per-stage NaN/positivity monitor (grep [GDQ)
          ! ======================= RK2 Stage 2: Q[n+1]=Q[n]+dt*dQdt(t,Q*) =======================
          ! Increment Q without pressure gradient
          call fs%get_dQdt(dQdt=dQdt,dt=time%dt,time=time%t)
@@ -975,7 +974,6 @@ contains
          call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          ! Get primitive variables
          call fs%get_primitive(Q=fs%Q)
-         call fs%dbg_scan('rk2')   ! per-stage NaN/positivity monitor (grep [GDQ)
          ! ======================================================================================
 
          ! Fluid->solid load: divergence of the fluid stress tensor -> F_fluid.
