@@ -469,6 +469,8 @@ module amrpd_class
       type(amrdata) :: VF
       real(WP)     :: VF_tag       = -1.0_WP    !< Refinement threshold (<=0 disables VF-driven tagging)
       real(WP)     :: filter_width =  0.0_WP    !< Gaussian-equivalent filter width for VF; 0 disables
+      real(WP)     :: VF_snap      =  0.1_WP    !< Deposit-moire amplitude: VF is rescaled by 1/(1-VF_snap) and clipped,
+                                                !< so a fully packed interior reads exactly 1. 0 disables.
       real(WP)     :: VFmin=0.0_WP,VFmax=0.0_WP,VFmean=0.0_WP   !< VF statistics
 
       !> Optional user-supplied tagging callback. Called AFTER the built-in VF
@@ -526,6 +528,7 @@ module amrpd_class
       ! Physics -- STUBBED in skeleton
       procedure :: bond_init
       procedure :: compute_dilatation
+      procedure, private :: get_lps_coefs   !< Dimension-aware LPS constitutive coefficients
       procedure :: compute_force
       procedure :: compute_contact
       procedure :: interp                !< Trilinear cell-centered interpolation (used by compute_contact for IB)
@@ -1265,6 +1268,16 @@ contains
       call this%VF%fill(time=0.0_WP)
       ! Optional smoothing (zero filter_width disables)
       call this%filter(this%VF)
+      ! Snap out the deposit moire: the particle lattice is incommensurate with the
+      ! grid (and moves), so a fully packed interior deposits VF slightly below 1.
+      ! Rescale+clip so it reads exactly 1; continuous, so no jump is introduced.
+      if (this%VF_snap.gt.0.0_WP) then
+         do lvl=0,this%amr%clvl()
+            call this%VF%mf(lvl)%mult(1.0_WP/(1.0_WP-this%VF_snap),1,1,this%VF%ng)
+         end do
+         call this%VF%clip(0.0_WP,1.0_WP)
+         call this%VF%fill(time=0.0_WP)
+      end if
 
    contains
 
@@ -1433,7 +1446,7 @@ contains
       use amrex_amr_module, only: amrex_mfiter
       use amrpd_hash_class, only: gid_hash
       use string,           only: str_long
-      use messager,         only: log
+      use messager,         only: log,warn
       implicit none
       class(amrpd), intent(inout) :: this
       real(WP) :: r2_cut,K_bulk
@@ -1442,8 +1455,12 @@ contains
 
       ! Critical bond stretch for brittle damage, derived from G_c
       ! (Silling-Askari 3D): s0 = sqrt(5 * G_c / (9 * K * delta)).
+      ! WARNING: this relation is 3D-ONLY -- unlike the LPS coefficients (see
+      ! get_lps_coefs) it has NOT been generalized to 1D/2D. In a planar body it
+      ! yields the wrong critical stretch; use the Failure stretch override instead.
       ! If user did not provide G_c, leave s0 at its huge() default (no damage).
       if (this%crit_energy.gt.0.0_WP) then
+         if (this%amr%nz.eq.1) call warn('[amrpd bond_init] G_c -> s0 conversion is 3D-only; in 2D set Failure stretch directly')
          K_bulk=this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
          this%s0=sqrt(5.0_WP*this%crit_energy/(9.0_WP*K_bulk*this%delta))
       end if
@@ -1705,6 +1722,40 @@ contains
    !>
    !> Caller must have called fill_ghosts(search_radius) with the CURRENT
    !> particle positions before invoking this routine.
+   !> Dimension-aware LPS constitutive coefficients (2026-07-14).
+   !> The linear peridynamic solid has DIMENSION-SPECIFIC constants: applying the 3D
+   !> set to a planar (single-layer) body makes it ~2x too stiff and ~2x too strong,
+   !> because the family is a disk, not a sphere. Dimensionality is taken from the
+   !> base grid (nx,ny,nz), the same switch the case uses to lay out particles.
+   !>
+   !>   ndim   fdim   coef_vol              coef_dev   deviatoric split
+   !>   3      3      3*K                   15*mu      e - theta*|xi|/3
+   !>   2      2      2*(K+mu/3)  [k_2D]     8*mu      e - theta*|xi|/2   (plane strain)
+   !>   1      1      E                      0         (deviatoric vanishes identically)
+   !>
+   !> k_2D = lambda+mu = K+mu/3 is the plane-strain (area) bulk modulus.
+   subroutine get_lps_coefs(this,fdim,coef_vol,coef_dev)
+      implicit none
+      class(amrpd), intent(in) :: this
+      real(WP), intent(out) :: fdim,coef_vol,coef_dev
+      real(WP) :: K_bulk,mu_shear
+      integer :: ndim
+      ndim=0
+      if (this%amr%nx.gt.1) ndim=ndim+1
+      if (this%amr%ny.gt.1) ndim=ndim+1
+      if (this%amr%nz.gt.1) ndim=ndim+1
+      K_bulk  =this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
+      mu_shear=this%elastic_modulus/(2.0_WP*(1.0_WP+this%poisson_ratio))
+      select case (ndim)
+      case (3)
+         fdim=3.0_WP; coef_vol=3.0_WP*K_bulk;                    coef_dev=15.0_WP*mu_shear
+      case (2)
+         fdim=2.0_WP; coef_vol=2.0_WP*(K_bulk+mu_shear/3.0_WP);  coef_dev= 8.0_WP*mu_shear
+      case default
+         fdim=1.0_WP; coef_vol=this%elastic_modulus;             coef_dev= 0.0_WP
+      end select
+   end subroutine get_lps_coefs
+
    subroutine compute_dilatation(this)
       use amrex_amr_module, only: amrex_mfiter
       use amrpd_hash_class, only: gid_hash
@@ -1801,21 +1852,26 @@ contains
       ! Reduce ghost-slot dil contributions back to owners
       call this%sum_ghosts_dil()
 
-      ! Finalize: dil_i = 3 * (accumulated sum) / m_w_i  (owned only)
-      do lvl=0,this%amr%clvl()
-         call this%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call this%get_particles(lvl,mfi,p,np_valid)
-            do n=1_I8,np_valid
-               if (p(n)%mw.gt.0.0_WP) then
-                  p(n)%dil=3.0_WP*p(n)%dil/p(n)%mw
-               else
-                  p(n)%dil=0.0_WP
-               end if
+      ! Finalize: dil_i = fdim * (accumulated sum) / m_w_i  (owned only), where fdim
+      ! is the dimension-dependent LPS factor (3D:3, 2D plane strain:2, 1D:1)
+      dil_norm: block
+         real(WP) :: fdim,cvol,cdev
+         call this%get_lps_coefs(fdim,cvol,cdev)
+         do lvl=0,this%amr%clvl()
+            call this%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               call this%get_particles(lvl,mfi,p,np_valid)
+               do n=1_I8,np_valid
+                  if (p(n)%mw.gt.0.0_WP) then
+                     p(n)%dil=fdim*p(n)%dil/p(n)%mw
+                  else
+                     p(n)%dil=0.0_WP
+                  end if
+               end do
             end do
+            call this%mfiter_destroy(mfi)
          end do
-         call this%mfiter_destroy(mfi)
-      end do
+      end block dil_norm
 
    contains
 
@@ -1865,7 +1921,7 @@ contains
       integer(c_int64_t), allocatable :: keys(:)
       integer(c_int64_t) :: key_lo,key_hi
       integer(c_int) :: parts(2)
-      real(WP) :: K_bulk,mu_shear,coef_vol,coef_dev,e_d_avg,decay,e_e,over
+      real(WP) :: fdim,coef_vol,coef_dev,e_d_avg,decay,e_e,over
       real(WP) :: dx,dy,dz,curr_len,e_bond,Lx,Ly,Lz
       real(WP), dimension(3) :: xlo,xhi
       real(WP) :: t_lo,t_hi,pair_mag
@@ -1873,11 +1929,10 @@ contains
 
       Lx=this%amr%xhi-this%amr%xlo; Ly=this%amr%yhi-this%amr%ylo; Lz=this%amr%zhi-this%amr%zlo
 
-      ! Elastic moduli from (E, nu)
-      K_bulk  =this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
-      mu_shear=this%elastic_modulus/(2.0_WP*(1.0_WP+this%poisson_ratio))
-      coef_vol=3.0_WP*K_bulk                       ! volumetric (elastic)
-      coef_dev=15.0_WP*mu_shear                    ! deviatoric (carries Maxwell relaxation; e_v=0 recovers LPS)
+      ! LPS coefficients for the active dimensionality (3D / 2D plane strain / 1D):
+      ! volumetric (elastic) and deviatoric (carries Maxwell relaxation; e_v=0 recovers
+      ! LPS). fdim also sets the deviatoric split e_d = e - theta*|xi|/fdim below.
+      call this%get_lps_coefs(fdim,coef_vol,coef_dev)
 
       ! Zero F_bond on every owned particle AND every ghost in the aux buffer.
       ! Also zero damage on GHOSTS only (owned damage is accumulated state and
@@ -1965,13 +2020,13 @@ contains
                ! the Maxwell inelastic stretch e_v. e_v=0 -> identical to the LPS form.
                if (p(lid_lo)%mw.gt.0.0_WP) then
                   t_lo=b(ib)%w/p(lid_lo)%mw*(coef_vol*p(lid_lo)%dil*b(ib)%d0 &
-                  &    +coef_dev*(e_bond-p(lid_lo)%dil*b(ib)%d0/3.0_WP-this%visc_lambda*b(ib)%e_v))
+                  &    +coef_dev*(e_bond-p(lid_lo)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v))
                else
                   t_lo=0.0_WP
                end if
                if (p(lid_hi)%mw.gt.0.0_WP) then
                   t_hi=b(ib)%w/p(lid_hi)%mw*(coef_vol*p(lid_hi)%dil*b(ib)%d0 &
-                  &    +coef_dev*(e_bond-p(lid_hi)%dil*b(ib)%d0/3.0_WP-this%visc_lambda*b(ib)%e_v))
+                  &    +coef_dev*(e_bond-p(lid_hi)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v))
                else
                   t_hi=0.0_WP
                end if
@@ -2008,7 +2063,7 @@ contains
                ! exact exponential integration (unconditionally stable, no viscous
                ! CFL). yield_stretch=0 reduces exactly to Maxwell viscoelasticity.
                if (this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP)) then
-                  e_d_avg=e_bond-0.5_WP*(p(lid_lo)%dil+p(lid_hi)%dil)*b(ib)%d0/3.0_WP
+                  e_d_avg=e_bond-0.5_WP*(p(lid_lo)%dil+p(lid_hi)%dil)*b(ib)%d0/fdim
                   decay=exp(-dt/this%tau)
                   e_e=e_d_avg-b(ib)%e_v                          ! elastic deviatoric stretch
                   over=abs(e_e)-this%yield_stretch*b(ib)%d0      ! overstress beyond yield

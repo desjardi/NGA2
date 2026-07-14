@@ -1,18 +1,18 @@
 # ============================================================================
-#  amrpd_impact -- PHASE 2: copper PD disk -> PD wall impact, COUPLED to the gas.
-#  The multiphase fluid (amrmpcomp) is live and two-way IB-coupled to the PD
-#  solid (Usolid forcing + div(sigma) load). Same nondim & gas/shock IC as
-#  amrcomp_impact, but the LIQUID drop is parked outside the domain (gas only) and
-#  a copper PD disk takes the drop's place: it starts where the drop would (x=10),
-#  co-moving with the pre-shock gas (U=1 toward the wall), and the impact radiates
-#  shock waves into the gas. True reflecting wall BC stays at x=xlo=-Wall thickness.
+#  amrpd_impact -- shock-driven LIQUID drop -> PD wall impact, COUPLED to the gas.
+#  Same flow conditions as amrcomp_impact (Parziale nondim, live shock at 9.4,
+#  drop at 10 riding the pre-shock stream into the wall), but the rigid wall is
+#  replaced by a clamped copper PD slab in [-Wall thickness,0]; the multiphase
+#  fluid (amrmpcomp) is two-way IB-coupled to it (Usolid forcing + div(sigma)
+#  load). True reflecting wall BC sits at x=xlo=-Wall thickness. The PD disk
+#  projectile variant is retired (commented out in simulation.f90).
 # ============================================================================
 
 # AMR grid
 Base nx:   32
 Base ny:   32
 Base nz:   1
-Max level: 5            # phase 1; original case uses 6 (bump for resolution)
+Max level: 6
 
 # Regridding parameters
 Regrid nsteps:      10
@@ -23,8 +23,8 @@ Tag Ducros value:   0.5
 
 # Geometry: true (reflecting) wall BC shifted to x=-Wall thickness; PD wall in [-Wall thickness,0]
 Domain length:  20      # length unchanged; domain SHIFTED to [-Wall thickness, 20-Wall thickness] = [-1,19]
-Drop location:  0.6     # liquid drop near the wall (front ~0.1 from x=0); launched at Impact velocity into at-rest gas
-Shock location: 25      # parked outside the domain -> uniform at-rest (post-shock) gas; drop velocity imposed directly
+Drop location:  0.6!10      # same as amrcomp_impact: drop co-moving with the pre-shock stream
+Shock location: 25!9.4     # live shock inside the domain, same as amrcomp_impact
 Wall BC:        slip
 
 # ---- PD solid bodies (clamped wall slab + incoming disk projectile) ----
@@ -37,7 +37,7 @@ Relaxation time:     0.01      # viscoplastic flow rate (small -> near rate-inde
 Relaxation fraction: 1.0       # full deviatoric plastic flow above yield
 Failure stretch:     0.3       # ductile: ~30% elongation before tearing
 #Critical energy:    1.0e-3    # unused (ductile failure via Failure stretch)
-Element size:       0.0125     # fine dx (L4)=0.0391 -> ~1.56x elem -> ~2.4 particles/fine cell (smooth VF)
+Element size:       0.00625    # fine dx (L6)=0.00977 -> ~1.56x elem -> ~2.4 particles/fine cell (smooth VF)
 Tagging VF:         0.1
 # Wall: x in [0,Wall thickness], y in [-Wall half-height, +half]; back layer clamped
 Wall thickness:     1.0
@@ -70,9 +70,9 @@ Sutherland temperature: 0.073
 # Time integration
 Max dt:   2e-3
 Max CFL:  0.75
-Max time: 15            # disk front (9.5) reaches wall (0) at t~9.5 at U=1, then aftermath
+Max time: 15            # drop front reaches the PD wall face (x=0) at t~10, then aftermath
 
 # Output
-Output period:     5e-2
-Checkpoint period: -1
+Output period:     1e-1
+Checkpoint period: 1
 Restart from:
