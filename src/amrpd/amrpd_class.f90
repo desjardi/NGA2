@@ -1439,8 +1439,10 @@ contains
 
    !> Build initial bonds and stamp reference state.
    !>
-   !> Phase 1 (detect): fill_ghosts(delta), then for each owned particle i pair
-   !>   with every (owned + ghost) particle j within delta. Keep the pair only if
+   !> Phase 1 (detect): fill_ghosts(search_radius), build a cell-binned candidate
+   !>   pair list (build_neighbor_list, same machinery as compute_contact), then
+   !>   for each owned particle i test only its binned candidates j (owned +
+   !>   ghost) against delta -- O(N*family), NOT O(N^2). Keep the pair only if
    !>   i has the lower-GID (the lower-GID endpoint owns the bond). Append the
    !>   bond at pos(i) with d0 = |x_j - x_i|, w = omega(d0, delta), damage=0,
    !>   alive=1. The two endpoints' AMReX idcpu values are split into 2 x int32
@@ -1460,7 +1462,7 @@ contains
       use amrex_amr_module, only: amrex_mfiter
       use amrpd_hash_class, only: gid_hash
       use string,           only: str_long
-      use messager,         only: log,warn
+      use messager,         only: log,warn,die
       implicit none
       class(amrpd), intent(inout) :: this
       real(WP) :: r2_cut,K_bulk
@@ -1509,6 +1511,15 @@ contains
       ! the run avoids out-of-bounds mask accesses.
       call this%fill_ghosts(radius=this%search_radius)
 
+      ! Cell-binned candidate pair list for bond detection (same machinery as
+      ! compute_contact). The rcrit here is the BIN SIZE of AMReX's hash grid
+      ! (search spans +/-1 bin, so it must be >= the interaction radius for
+      ! completeness); inflate slightly above delta so the strict (<) predicate
+      ! cannot drop a pair at exactly delta. The exact r2 <= delta^2 acceptance
+      ! test below is unchanged. Ghost coverage is guaranteed since
+      ! search_radius >= 1.5*delta > rcrit.
+      call this%build_neighbor_list(rcrit=1.05_WP*this%delta)
+
       ! Phase 1: detect candidate bonds, accumulate them in a local scratch
       ! buffer, then bulk-append. Each bond is created exactly once, by the rank
       ! that owns the bond's lower-GID endpoint.
@@ -1516,7 +1527,9 @@ contains
          type(amrex_mfiter) :: mfi
          type(part), dimension(:), pointer :: p
          type(bond), dimension(:), allocatable, target :: blist
-         integer(I8) :: np_total,np_valid,i,j
+         integer(c_int32_t), dimension(:), pointer :: nbr_off,nbr_lst
+         integer(c_int32_t) :: i1,k
+         integer(I8) :: np_total,np_valid,j
          integer(I8) :: nb_local,ncap
          integer :: lvl,nx,ny,nz
          integer(c_int64_t) :: key_i,key_j
@@ -1532,12 +1545,17 @@ contains
             call this%mfiter_build(lvl,mfi)
             do while (mfi%next())
                call this%get_all_particles(lvl,mfi,p,np_total,np_valid)
-               ! Outer loop: only OWNED particles initiate. Inner: all (owned+ghost).
-               do i=1_I8,np_valid
-                  key_i=p(i)%idcpu
-                  do j=1_I8,np_total
-                     if (i.eq.j) cycle
-                     r2=sum((p(j)%pos-p(i)%pos)**2)
+               if (np_valid.eq.0_I8) cycle
+               ! Per-tile CSR of binned candidates: only OWNED particles i1
+               ! initiate; candidates j index the combined (owned+ghost) array.
+               call this%get_neighbor_list(lvl,mfi,nbr_off,nbr_lst)
+               if (.not.associated(nbr_off)) call die('[amrpd bond_init] neighbor list missing on a populated tile')
+               do i1=1,int(np_valid,c_int32_t)
+                  key_i=p(i1)%idcpu
+                  do k=nbr_off(i1)+1,nbr_off(i1+1)
+                     j=int(nbr_lst(k),I8)+1_I8
+                     if (j.eq.int(i1,I8)) cycle
+                     r2=sum((p(j)%pos-p(i1)%pos)**2)
                      if (r2.gt.r2_cut) cycle
                      key_j=p(j)%idcpu
                      ! Lower-GID owns the bond. Skip when i is strictly higher;
@@ -1563,7 +1581,7 @@ contains
                      if (this%amr%yper) ny=floor((p(j)%pos(2)-this%amr%ylo)/Ly)
                      if (this%amr%zper) nz=floor((p(j)%pos(3)-this%amr%zlo)/Lz)
                      dist=sqrt(r2)
-                     blist(nb_local)%pos    =p(i)%pos
+                     blist(nb_local)%pos    =p(i1)%pos
                      blist(nb_local)%d0     =dist
                      blist(nb_local)%w      =w(dist,this%delta)
                      blist(nb_local)%damage =0.0_WP
