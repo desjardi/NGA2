@@ -1,0 +1,16 @@
+# pd_test -- tier-1 pdsolver regression (grid-free; no AMReX objects).
+# Elastic oscillation of a tilted contracting cube. For the restart check:
+# run once (writes restart/pd_test at Checkpoint time), then rerun with
+# 'Restart from: restart/pd_test' (same or DIFFERENT -n) and compare the
+# monitor traces beyond the checkpoint time.
+Material density: 1000.0
+Elastic modulus:  1.0e7
+Poisson ratio:    0.25
+Element size:     0.02
+Cube size:        0.5
+Cube tilt:        20 30 0
+Contraction rate: 10.0
+Max time:         2.0e-2
+Max dt:           5.0e-5
+Checkpoint time:  1.0e-2
+Restart from:

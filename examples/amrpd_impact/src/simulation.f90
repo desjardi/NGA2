@@ -1,6 +1,6 @@
 !> AMR compressible impact test case
 module simulation
-   use precision,         only: WP
+   use precision,         only: WP,I8
    use string,            only: str_medium
    use amrgrid_class,     only: amrgrid
    use amrmpcomp_class,   only: amrmpcomp
@@ -14,8 +14,9 @@ module simulation
    use ideal_gas_class,   only: ideal_gas
    use relax_ig_nasg_class, only: PThybrid
    use safe_relax_class,  only: safe_relax
-   use amrpd_class,       only: amrpd,part,PART_MOVES,PART_INTEGRATES,PART_BONDS,PART_IS_DEAD,AMRPD_OPEN,AMRPD_WALL
+   use amrpd_class,       only: amrpd,part,part_gid,PART_MOVES,PART_INTEGRATES,PART_BONDS,PART_IS_DEAD,AMRPD_OPEN,AMRPD_WALL
    use amrpdviz_class,    only: amrpdviz
+   use pdsolver_class,      only: pdsolver,pd_partition,PDC_IS_DEAD
    implicit none
    private
    
@@ -30,8 +31,12 @@ module simulation
    type(amrdata) :: dQdt,Umag,Mach
 
    !> Peridynamics solid bodies (clamped wall + incoming projectile)
-   type(amrpd), target :: pd
+   type(amrpd), target :: apd
    type(amrpdviz) :: pviz
+
+   !> The solid solver (grid-free physics: bonds, damage, J2/viscoplastic
+   !> flow, contact, time stepping). apd above is its grid-side face.
+   type(pdsolver) :: pd
    real(WP) :: pd_elem                 !< particle spacing
    real(WP) :: wall_thick,wall_half    !< wall slab geometry
    real(WP) :: disk_R,disk_x,disk_vel  !< projectile geometry + impact speed
@@ -39,7 +44,7 @@ module simulation
 
    !> Two-way IB coupling workspaces (PD solid <-> multiphase fluid)
    type(amrdata) :: Usolid             !< Solid velocity deposited on the mesh (3 comp)
-   type(amrdata) :: VFf                !< Fluid volume fraction = 1 - pd%VF
+   type(amrdata) :: VFf                !< Fluid volume fraction = 1 - apd%VF
    type(amrdata) :: dStress            !< Fluid load density (3 comp) -> F_fluid
    real(WP), dimension(3) :: Fib       !< Net fluid force on the solid: (1-VFf)-weighted div(sigma), PD footprint only
    real(WP), dimension(3) :: Freset=0.0_WP !< Momentum-exchange rate of the IB reset on the fluid (expect Freset_x ~ -Ffluid_x)
@@ -444,7 +449,7 @@ contains
       else
          ntot=0_I8; allocate(plist(0))
       end if
-      call pd%append(plist,ntot)
+      call apd%append(plist,ntot)
       deallocate(plist)
    contains
       subroutine set_part(p,pos,vel,clamp)
@@ -461,6 +466,212 @@ contains
          end if
       end subroutine set_part
    end subroutine seed_bodies
+
+   !> Hand the seeded body to the solver: extract nodes from the grid face,
+   !> Morton-partition them (balanced, motion-invariant), copy the material/
+   !> plastic/contact configuration, detect families, and stamp each face
+   !> particle's flag with its solver owner rank (flag = 7 + 8*owner).
+   subroutine handoff()
+      use amrex_amr_module, only: amrex_mfiter
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8), allocatable :: gids(:),rgid(:)
+      real(WP), allocatable :: pos(:,:),vel(:,:),voll(:),rpos(:,:),rvel(:,:),rvol(:)
+      integer, allocatable :: flags(:),owner(:),rflag(:)
+      integer(I8) :: np_,n
+      integer :: lvl,nn,i,nr
+      ! Extract this rank's owned particles
+      nn=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            nn=nn+int(np_)
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      allocate(gids(max(nn,1)),pos(3,max(nn,1)),vel(3,max(nn,1)),flags(max(nn,1)),voll(max(nn,1)),owner(max(nn,1)))
+      i=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               i=i+1
+               gids(i) =part_gid(p(n))
+               pos(:,i)=p(n)%pos
+               vel(:,i)=p(n)%vel
+               flags(i)=p(n)%flag
+               voll(i) =apd%dV
+            end do
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      ! Balanced static partition of the reference configuration
+      call pd_partition(nn,gids,pos,vel,flags,voll,owner,nr,rgid,rpos,rvel,rflag,rvol)
+      ! Configure and build the pd
+      call configure_pd()
+      call pd%set_nodes(nr,rgid,rpos,rvel,rflag,rvol)
+      ! Families detected natively from the reference configuration -- the
+      ! amrpd bond container is never built in pd mode
+      call pd%detect_families()
+      ! Stamp owner routing tags on the grid face (same walk order as the
+      ! extraction above, so owner(i) lines up)
+      i=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               i=i+1
+               p(n)%flag=7+8*owner(i)
+            end do
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      deallocate(gids,pos,vel,flags,voll,owner,rgid,rpos,rvel,rflag,rvol)
+   end subroutine handoff
+
+   !> Solver configuration from apd + amr (shared by fresh handoff and restart).
+   !> Derivations that legacy amrpd performs only inside bond_init (s0 from
+   !> Failure stretch / G_c, contact_dist default) are replicated here so the
+   !> RESTART path -- which never runs bond_init -- gets correct values. (The
+   !> legacy solver itself has this latent gap on restart: s0 stays huge.)
+   subroutine configure_pd()
+      real(WP) :: K_bulk
+      call pd%initialize(name='pd',rho=apd%rho,elastic_modulus=apd%elastic_modulus, &
+      &                    poisson_ratio=apd%poisson_ratio,delta=apd%delta,dV=apd%dV,    &
+      &                    gravity=apd%gravity,                                        &
+      &                    collapsed=[amr%nx.eq.1,amr%ny.eq.1,amr%nz.eq.1],           &
+      &                    Ldom=[amr%xhi-amr%xlo,amr%yhi-amr%ylo,amr%zhi-amr%zlo],    &
+      &                    per=[amr%xper,amr%yper,amr%zper])
+      ! Critical stretch (bond_init's resolution, restart-safe)
+      if (apd%fail_stretch.lt.huge(1.0_WP)) then
+         pd%s0=apd%fail_stretch
+      else if (apd%crit_energy.gt.0.0_WP.and.apd%crit_energy.lt.huge(1.0_WP)) then
+         K_bulk=apd%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*apd%poisson_ratio))
+         pd%s0=sqrt(5.0_WP*apd%crit_energy/(9.0_WP*K_bulk*apd%delta))
+      else
+         pd%s0=huge(1.0_WP)
+      end if
+      ! Viscoplastic knobs (per-side e_v/J2 in the pd -- the intended
+      ! formulation delta vs amrpd's endpoint-averaged e_v)
+      pd%tau=apd%tau
+      pd%visc_lambda=apd%visc_lambda
+      pd%yield_stretch=apd%yield_stretch
+      pd%sigma_yield=apd%sigma_yield
+      ! Contact + domain (x-lo is a rigid wall; other faces open)
+      pd%use_contact=.true.
+      pd%contact_dist=apd%contact_dist
+      if (pd%contact_dist.le.0.0_WP) pd%contact_dist=0.9_WP*apd%dV**(1.0_WP/3.0_WP)
+      pd%tau_col=apd%tau_col
+      pd%e_n=apd%e_n; pd%e_w=apd%e_w; pd%clip_col=apd%clip_col
+      pd%lo_bc=apd%lo_bc; pd%hi_bc=apd%hi_bc
+      pd%dom_lo=[amr%xlo,amr%ylo,amr%zlo]
+      pd%dom_hi=[amr%xhi,amr%yhi,amr%zhi]
+   end subroutine configure_pd
+
+   !> Rebuild the grid-side face from the (restored) solver state: one
+   !> particle per owned node with PRESERVED identity (gid -> id,cpu), current
+   !> position/velocity/damage, and the owner routing tag = this rank.
+   !> AddParticlesAtLevel + redistribute settle them onto the grid boxes.
+   subroutine rebuild_face()
+      use parallel, only: rank
+      type(part), dimension(:), allocatable, target :: plist
+      integer(I8), dimension(:), allocatable, target :: gl
+      integer(I8) :: n
+      integer :: i
+      integer :: m
+      allocate(plist(max(pd%nown,1)),gl(max(pd%nown,1)))
+      m=0
+      do i=1,pd%nown
+         if (pd%flag(i).eq.PDC_IS_DEAD) cycle   ! exited nodes stay dead
+         m=m+1
+         plist(m)%pos    =pd%y(:,i)
+         plist(m)%vel    =pd%v(:,i)
+         plist(m)%F_bond =0.0_WP
+         plist(m)%F_fluid=0.0_WP
+         plist(m)%mw     =0.0_WP
+         plist(m)%dil    =0.0_WP
+         plist(m)%damage =pd%damage(i)
+         plist(m)%nb0    =0.0_WP
+         plist(m)%td2    =0.0_WP
+         plist(m)%td2a   =0.0_WP
+         plist(m)%flag   =7+8*rank
+         gl(m)=pd%gid(i)
+      end do
+      n=int(m,I8)
+      call apd%append_with_gids(plist,n,gl)
+      call apd%redistribute()
+      deallocate(plist,gl)
+   end subroutine rebuild_face
+
+   !> Per-fluid-step solid exchange: push each face particle's
+   !> interpolated F_fluid to its pd owner; pull back the owner's current
+   !> (pos, vel, damage, alive). Dead pd nodes (exited an open face) get an
+   !> outside-domain position written back, so the next apd%redistribute drops
+   !> the tombstone -- identical to amrpd's own drop-on-exit.
+   subroutine exchange_solid()
+      use amrex_amr_module, only: amrex_mfiter
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8), allocatable :: mgid(:)
+      integer, allocatable :: mown(:)
+      real(WP), allocatable :: mff(:,:),mpos(:,:),mvel(:,:),mdmg(:),malive(:)
+      integer(I8) :: np_,n
+      integer :: lvl,nm,i
+      ! Count live face particles
+      nm=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               nm=nm+1
+            end do
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      allocate(mgid(max(nm,1)),mown(max(nm,1)),mff(3,max(nm,1)))
+      allocate(mpos(3,max(nm,1)),mvel(3,max(nm,1)),mdmg(max(nm,1)),malive(max(nm,1)))
+      ! Pack (gid, owner tag, F_fluid)
+      i=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               i=i+1
+               mgid(i)=part_gid(p(n))
+               mown(i)=p(n)%flag/8
+               mff(:,i)=p(n)%F_fluid
+            end do
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      ! Collective round-trip with the pd
+      call pd%exchange(nm,mgid,mown,mff,mpos,mvel,mdmg,malive)
+      ! Write the solver state back onto the grid face (same walk order)
+      i=0
+      do lvl=0,amr%clvl()
+         call apd%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call apd%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               i=i+1
+               p(n)%pos=mpos(:,i)
+               p(n)%vel=mvel(:,i)
+               p(n)%damage=mdmg(i)
+               if (malive(i).lt.0.5_WP) p(n)%flag=PART_IS_DEAD
+            end do
+         end do
+         call apd%mfiter_destroy(mfi)
+      end do
+      deallocate(mgid,mown,mff,mpos,mvel,mdmg,malive)
+   end subroutine exchange_solid
 
    !> Initialization of problem solver
    subroutine simulation_init
@@ -693,20 +904,19 @@ contains
 
       ! Initialize the peridynamics solid (registers VF-based AMR tagging)
       init_solid: block
-         call pd%initialize(amr,name='pd')
-         call param_read('Material density',  pd%rho)
-         call param_read('Elastic modulus',   pd%elastic_modulus)
-         call param_read('Poisson ratio',     pd%poisson_ratio)
-         call param_read('Critical energy',   pd%crit_energy,  default=huge(1.0_WP))
-         call param_read('Failure stretch',   pd%fail_stretch, default=huge(1.0_WP))
-         call param_read('Relaxation time',   pd%tau,          default=huge(1.0_WP))
-         call param_read('Relaxation fraction',pd%visc_lambda, default=1.0_WP)
-         call param_read('Yield stretch',     pd%yield_stretch,default=0.0_WP)
-         call param_read('Yield stress',      pd%sigma_yield,  default=0.0_WP)
+         call apd%initialize(amr,name='apd')
+         call param_read('Material density',  apd%rho)
+         call param_read('Elastic modulus',   apd%elastic_modulus)
+         call param_read('Poisson ratio',     apd%poisson_ratio)
+         call param_read('Critical energy',   apd%crit_energy,  default=huge(1.0_WP))
+         call param_read('Failure stretch',   apd%fail_stretch, default=huge(1.0_WP))
+         call param_read('Relaxation time',   apd%tau,          default=huge(1.0_WP))
+         call param_read('Relaxation fraction',apd%visc_lambda, default=1.0_WP)
+         call param_read('Yield stretch',     apd%yield_stretch,default=0.0_WP)
+         call param_read('Yield stress',      apd%sigma_yield,  default=0.0_WP)
          call param_read('Element size',      pd_elem)
-         call param_read('Horizon',           pd%delta,        default=3.0125_WP*pd_elem)
-         pd%search_radius=1.5_WP*pd%delta
-         pd%dV=pd_elem**3
+         call param_read('Horizon',           apd%delta,        default=3.0125_WP*pd_elem)
+         apd%dV=pd_elem**3
          ! Two-body geometry: clamped wall slab + incoming disk projectile
          call param_read('Wall thickness',  wall_thick)
          call param_read('Wall half-height',wall_half)
@@ -725,10 +935,10 @@ contains
          call param_read('Impact velocity', disk_vel)
          ! x-low is a rigid PD wall: backstop for the clamped wall slab (no particles
          ! dropped at the boundary, and a solid floor behind the anchor). Rest open.
-         pd%lo_bc=AMRPD_OPEN; pd%hi_bc=AMRPD_OPEN
-         pd%lo_bc(1)=AMRPD_WALL
+         apd%lo_bc=AMRPD_OPEN; apd%hi_bc=AMRPD_OPEN
+         apd%lo_bc(1)=AMRPD_WALL
          ! Refine the AMR mesh wherever the solid volume fraction exceeds VF_tag
-         call param_read('Tagging VF',pd%VF_tag,default=0.1_WP)
+         call param_read('Tagging VF',apd%VF_tag,default=0.1_WP)
          ! Two-way coupling switches (default on)
          call param_read('Couple solid to fluid',couple_s2f,default=.true.)
          call param_read('Couple fluid to solid',couple_f2s,default=.true.)
@@ -736,6 +946,7 @@ contains
 
       ! Initialize regridding
       init_regridding: block
+         use messager, only: die
          ! KnapSack load balancing
          amr%lb_strat=1
          ! Create regridding event
@@ -766,20 +977,26 @@ contains
             call fs%average_down_velocity(); call fs%fill_velocity(time=time%t)
          end if
          if (restarted) then
-            ! Restore the PD bodies (particles+bonds) from the checkpoint: the grid
-            ! was already rebuilt via init_from_checkpoint above, so no seeding, no
-            ! bond_init (bond state incl. breakage is restored), no regrid needed
-            call pd%read(dirname=trim(restart_dir))
-            call pd%update_VF()
-            call pd%get_info()
+            ! Restore the PD bodies from the checkpoint: the grid was already
+            ! rebuilt via init_from_checkpoint above, so no seeding, no
+            ! bond_init, no regrid needed. Solver state (gid-space,
+            ! rank-portable) is the single source of truth; the grid face is
+            ! DERIVED state, rebuilt from it with preserved identities
+            call configure_pd()
+            call pd%read_state(trim(restart_dir))
+            call rebuild_face()
+            call apd%update_VF()
+            call apd%get_info()
          else
             ! Seed the PD bodies, deposit VF, regrid to refine around them, build bonds
             call seed_bodies()
-            call pd%update_VF()
+            call apd%update_VF()
             call amr%regrid(baselvl=0,time=time%t)
-            call pd%get_info()
-            call pd%bond_init()
-            call pd%update_VF()
+            call apd%get_info()
+            ! Hand the seeded body to the solver: families detected natively
+            ! from the reference configuration; apd is the grid-side face
+            call handoff()
+            call apd%update_VF()
          end if
          ! Compute viscosities
          call get_viscosities()
@@ -824,11 +1041,11 @@ contains
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(Mach,1,'Mach')
          call viz%add_surfmesh(fs%smesh,'plic')
-         call viz%add_scalar(pd%VF,1,'solidVF')
+         call viz%add_scalar(apd%VF,1,'solidVF')
          call viz%add_scalar(VFf,1,'VFf')
          call viz%add_scalar(Usolid,1,'Us')
          ! Particle visualization
-         call pviz%initialize(pd,name='impact')
+         call pviz%initialize(apd,name='impact')
          call pviz%select_comp('flag',on=.true.)
          call pviz%select_comp('damage',on=.true.)
          call pviz%select_comp('F_fluid',on=.true.)
@@ -958,7 +1175,9 @@ contains
 
       ! Solid (PD) monitor
       create_solid_monitor: block
+         call apd%get_info()
          call pd%get_info()
+         call pd%get_cfl(dt=time%dt,cfl=time%cfl)
          pdfile=monitor(amRoot=amr%amRoot,name='solid')
          call pdfile%add_column(time%n,'Timestep')
          call pdfile%add_column(time%t,'Time')
@@ -1058,15 +1277,23 @@ contains
          if (couple_f2s) call get_fluid_force()
 
          ! Sub-cycle the PD solid over the fluid step with F_fluid held fixed.
-         ! Contact handles the disk<->wall impact inside pd%advance.
+         ! Contact handles solid self-contact inside the stepping solver.
          pd_subcycle: block
             real(WP) :: dt_sub,cfl_pd
             integer :: i_sub
+            ! Deliver F_fluid to the solver (state write-back is an identity
+            ! here -- the solver has not advanced since the last exchange)
+            call exchange_solid()
             call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
             n_sub=1
             if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
             dt_sub=time%dt/real(n_sub,WP)
             do i_sub=1,n_sub; call pd%advance(dt_sub); end do
+            ! Pull the post-subcycle state onto the grid face for regrid
+            ! tagging and the deposits below
+            call exchange_solid()
+            call apd%redistribute()
+            call apd%update_VF()
          end block pd_subcycle
 
          ! Regrid if event triggers
@@ -1103,13 +1330,15 @@ contains
                character(len=str_medium) :: dirname
                dirname='restart/impact_'//trim(adjustl(rtoa(time%t)))
                call io%write(dirname=trim(dirname),time=time%t,step=time%n)
-               ! Solid checkpoint (particles+bonds) under the same directory
-               call pd%write(dirname=trim(dirname))
+               ! Solid checkpoint: the solver is the single source of truth
+               ! (the grid face is derived state, rebuilt at restart)
+               call pd%write_state(trim(dirname))
             end block save_checkpoint
          end if
 
          ! Perform and output monitoring
          call fs%get_info()
+         call apd%get_info()
          call pd%get_info()
          call get_crater()
          relax_census: block
@@ -1285,13 +1514,13 @@ contains
             call amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
                pdS=>dStress%mf(lvl)%dataptr(mfi)
-               call pd%get_particles(lvl,mfi,p,np_)
+               call apd%get_particles(lvl,mfi,p,np_)
                do n=1,np_
                   if (p(n)%flag.eq.PART_IS_DEAD) cycle
-                  p(n)%F_fluid(1)=pd%interp(lvl,p(n)%pos,pdS,1)
-                  p(n)%F_fluid(2)=pd%interp(lvl,p(n)%pos,pdS,2)
-                  p(n)%F_fluid(3)=pd%interp(lvl,p(n)%pos,pdS,3)
-                  Fpart(1:3)=Fpart(1:3)+p(n)%F_fluid(1:3)*pd%dV
+                  p(n)%F_fluid(1)=apd%interp(lvl,p(n)%pos,pdS,1)
+                  p(n)%F_fluid(2)=apd%interp(lvl,p(n)%pos,pdS,2)
+                  p(n)%F_fluid(3)=apd%interp(lvl,p(n)%pos,pdS,3)
+                  Fpart(1:3)=Fpart(1:3)+p(n)%F_fluid(1:3)*apd%dV
                end do
             end do
             call amr%mfiter_destroy(mfi)
@@ -1311,6 +1540,7 @@ contains
       call regrid_evt%finalize()
       ! Finalize solver
       call fs%finalize()
+      call apd%finalize()
       call pd%finalize()
       call dQdt%finalize()
       call Umag%finalize()
@@ -1338,7 +1568,7 @@ contains
       call pdfile%finalize()
    end subroutine simulation_final
 
-   !> Refresh fluid volume fraction VFf = clip(1 - pd%VF, 0, 1) with ghosts filled.
+   !> Refresh fluid volume fraction VFf = clip(1 - apd%VF, 0, 1) with ghosts filled.
    !> Additionally wall off the lateral gaps so the flow can't get around the finite-height
    !> target: x<0 AND outside the slab footprint (|y|>wall_half, or |z|>wall_half in 3D)
    !> -> VFf=0 (full solid). The
@@ -1352,7 +1582,7 @@ contains
       integer :: lvl,i,j,k
       real(WP) :: xc,yc,zc
       call VFf%setval(1.0_WP)
-      call VFf%subtract(pd%VF)
+      call VFf%subtract(apd%VF)
       call VFf%clip(0.0_WP,1.0_WP)
       do lvl=0,amr%clvl()
          call amr%mfiter_build(lvl,mfi)
@@ -1482,7 +1712,7 @@ contains
 
    !> Deposit the PD particle velocity onto the mesh (Usolid). Trilinear PIC
    !> deposit of vel*dV, then process_deposit reconciles coarse/fine exactly like
-   !> VF, fill+filter, and normalize by pd%VF to recover an intensive velocity.
+   !> VF, fill+filter, and normalize by apd%VF to recover an intensive velocity.
    subroutine deposit_solid_velocity()
       use amrex_amr_module, only: amrex_mfiter,amrex_box
       use precision,        only: I8
@@ -1495,13 +1725,13 @@ contains
       real(WP) :: dxi,dyi,dzi,wx,wy,wz,Vp
       real(WP), parameter :: VFtiny=1.0e-12_WP
       call Usolid%setval(0.0_WP)
-      Vp=pd%dV
+      Vp=apd%dV
       do lvl=0,amr%clvl()
          dxi=1.0_WP/amr%dx(lvl); dyi=1.0_WP/amr%dy(lvl); dzi=1.0_WP/amr%dz(lvl)
          call amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pUs=>Usolid%mf(lvl)%dataptr(mfi)
-            call pd%get_particles(lvl,mfi,p,np_)
+            call apd%get_particles(lvl,mfi,p,np_)
             do n=1,np_
                if (p(n)%flag.eq.PART_IS_DEAD) cycle
                ii=floor((p(n)%pos(1)-amr%xlo)*dxi-0.5_WP); wx=(p(n)%pos(1)-amr%xlo)*dxi-0.5_WP-real(ii,WP)
@@ -1517,15 +1747,15 @@ contains
          call amr%mfiter_destroy(mfi)
       end do
       ! Post-process exactly like VF: extensive->intensive, C/F reconcile, fill, filter
-      call pd%process_deposit(Usolid)
+      call apd%process_deposit(Usolid)
       call Usolid%fill(time=time%t)
-      call pd%filter(Usolid)
+      call apd%filter(Usolid)
       ! Normalize the (filtered) momentum density by the (filtered) VF -> velocity
       do lvl=0,amr%clvl()
          call amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pUs=>Usolid%mf(lvl)%dataptr(mfi)
-            pVF=>pd%VF%mf(lvl)%dataptr(mfi)
+            pVF=>apd%VF%mf(lvl)%dataptr(mfi)
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                if (pVF(i,j,k,1).gt.VFtiny) then
@@ -1542,11 +1772,11 @@ contains
 
    !> Crater metrics read off the SOLID VF FIELD (2026-07-14). The surface is the
    !> outermost VFsolid=0.5 crossing in each finest-level grid column, found by linear
-   !> interpolation between cells (sub-cell accurate). pd%VF is a PIC deposit + filter,
+   !> interpolation between cells (sub-cell accurate). apd%VF is a PIC deposit + filter,
    !> so this contour is smooth by construction -- unlike a per-column max over raw
    !> particle positions, which spikes whenever lateral flow strips a column of its
    !> surface layers and an interior particle becomes the column max.
-   !> It is also the very surface the fluid sees (VFf=1-pd%VF), so Depth is consistent
+   !> It is also the very surface the fluid sees (VFf=1-apd%VF), so Depth is consistent
    !> with Pwall_*/Awet, and it self-calibrates: the undeformed face at x=0 is filtered
    !> the same way, so t=0 reads zero depth.
    !>   crater_depth = max penetration (-h) over the footprint (units of D; <0 = bulge)
@@ -1570,7 +1800,7 @@ contains
       hsurf=-huge(1.0_WP)
       call amr%mfiter_build(lvl,mfi)
       do while (mfi%next())
-         pVFs=>pd%VF%mf(lvl)%dataptr(mfi)
+         pVFs=>apd%VF%mf(lvl)%dataptr(mfi)
          bx=mfi%tilebox()
          do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2)
             if (j.lt.jlo_c.or.j.gt.jhi_c) cycle              ! outside the PD footprint

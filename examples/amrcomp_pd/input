@@ -1,7 +1,7 @@
 # AMR grid
 Base nx:   32
 Base ny:   32
-Base nz:   32         # 3D run (1 = quasi-2D)
+Base nz:   1         # 3D run (1 = quasi-2D)
 Max level: 5
 
 # Regridding parameters
@@ -34,6 +34,7 @@ Beam angle:        75.0
 Couple solid to fluid: .true.
 Couple fluid to solid: .true.
 Critical energy:   1.0e-3    # finite -> bonds can break; lower = more brittle
+
 #Horizon:          0.075     # default is 3.0125*Element size
 #Gravity:          0 0 0
 

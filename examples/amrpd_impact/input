@@ -41,7 +41,7 @@ Failure stretch:     0.3       # ductile: ~30% elongation before tearing
 Element size:       0.00625    # fine dx (L6)=0.00977 -> ~1.56x elem -> ~2.4 particles/fine cell (smooth VF)
 Tagging VF:         0.1
 # Wall: x in [0,Wall thickness], y in [-Wall half-height, +half]; back layer clamped
-Wall thickness:     1.0
+Wall thickness:     2.0
 Wall half-height:   2.0
 # Disk: center (Disk location,0), radius Disk radius, moving -x at Impact velocity
 Disk radius:        0.5        # diameter 1 = drop diameter (the length scale)
@@ -76,4 +76,4 @@ Max time: 15            # drop front reaches the PD wall face (x=0) at t~10, the
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:
+Restart from:      restart/impact_3.00165E+00
