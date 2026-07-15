@@ -453,7 +453,7 @@ contains
          logical, intent(in) :: clamp
          p%pos=pos; p%vel=vel
          p%F_bond=0.0_WP; p%F_fluid=0.0_WP; p%mw=0.0_WP; p%dil=0.0_WP
-         p%damage=0.0_WP; p%nb0=0.0_WP
+         p%damage=0.0_WP; p%nb0=0.0_WP; p%td2=0.0_WP; p%td2a=0.0_WP
          if (clamp) then
             p%flag=PART_BONDS                              ! anchored: in network, no motion
          else
@@ -702,6 +702,7 @@ contains
          call param_read('Relaxation time',   pd%tau,          default=huge(1.0_WP))
          call param_read('Relaxation fraction',pd%visc_lambda, default=1.0_WP)
          call param_read('Yield stretch',     pd%yield_stretch,default=0.0_WP)
+         call param_read('Yield stress',      pd%sigma_yield,  default=0.0_WP)
          call param_read('Element size',      pd_elem)
          call param_read('Horizon',           pd%delta,        default=3.0125_WP*pd_elem)
          pd%search_radius=1.5_WP*pd%delta

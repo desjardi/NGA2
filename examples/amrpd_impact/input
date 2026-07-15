@@ -32,7 +32,8 @@ Wall BC:        slip
 Material density:    1197.0    # rho_Cu/rho_ref = 8960/7.49
 Elastic modulus:     7900.0    # E_Cu/p_ref = 117 GPa / 14.8 MPa
 Poisson ratio:       0.34
-Yield stretch:       0.0013    # sigma_Y/E ~ 150 MPa / 117 GPa -> yields then flows plastically
+Yield stress:        10.27     # sigma_Y/p_ref = 152 MPa / 14.8 MPa; J2 (Mitchell OSB) family-norm yield
+#Yield stretch:      0.0013    # legacy per-bond criterion (mode-dependent flow stress; superseded by Yield stress)
 Relaxation time:     0.01      # viscoplastic flow rate (small -> near rate-independent)
 Relaxation fraction: 1.0       # full deviatoric plastic flow above yield
 Failure stretch:     0.3       # ductile: ~30% elongation before tearing

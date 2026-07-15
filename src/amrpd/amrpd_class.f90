@@ -37,7 +37,7 @@ module amrpd_class
    integer, parameter, public :: AMRPD_WALL = 1    !< Particle reflects off the domain face (position+velocity)
 
    ! Struct layout constants -- MUST match #defines in amrpd_wrapper.cpp
-   integer, parameter, public :: AMRPD_NREAL_PART = 13
+   integer, parameter, public :: AMRPD_NREAL_PART = 15
    integer, parameter, public :: AMRPD_NINT_PART  = 1
    integer, parameter, public :: AMRPD_NREAL_BOND = 4
    integer, parameter, public :: AMRPD_NINT_BOND  = 5
@@ -51,9 +51,11 @@ module amrpd_class
    integer(c_int), parameter, public :: AMRPD_RC_DIL    = 10  !< dil           -- reduced
    integer(c_int), parameter, public :: AMRPD_RC_DAMAGE = 11  !< damage        -- reduced
    integer(c_int), parameter, public :: AMRPD_RC_NB0    = 12  !< nb0           -- reduced (reference bond count)
+   integer(c_int), parameter, public :: AMRPD_RC_TD2    = 13  !< td2           (previous-substep family norm, published)
+   integer(c_int), parameter, public :: AMRPD_RC_TD2A   = 14  !< td2a          -- reduced (current-substep accumulator)
 
-   !> Solid particle struct -- must match C++ Particle<13,1> memory layout:
-   !> pos[3], rdata[13], idcpu, idata[1]
+   !> Solid particle struct -- must match C++ Particle<15,1> memory layout:
+   !> pos[3], rdata[15], idcpu, idata[1]
    type, bind(C), public :: part
       real(c_double) :: pos(3)                  !< AMReX-managed position
       real(c_double) :: vel(3)                  !< rdata[0..2]
@@ -63,6 +65,8 @@ module amrpd_class
       real(c_double) :: dil                     !< rdata[10]    -- reduced via sumNeighbors
       real(c_double) :: damage                  !< rdata[11]    -- reduced via sumNeighbors (broken-bond fraction in [0,1])
       real(c_double) :: nb0                     !< rdata[12]    -- reduced via sumNeighbors (reference bond count, stamped once at bond_init)
+      real(c_double) :: td2                     !< rdata[13]    deviatoric force-state norm^2 of the previous substep (J2 yield; published at the end of compute_force)
+      real(c_double) :: td2a                    !< rdata[14]    -- reduced via sumNeighbors (current-substep norm^2 accumulator)
       integer(c_int64_t), private :: idcpu      !< AMReX packed id+cpu
       integer(c_int) :: flag                    !< idata[0]: PART_ALIVE or PART_IS_DEAD
    end type part
@@ -407,6 +411,7 @@ module amrpd_class
       real(WP) :: visc_lambda     = 1.0_WP      !< SLS relaxing fraction [0,1] (1 = pure Maxwell/full flow; <1 keeps long-term elastic stiffness)
       real(WP) :: fail_stretch    = huge(1.0_WP)!< Direct failure-stretch override (huge = use G_c-derived s0; finite = ductile, decoupled from G_c)
       real(WP) :: yield_stretch   = 0.0_WP      !< Viscoplastic yield strain (0 = pure Maxwell viscoelastic; >0 = elastic below yield, plastic flow above)
+      real(WP) :: sigma_yield     = 0.0_WP      !< J2 yield stress (Mitchell OSB): >0 yields on the family deviatoric force-state norm instead of per-bond stretch (overrides yield_stretch)
       real(WP) :: dV              = 0.0_WP      !< Element (representative) volume
 
       !> Short-range contact (soft-sphere model ported from amrlpt%collide).
@@ -501,6 +506,7 @@ module amrpd_class
       procedure :: sum_ghosts_mw
       procedure :: sum_ghosts_dil
       procedure :: sum_ghosts_damage
+      procedure :: sum_ghosts_td2
       procedure :: sum_ghosts_nb0
       procedure :: get_info             !< Global counts + min/max/mean velocities + load-balance metrics
       procedure :: log_box_loads        !< Per-tile (rank, lev, grid, tile, np, nb) dump to stdout
@@ -754,6 +760,14 @@ contains
       class(amrpd), intent(inout) :: this
       call amrpd_sum_neighbors(this%pcp,AMRPD_RC_DAMAGE,1,0,0)
    end subroutine sum_ghosts_damage
+
+   !> Reduce deviatoric-norm accumulator (td2a) contributions from ghost slots
+   !> back to owners. Recomputed every compute_force when sigma_yield>0.
+   subroutine sum_ghosts_td2(this)
+      implicit none
+      class(amrpd), intent(inout) :: this
+      call amrpd_sum_neighbors(this%pcp,AMRPD_RC_TD2A,1,0,0)
+   end subroutine sum_ghosts_td2
 
    !> Reduce nb0 (reference bond count) contributions from ghost slots back to
    !> owners. Reference-only -- called once at bond_init alongside sum_ghosts_mw.
@@ -1728,16 +1742,21 @@ contains
    !> because the family is a disk, not a sphere. Dimensionality is taken from the
    !> base grid (nx,ny,nz), the same switch the case uses to lay out particles.
    !>
-   !>   ndim   fdim   coef_vol              coef_dev   deviatoric split
-   !>   3      3      3*K                   15*mu      e - theta*|xi|/3
-   !>   2      2      2*(K+mu/3)  [k_2D]     8*mu      e - theta*|xi|/2   (plane strain)
-   !>   1      1      E                      0         (deviatoric vanishes identically)
+   !>   ndim   fdim   coef_vol              coef_dev   deviatoric split      psi_fac
+   !>   3      3      3*K                   15*mu      e - theta*|xi|/3      5
+   !>   2      2      2*(K+mu/3)  [k_2D]     8*mu      e - theta*|xi|/2      8/3   (plane strain)
+   !>   1      1      E                      0         (deviatoric vanishes)  0
    !>
    !> k_2D = lambda+mu = K+mu/3 is the plane-strain (area) bulk modulus.
-   subroutine get_lps_coefs(this,fdim,coef_vol,coef_dev)
+   !> psi_fac sets the J2 yield threshold on the family deviatoric force-state
+   !> norm: yield when ||t_dev||^2 > psi_fac*sigma_yield^2/mw (Mitchell OSB;
+   !> the 3D value equals Peridigm's 25*sY^2/(8*pi*delta^5) for w=1). Both
+   !> dimensions reduce to yield at eps_dev:eps_dev = sY^2/(6*mu^2).
+   subroutine get_lps_coefs(this,fdim,coef_vol,coef_dev,psi_fac)
       implicit none
       class(amrpd), intent(in) :: this
       real(WP), intent(out) :: fdim,coef_vol,coef_dev
+      real(WP), intent(out), optional :: psi_fac
       real(WP) :: K_bulk,mu_shear
       integer :: ndim
       ndim=0
@@ -1749,10 +1768,13 @@ contains
       select case (ndim)
       case (3)
          fdim=3.0_WP; coef_vol=3.0_WP*K_bulk;                    coef_dev=15.0_WP*mu_shear
+         if (present(psi_fac)) psi_fac=5.0_WP
       case (2)
          fdim=2.0_WP; coef_vol=2.0_WP*(K_bulk+mu_shear/3.0_WP);  coef_dev= 8.0_WP*mu_shear
+         if (present(psi_fac)) psi_fac=8.0_WP/3.0_WP
       case default
          fdim=1.0_WP; coef_vol=this%elastic_modulus;             coef_dev= 0.0_WP
+         if (present(psi_fac)) psi_fac=0.0_WP
       end select
    end subroutine get_lps_coefs
 
@@ -1924,7 +1946,8 @@ contains
       real(WP) :: fdim,coef_vol,coef_dev,e_d_avg,decay,e_e,over
       real(WP) :: dx,dy,dz,curr_len,e_bond,Lx,Ly,Lz
       real(WP), dimension(3) :: xlo,xhi
-      real(WP) :: t_lo,t_hi,pair_mag
+      real(WP) :: t_lo,t_hi,pair_mag,td_lo,td_hi
+      real(WP) :: psi_fac,sY2,beta_lo,beta_hi
       real(WP) :: fx,fy,fz,mhat_x,mhat_y,mhat_z
 
       Lx=this%amr%xhi-this%amr%xlo; Ly=this%amr%yhi-this%amr%ylo; Lz=this%amr%zhi-this%amr%zlo
@@ -1932,7 +1955,8 @@ contains
       ! LPS coefficients for the active dimensionality (3D / 2D plane strain / 1D):
       ! volumetric (elastic) and deviatoric (carries Maxwell relaxation; e_v=0 recovers
       ! LPS). fdim also sets the deviatoric split e_d = e - theta*|xi|/fdim below.
-      call this%get_lps_coefs(fdim,coef_vol,coef_dev)
+      call this%get_lps_coefs(fdim,coef_vol,coef_dev,psi_fac)
+      sY2=this%sigma_yield**2
 
       ! Zero F_bond on every owned particle AND every ghost in the aux buffer.
       ! Also zero damage on GHOSTS only (owned damage is accumulated state and
@@ -1944,11 +1968,13 @@ contains
             call this%get_particles(lvl,mfi,p,np_valid)
             do n=1_I8,np_valid
                p(n)%F_bond=0.0_WP
+               p(n)%td2a  =0.0_WP
             end do
             call this%get_ghosts(lvl,mfi,pg,ng)
             do n=1_I8,ng
                pg(n)%F_bond=0.0_WP
                pg(n)%damage=0.0_WP
+               pg(n)%td2a  =0.0_WP
             end do
          end do
          call this%mfiter_destroy(mfi)
@@ -2016,19 +2042,37 @@ contains
                end if
                ! Force-density magnitudes along M_hat at each endpoint
                ! (uses each owner's own theta and m_w; e is symmetric)
-               ! Volumetric part elastic; deviatoric extension e_d=e-theta*d0/3 carries
-               ! the Maxwell inelastic stretch e_v. e_v=0 -> identical to the LPS form.
+               ! Volumetric part elastic; deviatoric extension e_d=e-theta*d0/fdim carries
+               ! the inelastic stretch e_v. e_v=0 -> identical to the LPS form. The
+               ! deviatoric part td is kept separate to feed the J2 family norm below.
                if (p(lid_lo)%mw.gt.0.0_WP) then
-                  t_lo=b(ib)%w/p(lid_lo)%mw*(coef_vol*p(lid_lo)%dil*b(ib)%d0 &
-                  &    +coef_dev*(e_bond-p(lid_lo)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v))
+                  td_lo=b(ib)%w/p(lid_lo)%mw*coef_dev*(e_bond-p(lid_lo)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v)
+                  t_lo =b(ib)%w/p(lid_lo)%mw*coef_vol*p(lid_lo)%dil*b(ib)%d0+td_lo
                else
-                  t_lo=0.0_WP
+                  td_lo=0.0_WP; t_lo=0.0_WP
                end if
                if (p(lid_hi)%mw.gt.0.0_WP) then
-                  t_hi=b(ib)%w/p(lid_hi)%mw*(coef_vol*p(lid_hi)%dil*b(ib)%d0 &
-                  &    +coef_dev*(e_bond-p(lid_hi)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v))
+                  td_hi=b(ib)%w/p(lid_hi)%mw*coef_dev*(e_bond-p(lid_hi)%dil*b(ib)%d0/fdim-this%visc_lambda*b(ib)%e_v)
+                  t_hi =b(ib)%w/p(lid_hi)%mw*coef_vol*p(lid_hi)%dil*b(ib)%d0+td_hi
                else
-                  t_hi=0.0_WP
+                  td_hi=0.0_WP; t_hi=0.0_WP
+               end if
+               ! J2 family norm: accumulate ||t_dev||^2 contributions on both endpoints
+               ! (ghost-routed like F_bond; self-image bonds count once -- the mirror
+               ! bond supplies the other family member)
+               if (this%sigma_yield.gt.0.0_WP) then
+                  if (lid_lo.le.int(np_valid)) then
+                     p(lid_lo)%td2a=p(lid_lo)%td2a+td_lo*td_lo*this%dV
+                  else
+                     pg(lid_lo-int(np_valid))%td2a=pg(lid_lo-int(np_valid))%td2a+td_lo*td_lo*this%dV
+                  end if
+                  if (key_lo.ne.key_hi) then
+                     if (lid_hi.le.int(np_valid)) then
+                        p(lid_hi)%td2a=p(lid_hi)%td2a+td_hi*td_hi*this%dV
+                     else
+                        pg(lid_hi-int(np_valid))%td2a=pg(lid_hi-int(np_valid))%td2a+td_hi*td_hi*this%dV
+                     end if
+                  end if
                end if
                ! Unit bond vector and pair-force-per-volume (Newton's 3rd)
                mhat_x=dx/curr_len; mhat_y=dy/curr_len; mhat_z=dz/curr_len
@@ -2058,16 +2102,29 @@ contains
                   end if
                end if
                ! Viscoplastic relaxation of the bond's inelastic deviatoric stretch
-               ! (owner-local; tau=huge -> e_v frozen -> purely elastic LPS).
-               ! Only the OVERSTRESS beyond the yield strain flows (Perzyna), with
+               ! (owner-local; tau=huge -> e_v frozen -> purely elastic LPS), with
                ! exact exponential integration (unconditionally stable, no viscous
-               ! CFL). yield_stretch=0 reduces exactly to Maxwell viscoelasticity.
+               ! CFL). Two yield criteria:
+               !   sigma_yield>0: J2 (Mitchell OSB) -- radial return toward the yield
+               !     surface when the family deviatoric force-state norm exceeds
+               !     psi2=psi_fac*sY^2/mw. Uses the PREVIOUS substep's reduced norm
+               !     (td2; ghosts carry it via update_ghosts), Perzyna-regularized
+               !     by (1-decay); tau->0 recovers Peridigm's rate-independent return.
+               !   else: legacy per-bond overstress (Perzyna on yield_stretch;
+               !     yield_stretch=0 reduces exactly to Maxwell viscoelasticity).
                if (this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP)) then
                   e_d_avg=e_bond-0.5_WP*(p(lid_lo)%dil+p(lid_hi)%dil)*b(ib)%d0/fdim
                   decay=exp(-dt/this%tau)
-                  e_e=e_d_avg-b(ib)%e_v                          ! elastic deviatoric stretch
-                  over=abs(e_e)-this%yield_stretch*b(ib)%d0      ! overstress beyond yield
-                  if (over.gt.0.0_WP) b(ib)%e_v=b(ib)%e_v+sign(over*(1.0_WP-decay),e_e)
+                  if (this%sigma_yield.gt.0.0_WP) then
+                     beta_lo=1.0_WP; beta_hi=1.0_WP
+                     if (p(lid_lo)%td2*p(lid_lo)%mw.gt.psi_fac*sY2) beta_lo=sqrt(psi_fac*sY2/(p(lid_lo)%td2*p(lid_lo)%mw))
+                     if (p(lid_hi)%td2*p(lid_hi)%mw.gt.psi_fac*sY2) beta_hi=sqrt(psi_fac*sY2/(p(lid_hi)%td2*p(lid_hi)%mw))
+                     b(ib)%e_v=b(ib)%e_v+(1.0_WP-0.5_WP*(beta_lo+beta_hi))*(e_d_avg-b(ib)%e_v)*(1.0_WP-decay)
+                  else
+                     e_e=e_d_avg-b(ib)%e_v                          ! elastic deviatoric stretch
+                     over=abs(e_e)-this%yield_stretch*b(ib)%d0      ! overstress beyond yield
+                     if (over.gt.0.0_WP) b(ib)%e_v=b(ib)%e_v+sign(over*(1.0_WP-decay),e_e)
+                  end if
                end if
             end do
             call hash%finalize()
@@ -2080,6 +2137,23 @@ contains
       ! routes those increments to the upper-GID's owner.)
       call this%sum_ghosts_force()
       call this%sum_ghosts_damage()
+
+      ! J2: reduce ghost-slot norm contributions, then publish this substep's
+      ! norm to td2 (read by the NEXT substep's radial return; ghost copies
+      ! refresh at the next fill_ghosts/update_ghosts).
+      if (this%sigma_yield.gt.0.0_WP) then
+         call this%sum_ghosts_td2()
+         do lvl=0,this%amr%clvl()
+            call this%mfiter_build(lvl,mfi)
+            do while (mfi%next())
+               call this%get_particles(lvl,mfi,p,np_valid)
+               do n=1_I8,np_valid
+                  p(n)%td2=p(n)%td2a
+               end do
+            end do
+            call this%mfiter_destroy(mfi)
+         end do
+      end if
 
    contains
 

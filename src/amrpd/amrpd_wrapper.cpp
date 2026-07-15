@@ -29,7 +29,7 @@
 using namespace amrex;
 
 // Layout constants -- MUST match Fortran AMRPD_NREAL_PART/NINT_PART/NREAL_BOND/NINT_BOND
-#define AMRPD_NREAL_PART 13
+#define AMRPD_NREAL_PART 15
 #define AMRPD_NINT_PART   1
 #define AMRPD_NREAL_BOND  5
 #define AMRPD_NINT_BOND   5
@@ -502,6 +502,8 @@ void amrpd_restart_b(PCB* pc, const char* fullpath)
 //   rdata[10]     dil
 //   rdata[11]     damage
 //   rdata[12]     nb0
+//   rdata[13]     td2
+//   rdata[14]     td2a
 //   idata[0]      flag
 // Position (pos[3]) is always written by AMReX (baked into the particle format).
 // -----------------------------------------------------------------------
@@ -513,7 +515,7 @@ void amrpd_write_plotfile(PCP* pc, const char* basedir, const char* pname,
         "vx", "vy", "vz",
         "fbx", "fby", "fbz",
         "ffx", "ffy", "ffz",
-        "mw", "dil", "damage", "nb0"
+        "mw", "dil", "damage", "nb0", "td2", "td2a"
     };
     static const Vector<std::string> inames = { "flag" };
 

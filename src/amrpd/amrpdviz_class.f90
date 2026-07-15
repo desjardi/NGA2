@@ -137,7 +137,7 @@ contains
 
 
    !> Toggle a named field group on or off.
-   !> Group names: 'vel', 'F_bond', 'F_fluid', 'mw', 'dil', 'damage', 'nb0', 'flag'
+   !> Group names: 'vel', 'F_bond', 'F_fluid', 'mw', 'dil', 'damage', 'nb0', 'td2', 'td2a', 'flag'
    !> Individual components: 'vx','vy','vz','fbx','fby','fbz','ffx','ffy','ffz'
    !> Convenience: 'all', 'position_only'
    subroutine select_comp(this,name,on)
@@ -165,11 +165,13 @@ contains
       case('ffx');     this%write_real(7)   = val
       case('ffy');     this%write_real(8)   = val
       case('ffz');     this%write_real(9)   = val
-      ! Scalar state (rdata[9..12])
+      ! Scalar state (rdata[9..14])
       case('mw');      this%write_real(10)  = val
       case('dil');     this%write_real(11)  = val
       case('damage');  this%write_real(12)  = val
       case('nb0');     this%write_real(13)  = val
+      case('td2');     this%write_real(14)  = val
+      case('td2a');    this%write_real(15)  = val
       ! Integer (idata[0])
       case('flag');    this%write_int(1)    = val
       ! Convenience groups
