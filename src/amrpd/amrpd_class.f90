@@ -1,24 +1,23 @@
-!> AMR <-> peridynamics interface: the grid-side face of a PD solid.
+!> Grid-side extension of the PD solver: an amrpd IS a pdsolver (extends it)
+!> plus an AMReX particle mirror of its nodes (the "face"), distributed by
+!> position over the fluid grid's boxes so every grid-facing operation runs
+!> where the cells live: volume-fraction and velocity deposits, field
+!> interpolation at particle positions (F_fluid), VF-driven AMR tagging,
+!> and plotfile visualization.
 !>
-!> This class carries NO physics. It owns an AMReX particle population,
-!> distributed by position over the fluid grid's boxes, holding a copy of a
-!> pdsolver's node state (positions, velocities, damage) so that every
-!> grid-facing operation runs where the cells live: volume-fraction and
-!> velocity deposits, field interpolation at particle positions (F_fluid),
-!> VF-driven AMR tagging, plotfile visualization, and particle checkpoints.
-!>
-!> Usage tiers (pdsolver and amrpd never use-associate each other; the case
-!> driver mediates with plain arrays through pdsolver%exchange):
+!> Usage tiers (amrpd EXTENDS pdsolver: one object is the solid solver AND
+!> its grid face -- assign material/damage/contact fields, then call handoff):
 !>   1. pdsolver alone      -- grid-free solid dynamics (no visualization)
-!>   2. pdsolver + amrpd    -- adds viz, solid VF on the mesh, AMR refinement
-!>                             around the body, and the convenient seeding path
-!>   3. ... + a flow solver -- two-way FSI (deposits drive IB forcing; the
-!>                             fluid load returns via exchange)
+!>   2. amrpd               -- adds viz, solid VF on the mesh, AMR refinement,
+!>                             seeding, and the face<->solver exchange
+!>   3. ... + a flow solver -- two-way FSI (driver deposits IB forcing; the
+!>                             fluid load returns via exchange_solid)
 module amrpd_class
-   use precision,     only: WP,I8
-   use string,        only: str_medium
-   use amrgrid_class, only: amrgrid
-   use amrdata_class, only: amrdata
+   use precision,      only: WP,I8
+   use string,         only: str_medium
+   use amrgrid_class,  only: amrgrid
+   use amrdata_class,  only: amrdata
+   use pdsolver_class, only: pdsolver,pd_partition,PD_WALL,PDC_IS_DEAD
    use iso_c_binding
    implicit none
    private
@@ -38,43 +37,28 @@ module amrpd_class
    integer(c_int), parameter, public :: PART_INTEGRATES = 2    !< vel += (dt/2)*acc during Verlet half-kick
    integer(c_int), parameter, public :: PART_BONDS      = 4    !< Eligible for bond-network participation
 
-   ! Domain boundary-condition flags (per face, set on lo_bc(d)/hi_bc(d))
-   integer, parameter, public :: AMRPD_OPEN = 0    !< Particle leaves the domain (dropped by Redistribute)
-   integer, parameter, public :: AMRPD_WALL = 1    !< Particle reflects off the domain face (position+velocity)
-
    ! Struct layout constants -- MUST match #defines in amrpd_wrapper.cpp
    integer, parameter, public :: AMRPD_NREAL_PART = 15
    integer, parameter, public :: AMRPD_NINT_PART  = 1
    integer, parameter, public :: AMRPD_NREAL_BOND = 4
    integer, parameter, public :: AMRPD_NINT_BOND  = 5
 
-   ! Component indices into particle rdata, for use with amrpd_sum_neighbors
-   ! (0-indexed to match AMReX's C++ convention)
-   integer(c_int), parameter, public :: AMRPD_RC_VEL    = 0   !< vel[0..2]
-   integer(c_int), parameter, public :: AMRPD_RC_FBOND  = 3   !< F_bond[0..2]  -- reduced
-   integer(c_int), parameter, public :: AMRPD_RC_FFLUID = 6   !< F_fluid[0..2]
-   integer(c_int), parameter, public :: AMRPD_RC_MW     = 9   !< mw            -- reduced
-   integer(c_int), parameter, public :: AMRPD_RC_DIL    = 10  !< dil           -- reduced
-   integer(c_int), parameter, public :: AMRPD_RC_DAMAGE = 11  !< damage        -- reduced
-   integer(c_int), parameter, public :: AMRPD_RC_NB0    = 12  !< nb0           -- reduced (reference bond count)
-   integer(c_int), parameter, public :: AMRPD_RC_TD2    = 13  !< td2           (previous-substep family norm, published)
-   integer(c_int), parameter, public :: AMRPD_RC_TD2A   = 14  !< td2a          -- reduced (current-substep accumulator)
-
    !> Solid particle struct -- must match C++ Particle<15,1> memory layout:
-   !> pos[3], rdata[15], idcpu, idata[1]
+   !> pos[3], rdata[15], idcpu, idata[1]. Physics lives in pdsolver; only
+   !> pos/vel/F_fluid/damage are meaningful here (rest is legacy layout).
    type, bind(C), public :: part
       real(c_double) :: pos(3)                  !< AMReX-managed position
       real(c_double) :: vel(3)                  !< rdata[0..2]
-      real(c_double) :: F_bond(3)               !< rdata[3..5]  -- reduced via sumNeighbors
-      real(c_double) :: F_fluid(3)              !< rdata[6..8]
-      real(c_double) :: mw                      !< rdata[9]     -- reduced via sumNeighbors
-      real(c_double) :: dil                     !< rdata[10]    -- reduced via sumNeighbors
-      real(c_double) :: damage                  !< rdata[11]    -- reduced via sumNeighbors (broken-bond fraction in [0,1])
-      real(c_double) :: nb0                     !< rdata[12]    -- reduced via sumNeighbors (reference bond count, stamped once at bond_init)
-      real(c_double) :: td2                     !< rdata[13]    deviatoric force-state norm^2 of the previous substep (J2 yield; published at the end of compute_force)
-      real(c_double) :: td2a                    !< rdata[14]    -- reduced via sumNeighbors (current-substep norm^2 accumulator)
+      real(c_double) :: F_bond(3)               !< rdata[3..5]  (unused)
+      real(c_double) :: F_fluid(3)              !< rdata[6..8]  fluid load interpolated by the driver
+      real(c_double) :: mw                      !< rdata[9]     (unused)
+      real(c_double) :: dil                     !< rdata[10]    (unused)
+      real(c_double) :: damage                  !< rdata[11]    broken-bond fraction in [0,1]
+      real(c_double) :: nb0                     !< rdata[12]    (unused)
+      real(c_double) :: td2                     !< rdata[13]    (unused)
+      real(c_double) :: td2a                    !< rdata[14]    (unused)
       integer(c_int64_t), private :: idcpu      !< AMReX packed id+cpu
-      integer(c_int) :: flag                    !< idata[0]: PART_ALIVE or PART_IS_DEAD
+      integer(c_int) :: flag                    !< idata[0]: PART_* flags at seeding; owner routing tag (7+8*owner) after handoff
    end type part
 
 
@@ -216,62 +200,23 @@ module amrpd_class
    end interface
 
 
-   !> Peridynamics solver type
-   type :: amrpd
+   !> Grid-side extension of the PD solver: an amrpd IS a pdsolver, plus an
+   !> AMReX particle mirror of its nodes (the "face") distributed by position
+   !> over the fluid grid's boxes for deposits, interpolation, tagging, and viz
+   type, extends(pdsolver) :: amrpd
 
       !> Associated AMR grid
       class(amrgrid), pointer :: amr => null()
 
-      !> Opaque AMReX container handles
-      type(c_ptr) :: pcp = c_null_ptr           !< Particle container (NeighborParticleContainer<11,1>)
+      !> Opaque AMReX container handle
+      type(c_ptr) :: pcp = c_null_ptr           !< Particle container
 
-      !> Solver name
-      character(len=str_medium) :: name = 'UNNAMED_AMRPD'
-
-      !> Global counts
-      integer(I8) :: np = 0                     !< Global particle count
-
-      !> Local count + load-balance metrics across ranks
-      integer(I8) :: np_loc = 0                 !< This rank's particle count
-      integer(I8) :: np_min = 0                 !< Min particle count across ranks
-      integer(I8) :: np_max = 0                 !< Max particle count across ranks
-      real(WP)    :: np_eff = 0.0_WP            !< Load efficiency = mean/max across ranks
-
-
-      !> Material/physical parameters
-      real(WP) :: elastic_modulus = 0.0_WP      !< Young's modulus
-      real(WP) :: poisson_ratio   = 0.0_WP      !< Poisson's ratio
-      real(WP) :: rho             = 0.0_WP      !< Material density
-      real(WP) :: crit_energy     = 0.0_WP      !< Critical energy release rate G_c
-      real(WP) :: s0              = huge(1.0_WP)!< Critical bond stretch (set by bond_init from G_c if >0; huge() = no damage)
-      real(WP) :: tau             = huge(1.0_WP)!< Maxwell deviatoric relaxation time (huge = purely elastic, no viscoplastic flow)
-      real(WP) :: visc_lambda     = 1.0_WP      !< SLS relaxing fraction [0,1] (1 = pure Maxwell/full flow; <1 keeps long-term elastic stiffness)
-      real(WP) :: fail_stretch    = huge(1.0_WP)!< Direct failure-stretch override (huge = use G_c-derived s0; finite = ductile, decoupled from G_c)
-      real(WP) :: yield_stretch   = 0.0_WP      !< Viscoplastic yield strain (0 = pure Maxwell viscoelastic; >0 = elastic below yield, plastic flow above)
-      real(WP) :: sigma_yield     = 0.0_WP      !< J2 yield stress (Mitchell OSB): >0 yields on the family deviatoric force-state norm instead of per-bond stretch (overrides yield_stretch)
-      real(WP) :: dV              = 0.0_WP      !< Element (representative) volume
-
-      !> Short-range contact (soft-sphere model ported from amrlpt%collide).
-      !> Contact duration tau_col defaults to 5*dt (as stiff as integrable) but
-      !> can be user-overridden by setting tau_col > 0. CFLc = dt/tau_col is
-      !> reported as a diagnostic but does NOT constrain dt.
-      real(WP) :: contact_dist    = 0.0_WP      !< d_c: contact threshold (default 0.9 * dV^(1/3))
-      real(WP) :: tau_col         = 0.0_WP      !< Collision duration (<=0 -> auto = 5*dt each step)
-      real(WP) :: e_n             = 0.7_WP      !< Normal restitution coefficient (particle-particle)
-      real(WP) :: e_w             = 0.7_WP      !< Normal restitution coefficient (wall / IB)
-      real(WP) :: clip_col        = 0.2_WP      !< Overlap clip fraction of d_eff
-
-      !> Bonding parameters
-      real(WP) :: delta           = 0.0_WP      !< Reference horizon (bonding distance)
-      !> Ghost-layer search radius used by every fill_ghosts call (bond_init,
-      !> compute_dilatation, compute_force, ...). Must be >= delta. Should also
-      !> be >= the largest bond length any bond can reach before it breaks, so
-      !> stretched bonds always have both endpoints accessible via the ghost
-      !> layer. Default placeholder: 1.5 * delta. Will eventually be
-      !> (1 + max_stretch) * delta + safety once damage is wired (M5).
-
-      !> Gravitational acceleration
-      real(WP), dimension(3) :: gravity = 0.0_WP
+      !> Face load-balance metrics across ranks (grid decomposition; the
+      !> solver's own Morton partition is balanced by construction)
+      integer(I8) :: np_loc = 0                 !< This rank's face particle count
+      integer(I8) :: np_min = 0                 !< Min across ranks
+      integer(I8) :: np_max = 0                 !< Max across ranks
+      real(WP)    :: np_eff = 0.0_WP            !< Load efficiency = mean/max
 
       !> Maximum AMR level particles are allowed on (cap passed to AMReX
       !> Redistribute as lev_max). Particles span levels [0, maxlvl] and
@@ -284,13 +229,6 @@ module amrpd_class
       !> uses sum_fine_to_coarse, which asserts nGrow % ratio == 0. Matches
       !> amrlpt's default.
       integer :: nover = 2
-
-      !> Per-face domain BCs (default: open on all faces).
-      !> Override with AMRPD_WALL for hard reflection. Periodic faces (set on
-      !> amrgrid via xper/yper/zper) skip this logic — AMReX wraps automatically
-      !> during Redistribute.
-      integer, dimension(3) :: lo_bc = AMRPD_OPEN
-      integer, dimension(3) :: hi_bc = AMRPD_OPEN
 
 
       !> Particle volume fraction on the Eulerian AMR mesh. Cell-centered scalar
@@ -309,15 +247,6 @@ module amrpd_class
       !> tagging. Use to add custom refinement criteria (e.g., damage > 0.3).
       procedure(pd_tagging_iface), pointer, pass :: user_pd_tagging => null()
 
-      !> Monitoring info
-      real(WP) :: Umin=0.0_WP,Umax=0.0_WP,Umean=0.0_WP
-      real(WP) :: Vmin=0.0_WP,Vmax=0.0_WP,Vmean=0.0_WP
-      real(WP) :: Wmin=0.0_WP,Wmax=0.0_WP,Wmean=0.0_WP
-      real(WP) :: CFLp=0.0_WP                                  !< convective: max(|v_d|) * dt / dp -- binds, limit 0.1 (scaled by 5)
-      real(WP) :: CFLe=0.0_WP                                  !< elastic-wave: c_p * dt / dp -- binds, limit 0.5
-      real(WP) :: CFLc=0.0_WP                                  !< contact: dt / tau_col -- diagnostic only, does not bind dt
-      real(WP) :: CFLv=0.0_WP                                  !< viscous: dt / tau -- diagnostic only (exponential relaxation is unconditionally stable)
-
    contains
       ! Lifecycle
       procedure :: initialize
@@ -330,6 +259,10 @@ module amrpd_class
       ! Particle population
       procedure :: append
       procedure :: append_with_gids
+      ! Solver coupling (grid face <-> contained pdsolver)
+      procedure :: handoff
+      procedure :: exchange_solid
+      procedure :: rebuild_face
       ! MFIter helpers (particle container's BA/DM)
       procedure :: mfiter_build
       procedure :: mfiter_destroy
@@ -413,7 +346,7 @@ contains
    ! LIFECYCLE
    ! ============================================================================
 
-   !> Initialize amrpd solver: create particle and bond containers, register AMR callbacks
+   !> Initialize amrpd solver: create particle container, register AMR callbacks
    subroutine initialize(this,amr,name)
       use amrex_amr_module, only: amrex_bc_foextrap
       implicit none
@@ -428,8 +361,15 @@ contains
       this%maxlvl = amr%maxlvl
       ! Default deposit-smoothing width
       this%filter_width = 2.0_WP*this%amr%min_meshsize(this%amr%maxlvl)
-      ! Create AMReX particle and bond containers
+      ! Create AMReX particle container
       call amrpd_new_pcp(this%pcp,this%amr%amrcore)
+      ! Stamp the solver's domain geometry from the grid (material, damage,
+      ! and contact fields are driver-assigned)
+      this%Ldom=[amr%xhi-amr%xlo,amr%yhi-amr%ylo,amr%zhi-amr%zlo]
+      this%per=[amr%xper,amr%yper,amr%zper]
+      this%collapsed=[amr%nx.eq.1,amr%ny.eq.1,amr%nz.eq.1]
+      this%dom_lo=[amr%xlo,amr%ylo,amr%zlo]
+      this%dom_hi=[amr%xhi,amr%yhi,amr%zhi]
       ! Particle volume fraction field (cell-centered, 1 ghost layer; foextrap
       ! on non-periodic faces matches amrlpt's convention)
       call this%VF%initialize(amr=amr,name='VF',ncomp=1,ng=this%nover); call this%VF%register()
@@ -446,7 +386,7 @@ contains
       call this%print()
    end subroutine initialize
 
-   !> Finalize: destroy containers and release amr pointer
+   !> Finalize: destroy face and container, then the parent solver
    subroutine finalize(this)
       implicit none
       class(amrpd), intent(inout) :: this
@@ -458,6 +398,8 @@ contains
          call amrpd_delete_pcp(this%pcp); this%pcp = c_null_ptr
       end if
       nullify(this%amr)
+      ! Tear down the solver state
+      call this%pdsolver%finalize()
    end subroutine finalize
 
 
@@ -465,13 +407,9 @@ contains
    ! CONTAINER UTILITIES
    ! ============================================================================
 
-   !> Redistribute both particle and bond containers across ranks. Particles
-   !> can land on any currently-defined level (AMReX picks the finest covering
-   !> level for each particle's position). lev_max=-1 tells AMReX to use the
-   !> AmrCore's current finestLevel(), which avoids the
-   !>   `Assertion lev_max <= finestLevel()' failed
-   !> crash when redistribute is called before all maxlvl levels exist (e.g.,
-   !> right after init_from_scratch). Matches amrlpt's default.
+   !> Redistribute the particle container across ranks (finest covering level
+   !> per position; lev_max=-1 avoids the lev_max>finestLevel() assert before
+   !> all levels exist). Matches amrlpt's default.
    subroutine redistribute(this)
       implicit none
       class(amrpd), intent(inout) :: this
@@ -489,33 +427,26 @@ contains
 
 
 
-   !> Compute global counts, per-rank load metrics, and min/max/mean velocity
-   !> statistics in one collective pass. Mirrors amrlpt's get_info pattern: walks
-   !> owned particles once via MFIter accumulating local stats, then does the
-   !> global reductions (counts via SUM, min/max via MIN/MAX, etc).
-   !>
-   !> Populates on this:
-   !>   np / np_loc / np_min / np_max / np_eff    (and nb analogues for bonds)
-   !>   Umin/Umax/Umean, Vmin/Vmax/Vmean, Wmin/Wmax/Wmean
+   !> Collective info: runs the solver's get_info (np, velocity extrema, bond
+   !> censuses, timers), then adds the FACE load-balance metrics -- particles
+   !> per rank across the grid decomposition (the solver's own partition is
+   !> balanced by construction; this measures the position-based mirror).
    subroutine get_info(this)
       implicit none
       class(amrpd), intent(inout) :: this
-      real(WP) :: my_Usum,my_Vsum,my_Wsum,safe_np
-      integer(c_int64_t) :: nbtot
+      integer(I8) :: np_sum
 
-      ! Init per-rank accumulators
-      this%np_loc=0_I8
-      this%Umin= huge(1.0_WP); this%Umax=-huge(1.0_WP); my_Usum=0.0_WP
-      this%Vmin= huge(1.0_WP); this%Vmax=-huge(1.0_WP); my_Vsum=0.0_WP
-      this%Wmin= huge(1.0_WP); this%Wmax=-huge(1.0_WP); my_Wsum=0.0_WP
+      ! Solver-side info
+      call this%pdsolver%get_info()
 
-      ! Per-rank loop: count and accumulate velocity stats over all levels
+      ! Face census: live particles owned by this rank across all levels
       local_pass: block
          use amrex_amr_module, only: amrex_mfiter
          type(amrex_mfiter) :: mfi
          type(part), dimension(:), pointer :: p
          integer(I8) :: np_,n
          integer :: lvl
+         this%np_loc=0_I8
          do lvl=0,this%amr%clvl()
             call this%mfiter_build(lvl,mfi)
             do while (mfi%next())
@@ -523,38 +454,21 @@ contains
                do n=1,np_
                   if (p(n)%flag.eq.PART_IS_DEAD) cycle
                   this%np_loc=this%np_loc+1_I8
-                  this%Umin=min(this%Umin,p(n)%vel(1)); this%Umax=max(this%Umax,p(n)%vel(1)); my_Usum=my_Usum+p(n)%vel(1)
-                  this%Vmin=min(this%Vmin,p(n)%vel(2)); this%Vmax=max(this%Vmax,p(n)%vel(2)); my_Vsum=my_Vsum+p(n)%vel(2)
-                  this%Wmin=min(this%Wmin,p(n)%vel(3)); this%Wmax=max(this%Wmax,p(n)%vel(3)); my_Wsum=my_Wsum+p(n)%vel(3)
                end do
             end do
             call this%mfiter_destroy(mfi)
          end do
       end block local_pass
 
-      ! Global reductions
+      ! Load-balance reductions
       global_reduce: block
          use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_MIN,MPI_MAX,MPI_IN_PLACE,MPI_INTEGER8
-         use parallel, only: MPI_REAL_WP
          integer :: ierr
-         ! Particle counts and load balance: seed min/max with this rank's np_loc,
-         ! then reduce; the global np is the SUM of np_loc across ranks.
-         this%np_min=this%np_loc; this%np_max=this%np_loc; this%np=this%np_loc; this%np_eff=0.0_WP
+         this%np_min=this%np_loc; this%np_max=this%np_loc; np_sum=this%np_loc; this%np_eff=0.0_WP
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_min,1,MPI_INTEGER8,MPI_MIN,this%amr%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,this%np_max,1,MPI_INTEGER8,MPI_MAX,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,    1,MPI_INTEGER8,MPI_SUM,this%amr%comm,ierr)
-         if (this%np_max.gt.0_I8) this%np_eff=real(this%np,WP)/real(this%np_max,WP)/real(this%amr%nproc,WP)
-         ! Velocity min/max/mean
-         safe_np=real(max(this%np,1_I8),WP)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umin,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umax,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,my_Usum  ,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr); this%Umean=my_Usum/safe_np
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmin,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Vmax,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,my_Vsum  ,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr); this%Vmean=my_Vsum/safe_np
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmin,1,MPI_REAL_WP,MPI_MIN,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,this%Wmax,1,MPI_REAL_WP,MPI_MAX,this%amr%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,my_Wsum  ,1,MPI_REAL_WP,MPI_SUM,this%amr%comm,ierr); this%Wmean=my_Wsum/safe_np
+         call MPI_ALLREDUCE(MPI_IN_PLACE,np_sum,     1,MPI_INTEGER8,MPI_SUM,this%amr%comm,ierr)
+         if (this%np_max.gt.0_I8) this%np_eff=real(np_sum,WP)/real(this%np_max,WP)/real(this%amr%nproc,WP)
       end block global_reduce
 
    end subroutine get_info
@@ -671,6 +585,177 @@ contains
       call amrpd_append_particles_gid(this%pcp,raw,int(n,c_int64_t),graw)
    end subroutine append_with_gids
 
+
+   ! ============================================================================
+   ! SOLVER COUPLING (grid face <-> contained pdsolver)
+   ! ============================================================================
+
+   !> Hand the seeded face population to the solver: extract nodes, Morton-
+   !> partition them (balanced, motion-invariant), detect families, and stamp
+   !> each face particle's flag with its solver owner rank (flag = 7+8*owner).
+   !> The driver must have assigned the material/damage/contact fields first.
+   subroutine handoff(this)
+      use amrex_amr_module, only: amrex_mfiter
+      implicit none
+      class(amrpd), intent(inout) :: this
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8), allocatable :: gids(:),rgid(:)
+      real(WP), allocatable :: pos(:,:),vel(:,:),voll(:),rpos(:,:),rvel(:,:),rvol(:)
+      integer, allocatable :: flags(:),owner(:),rflag(:)
+      integer(I8) :: np_,n
+      integer :: lvl,nn,i,nr
+      ! Extract this rank's owned particles
+      nn=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            nn=nn+int(np_)
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      allocate(gids(max(nn,1)),pos(3,max(nn,1)),vel(3,max(nn,1)),flags(max(nn,1)),voll(max(nn,1)),owner(max(nn,1)))
+      i=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               i=i+1
+               gids(i) =part_gid(p(n))
+               pos(:,i)=p(n)%pos
+               vel(:,i)=p(n)%vel
+               flags(i)=p(n)%flag
+               voll(i) =this%dV
+            end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      ! Balanced static partition of the reference configuration
+      call pd_partition(nn,gids,pos,vel,flags,voll,owner,nr,rgid,rpos,rvel,rflag,rvol)
+      call this%set_nodes(nr,rgid,rpos,rvel,rflag,rvol)
+      call this%detect_families()
+      ! Stamp owner routing tags on the grid face (same walk order as the
+      ! extraction above, so owner(i) lines up)
+      i=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               i=i+1
+               p(n)%flag=7+8*owner(i)
+            end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      deallocate(gids,pos,vel,flags,voll,owner,rgid,rpos,rvel,rflag,rvol)
+   end subroutine handoff
+
+   !> Face <-> solver exchange (collective; call once per coupling step): push
+   !> each face particle's interpolated F_fluid to its solver owner; pull back
+   !> the owner's current (pos, vel, damage, alive). Dead solver nodes (exited
+   !> an open face) get an outside-domain position written back, so the next
+   !> redistribute drops the tombstone.
+   subroutine exchange_solid(this)
+      use amrex_amr_module, only: amrex_mfiter
+      implicit none
+      class(amrpd), intent(inout) :: this
+      type(amrex_mfiter) :: mfi
+      type(part), dimension(:), pointer :: p
+      integer(I8), allocatable :: mgid(:)
+      integer, allocatable :: mown(:)
+      real(WP), allocatable :: mff(:,:),mpos(:,:),mvel(:,:),mdmg(:),malive(:)
+      integer(I8) :: np_,n
+      integer :: lvl,nm,i
+      ! Count live face particles
+      nm=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               nm=nm+1
+            end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      allocate(mgid(max(nm,1)),mown(max(nm,1)),mff(3,max(nm,1)))
+      allocate(mpos(3,max(nm,1)),mvel(3,max(nm,1)),mdmg(max(nm,1)),malive(max(nm,1)))
+      ! Pack (gid, owner tag, F_fluid)
+      i=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               i=i+1
+               mgid(i)=part_gid(p(n))
+               mown(i)=p(n)%flag/8
+               mff(:,i)=p(n)%F_fluid
+            end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      ! Collective round-trip with the solver
+      call this%exchange(nm,mgid,mown,mff,mpos,mvel,mdmg,malive)
+      ! Write the solver state back onto the grid face (same walk order)
+      i=0
+      do lvl=0,this%amr%clvl()
+         call this%mfiter_build(lvl,mfi)
+         do while (mfi%next())
+            call this%get_particles(lvl,mfi,p,np_)
+            do n=1_I8,np_
+               if (p(n)%flag.eq.PART_IS_DEAD) cycle
+               i=i+1
+               p(n)%pos=mpos(:,i)
+               p(n)%vel=mvel(:,i)
+               p(n)%damage=mdmg(i)
+               if (malive(i).lt.0.5_WP) p(n)%flag=PART_IS_DEAD
+            end do
+         end do
+         call this%mfiter_destroy(mfi)
+      end do
+      deallocate(mgid,mown,mff,mpos,mvel,mdmg,malive)
+   end subroutine exchange_solid
+
+   !> Rebuild the grid face from the (restored) solver state: one particle per
+   !> owned live node with PRESERVED identity (gid -> id,cpu), current
+   !> position/velocity/damage, and the owner routing tag = this rank.
+   subroutine rebuild_face(this)
+      use parallel, only: rank
+      implicit none
+      class(amrpd), intent(inout) :: this
+      type(part), dimension(:), allocatable, target :: plist
+      integer(I8), dimension(:), allocatable, target :: gl
+      integer(I8) :: n
+      integer :: i,m
+      allocate(plist(max(this%nown,1)),gl(max(this%nown,1)))
+      m=0
+      do i=1,this%nown
+         if (this%flag(i).eq.PDC_IS_DEAD) cycle   ! exited nodes stay dead
+         m=m+1
+         plist(m)%pos    =this%y(:,i)
+         plist(m)%vel    =this%v(:,i)
+         plist(m)%F_bond =0.0_WP
+         plist(m)%F_fluid=0.0_WP
+         plist(m)%mw     =0.0_WP
+         plist(m)%dil    =0.0_WP
+         plist(m)%damage =this%damage(i)
+         plist(m)%nb0    =0.0_WP
+         plist(m)%td2    =0.0_WP
+         plist(m)%td2a   =0.0_WP
+         plist(m)%flag   =7+8*rank
+         gl(m)=this%gid(i)
+      end do
+      n=int(m,I8)
+      call this%append_with_gids(plist,n,gl)
+      call this%redistribute()
+      deallocate(plist,gl)
+   end subroutine rebuild_face
 
 
    ! ============================================================================
@@ -791,12 +876,12 @@ contains
                jj=floor((p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP); wy=(p(i)%pos(2)-this%amr%ylo)*dyi-0.5_WP-real(jj,WP)
                kk=floor((p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP); wz=(p(i)%pos(3)-this%amr%zlo)*dzi-0.5_WP-real(kk,WP)
                ! Clamp 8-cell stencil at WALL faces (mirrors amrlpt)
-               if (this%lo_bc(1).eq.AMRPD_WALL.and.ii  .lt.this%amr%geom(lvl)%domain%lo(1)) then; ii=this%amr%geom(lvl)%domain%lo(1)  ; wx=0.0_WP; end if
-               if (this%hi_bc(1).eq.AMRPD_WALL.and.ii+1.gt.this%amr%geom(lvl)%domain%hi(1)) then; ii=this%amr%geom(lvl)%domain%hi(1)-1; wx=1.0_WP; end if
-               if (this%lo_bc(2).eq.AMRPD_WALL.and.jj  .lt.this%amr%geom(lvl)%domain%lo(2)) then; jj=this%amr%geom(lvl)%domain%lo(2)  ; wy=0.0_WP; end if
-               if (this%hi_bc(2).eq.AMRPD_WALL.and.jj+1.gt.this%amr%geom(lvl)%domain%hi(2)) then; jj=this%amr%geom(lvl)%domain%hi(2)-1; wy=1.0_WP; end if
-               if (this%lo_bc(3).eq.AMRPD_WALL.and.kk  .lt.this%amr%geom(lvl)%domain%lo(3)) then; kk=this%amr%geom(lvl)%domain%lo(3)  ; wz=0.0_WP; end if
-               if (this%hi_bc(3).eq.AMRPD_WALL.and.kk+1.gt.this%amr%geom(lvl)%domain%hi(3)) then; kk=this%amr%geom(lvl)%domain%hi(3)-1; wz=1.0_WP; end if
+               if (this%lo_bc(1).eq.PD_WALL.and.ii  .lt.this%amr%geom(lvl)%domain%lo(1)) then; ii=this%amr%geom(lvl)%domain%lo(1)  ; wx=0.0_WP; end if
+               if (this%hi_bc(1).eq.PD_WALL.and.ii+1.gt.this%amr%geom(lvl)%domain%hi(1)) then; ii=this%amr%geom(lvl)%domain%hi(1)-1; wx=1.0_WP; end if
+               if (this%lo_bc(2).eq.PD_WALL.and.jj  .lt.this%amr%geom(lvl)%domain%lo(2)) then; jj=this%amr%geom(lvl)%domain%lo(2)  ; wy=0.0_WP; end if
+               if (this%hi_bc(2).eq.PD_WALL.and.jj+1.gt.this%amr%geom(lvl)%domain%hi(2)) then; jj=this%amr%geom(lvl)%domain%hi(2)-1; wy=1.0_WP; end if
+               if (this%lo_bc(3).eq.PD_WALL.and.kk  .lt.this%amr%geom(lvl)%domain%lo(3)) then; kk=this%amr%geom(lvl)%domain%lo(3)  ; wz=0.0_WP; end if
+               if (this%hi_bc(3).eq.PD_WALL.and.kk+1.gt.this%amr%geom(lvl)%domain%hi(3)) then; kk=this%amr%geom(lvl)%domain%hi(3)-1; wz=1.0_WP; end if
                pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)=pVF(ii:ii+1,jj:jj+1,kk:kk+1,1)+Vp*reshape([(1.0_WP-wx)*(1.0_WP-wy)*(1.0_WP-wz),wx*(1.0_WP-wy)*(1.0_WP-wz),(1.0_WP-wx)*wy*(1.0_WP-wz),wx*wy*(1.0_WP-wz),(1.0_WP-wx)*(1.0_WP-wy)*wz,wx*(1.0_WP-wy)*wz,(1.0_WP-wx)*wy*wz,wx*wy*wz],[2,2,2])
             end do
          end do
@@ -966,17 +1051,13 @@ contains
 
 
    ! ============================================================================
-   ! PHYSICS -- STUBBED IN SKELETON
+   ! FIELD INTERPOLATION
    ! ============================================================================
 
 
 
-
-
-
    !> Trilinear cell-centered interpolation of a multifab data array at a 3D
-   !> position. Copied from amrlpt%interp -- self-contained, used by
-   !> compute_contact for IB normal-distance evaluation.
+   !> position (drivers use it to sample fields at particle positions).
    function interp(this,lvl,pos,arr,comp) result(val)
       implicit none
       class(amrpd), intent(in) :: this
@@ -1007,11 +1088,8 @@ contains
    ! CHECKPOINT I/O
    ! ============================================================================
 
-   !> Write checkpoint for both containers under a shared checkpoint directory:
-   !>   <dirname>/particles/   (AMReX particle Checkpoint)
-   !>   <dirname>/bonds/       (AMReX bond Checkpoint)
-   !> Caller is responsible for creating <dirname> (typically via io%write under
-   !> the same directory).
+   !> Write the particle-container checkpoint under <dirname>/particles.
+   !> Caller is responsible for creating <dirname>.
    subroutine write(this,dirname)
       implicit none
       class(amrpd), intent(inout) :: this
@@ -1019,22 +1097,19 @@ contains
       call amrpd_checkpoint_p(this%pcp,trim(dirname)//'/particles'//c_null_char)
    end subroutine write
 
-   !> Restore both containers from a checkpoint directory written by write.
-   !> The amrgrid must already have been rebuilt via amr%init_from_checkpoint
-   !> before calling this. Syncs both containers' BA/DM to the restored grid
-   !> before AMReX Restart so particles land on the right ranks, then
-   !> redistributes and refreshes counters.
+   !> Restore the particle container from a checkpoint written by write. The
+   !> amrgrid must already be rebuilt; syncs BA/DM, restarts, redistributes.
    subroutine read(this,dirname)
       implicit none
       class(amrpd), intent(inout) :: this
       character(len=*), intent(in) :: dirname
       integer :: lvl
-      ! Sync both containers to the restored grid's BA/DM
+      ! Sync the container to the restored grid's BA/DM
       do lvl=0,this%amr%clvl()
          call this%set_particle_ba_p(lvl,this%amr%get_boxarray(lvl))
          call this%set_particle_dm_p(lvl,this%amr%get_distromap(lvl))
       end do
-      ! AMReX Restart on each container
+      ! AMReX Restart
       call amrpd_restart_p(this%pcp,trim(dirname)//'/particles'//c_null_char)
       ! Settle and refresh
       call this%redistribute()

@@ -3,8 +3,7 @@ module simulation
    use precision,           only: WP,I8
    use amrgrid_class,       only: amrgrid
    use amrcomp_class,       only: amrcomp
-   use amrpd_class,         only: amrpd,part,part_gid,PART_MOVES,PART_INTEGRATES,PART_BONDS,PART_IS_DEAD,AMRPD_OPEN
-   use pdsolver_class,        only: pdsolver,pd_partition
+   use amrpd_class,         only: amrpd,part,PART_MOVES,PART_INTEGRATES,PART_BONDS,PART_IS_DEAD
    use amrpdviz_class,      only: amrpdviz
    use amrviz_class,        only: amrviz
    use amrdata_class,       only: amrdata
@@ -26,14 +25,11 @@ module simulation
    type(amrdata) :: dQdt
    type(amrdata) :: Umag,Mach
 
-   !> Peridynamics solid and its mesh-deposited velocity field
-   type(amrpd), target :: apd
+   !> Peridynamics solid: an amrpd IS a pdsolver plus its grid face
+   type(amrpd), target :: pd
    type(amrpdviz) :: pviz
-
-   !> The solid solver (grid-free physics); apd above is its grid-side face
-   type(pdsolver) :: pd
    type(amrdata) :: Usolid          !< Solid velocity on the AMR mesh (3 comp)
-   type(amrdata) :: VFf             !< Fluid volume fraction = 1 - apd%VF (amrcomp convention)
+   type(amrdata) :: VFf             !< Fluid volume fraction = 1 - pd%VF (amrcomp convention)
    type(amrdata) :: dStress         !< Divergence of the fluid stress tensor (3 comp; interpolated to particles as F_fluid)
 
    !> Coupling-direction switches (default fully coupled; for isolation tests)
@@ -211,7 +207,7 @@ contains
 
    !> Tagger based on velocity and density laplacians. Refinement around the
    !> solid body is handled separately by amrpd's own VF-based tagging callback
-   !> (registered in apd%initialize via apd%VF_tag).
+   !> (registered in pd%initialize via pd%VF_tag).
    subroutine my_tagger(solver,lvl,time,tags_ptr)
       use iso_c_binding,    only: c_ptr,c_char
       use amrex_amr_module, only: amrex_mfiter,amrex_box,amrex_tagboxarray
@@ -313,163 +309,9 @@ contains
          ntot=0_I8
          allocate(plist(0))
       end if
-      call apd%append(plist,ntot)
+      call pd%append(plist,ntot)
       deallocate(plist)
    end subroutine seed_body
-
-   !> Hand the post-bond_init amrpd state off to the graph
-   !> pd. Extract owned nodes and bonds, repartition the nodes by Morton
-   !> order of the reference configuration (balanced, motion-invariant, uses
-   !> all ranks regardless of where the solid sits), build the solver, copy
-   !> the material/contact configuration, and stamp each face particle's
-   !> flag with its pd owner rank (flag = 7 + 8*owner) for sync routing.
-   subroutine handoff()
-      use amrex_amr_module, only: amrex_mfiter
-      type(amrex_mfiter) :: mfi
-      type(part), dimension(:), pointer :: p
-      integer(I8), allocatable :: gids(:),rgid(:)
-      real(WP), allocatable :: pos(:,:),vel(:,:),voll(:),rpos(:,:),rvel(:,:),rvol(:)
-      integer, allocatable :: flags(:),owner(:),rflag(:)
-      integer(I8) :: np_,n
-      integer :: lvl,nn,i,nr
-      ! Extract this rank's owned particles
-      nn=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            nn=nn+int(np_)
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      allocate(gids(max(nn,1)),pos(3,max(nn,1)),vel(3,max(nn,1)),flags(max(nn,1)),voll(max(nn,1)),owner(max(nn,1)))
-      i=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            do n=1_I8,np_
-               i=i+1
-               gids(i) =part_gid(p(n))
-               pos(:,i)=p(n)%pos
-               vel(:,i)=p(n)%vel
-               flags(i)=p(n)%flag
-               voll(i) =apd%dV
-            end do
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      ! Balanced static partition of the reference configuration
-      call pd_partition(nn,gids,pos,vel,flags,voll,owner,nr,rgid,rpos,rvel,rflag,rvol)
-      ! Configure and build the pd
-      call pd%initialize(name='pd',rho=apd%rho,elastic_modulus=apd%elastic_modulus, &
-      &                    poisson_ratio=apd%poisson_ratio,delta=apd%delta,dV=apd%dV,    &
-      &                    gravity=apd%gravity,                                        &
-      &                    collapsed=[amr%nx.eq.1,amr%ny.eq.1,amr%nz.eq.1],           &
-      &                    Ldom=[amr%xhi-amr%xlo,amr%yhi-amr%ylo,amr%zhi-amr%zlo],    &
-      &                    per=[amr%xper,amr%yper,amr%zper])
-      pd%s0=apd%s0
-      ! Viscoplastic knobs (inert at their defaults; per-side e_v in the pd)
-      pd%tau=apd%tau
-      pd%visc_lambda=apd%visc_lambda
-      pd%yield_stretch=apd%yield_stretch
-      pd%sigma_yield=apd%sigma_yield
-      ! Contact + domain config (soft-sphere contact active by default;
-      ! open faces mean no walls, and exits are handled by dead-node muting)
-      pd%use_contact=(apd%contact_dist.gt.0.0_WP)
-      pd%contact_dist=apd%contact_dist
-      pd%tau_col=apd%tau_col
-      pd%e_n=apd%e_n; pd%e_w=apd%e_w; pd%clip_col=apd%clip_col
-      pd%lo_bc=apd%lo_bc; pd%hi_bc=apd%hi_bc
-      pd%dom_lo=[amr%xlo,amr%ylo,amr%zlo]
-      pd%dom_hi=[amr%xhi,amr%yhi,amr%zhi]
-      call pd%set_nodes(nr,rgid,rpos,rvel,rflag,rvol)
-      ! Families detected natively from the reference configuration -- the
-      ! amrpd bond container is never built in pd mode
-      call pd%detect_families()
-      ! Demote apd to grid-face duty: stamp owner tags (same walk order as the
-      ! extraction above, so owner(i) lines up)
-      i=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            do n=1_I8,np_
-               i=i+1
-               p(n)%flag=7+8*owner(i)
-            end do
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      deallocate(gids,pos,vel,flags,voll,owner,rgid,rpos,rvel,rflag,rvol)
-   end subroutine handoff
-
-   !> Per-fluid-step solid exchange: push each face particle's
-   !> interpolated F_fluid to its pd owner; pull back the owner's current
-   !> (pos, vel, damage, alive) for write-back. Dead pd nodes turn their
-   !> face particle into a PART_IS_DEAD tombstone (skipped by deposits and
-   !> future syncs, matching amrpd's drop-on-exit semantics).
-   subroutine exchange_solid()
-      use amrex_amr_module, only: amrex_mfiter
-      type(amrex_mfiter) :: mfi
-      type(part), dimension(:), pointer :: p
-      integer(I8), allocatable :: mgid(:)
-      integer, allocatable :: mown(:)
-      real(WP), allocatable :: mff(:,:),mpos(:,:),mvel(:,:),mdmg(:),malive(:)
-      integer(I8) :: np_,n
-      integer :: lvl,nm,i
-      ! Count live face particles
-      nm=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            do n=1_I8,np_
-               if (p(n)%flag.eq.PART_IS_DEAD) cycle
-               nm=nm+1
-            end do
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      allocate(mgid(max(nm,1)),mown(max(nm,1)),mff(3,max(nm,1)))
-      allocate(mpos(3,max(nm,1)),mvel(3,max(nm,1)),mdmg(max(nm,1)),malive(max(nm,1)))
-      ! Pack (gid, owner tag, F_fluid)
-      i=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            do n=1_I8,np_
-               if (p(n)%flag.eq.PART_IS_DEAD) cycle
-               i=i+1
-               mgid(i)=part_gid(p(n))
-               mown(i)=p(n)%flag/8
-               mff(:,i)=p(n)%F_fluid
-            end do
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      ! Collective round-trip with the pd
-      call pd%exchange(nm,mgid,mown,mff,mpos,mvel,mdmg,malive)
-      ! Write the pd state back into the grid face (same walk order)
-      i=0
-      do lvl=0,amr%clvl()
-         call apd%mfiter_build(lvl,mfi)
-         do while (mfi%next())
-            call apd%get_particles(lvl,mfi,p,np_)
-            do n=1_I8,np_
-               if (p(n)%flag.eq.PART_IS_DEAD) cycle
-               i=i+1
-               p(n)%pos=mpos(:,i)
-               p(n)%vel=mvel(:,i)
-               p(n)%damage=mdmg(i)
-               if (malive(i).lt.0.5_WP) p(n)%flag=PART_IS_DEAD
-            end do
-         end do
-         call apd%mfiter_destroy(mfi)
-      end do
-      deallocate(mgid,mown,mff,mpos,mvel,mdmg,malive)
-   end subroutine exchange_solid
 
    !> Initialization of problem solver
    subroutine simulation_init
@@ -580,26 +422,24 @@ contains
 
       ! Initialize the peridynamics solid (containers + AMR callbacks)
       init_solid: block
-         call apd%initialize(amr,name='apd')
+         call pd%initialize(amr,name='pd')
          ! Material parameters
-         call param_read('Material density',  apd%rho)
-         call param_read('Elastic modulus',   apd%elastic_modulus)
-         call param_read('Poisson ratio',     apd%poisson_ratio)
-         call param_read('Critical energy',   apd%crit_energy,default=huge(1.0_WP))
+         call param_read('Material density',  pd%rho)
+         call param_read('Elastic modulus',   pd%elastic_modulus)
+         call param_read('Poisson ratio',     pd%poisson_ratio)
+         call param_read('Critical energy',   pd%crit_energy,default=huge(1.0_WP))
          ! Solid spacing dp; horizon defaults to 3.0125*dp (Peridigm convention)
          call param_read('Element size',      elem_size)
-         call param_read('Horizon',           apd%delta,default=3.0125_WP*elem_size)
-         apd%dV=elem_size**3
+         call param_read('Horizon',           pd%delta,default=3.0125_WP*elem_size)
+         pd%dV=elem_size**3
          ! Beam geometry
          call param_read('Beam length',   beam_L,    default=1.0_WP)
          call param_read('Beam thickness',beam_t,    default=0.125_WP)
          call param_read('Beam angle',    beam_angle,default=75.0_WP)
          ! Gravity off by default (body driven by the flow)
-         call param_read('Gravity',apd%gravity,default=[0.0_WP,0.0_WP,0.0_WP])
-         ! Open domain BCs (y/z periodicity is handled by AMReX)
-         apd%lo_bc=AMRPD_OPEN; apd%hi_bc=AMRPD_OPEN
+         call param_read('Gravity',pd%gravity,default=[0.0_WP,0.0_WP,0.0_WP])
          ! Refine the AMR mesh wherever the solid volume fraction exceeds VF_tag
-         call param_read('Tagging VF',apd%VF_tag,default=0.1_WP)
+         call param_read('Tagging VF',pd%VF_tag,default=0.1_WP)
          ! Coupling-direction switches (absent -> fully coupled)
          call param_read('Couple solid to fluid',couple_s2f,default=.true.)
          call param_read('Couple fluid to solid',couple_f2s,default=.true.)
@@ -616,7 +456,7 @@ contains
          ! interp_none: recomputed each step, so allocate-don't-fill on regrid.
          call Usolid%initialize(amr,name='Usolid',ncomp=3,ng=fs%nover,interp=interp_none); call Usolid%register()
          if (.not.amr%xper) then; Usolid%lo_bc(1,:)=amrex_bc_foextrap; Usolid%hi_bc(1,:)=amrex_bc_foextrap; end if
-         ! Fluid volume fraction = 1 - apd%VF (amrcomp's convention)
+         ! Fluid volume fraction = 1 - pd%VF (amrcomp's convention)
          call VFf%initialize(amr,name='VFf',ncomp=1,ng=fs%nover,interp=interp_none); call VFf%register()
          if (.not.amr%xper) then; VFf%lo_bc(1,1)=amrex_bc_foextrap; VFf%hi_bc(1,1)=amrex_bc_foextrap; end if
          ! Fluid stress-tensor divergence, interpolated to particles as F_fluid
@@ -629,7 +469,7 @@ contains
          ! Create regridding event
          regrid_evt=event(time=time,name='Regrid')
          call param_read('Regrid nsteps',regrid_evt%nper)
-         ! Set case-specific tagging (flow features; body handled by apd's callback)
+         ! Set case-specific tagging (flow features; body handled by pd's callback)
          fs%user_tagging=>my_tagger
          call param_read('Tagging Re',Re_tag)
          call param_read('Tagging Rho',Rho_tag)
@@ -637,14 +477,13 @@ contains
          call amr%init_from_scratch(time=time%t)
          ! Seed the body, deposit VF, then regrid to refine around it
          call seed_body()
-         call apd%update_VF()
+         call pd%update_VF()
          call amr%regrid(baselvl=0,time=time%t)
-         call apd%get_info()
-         ! Build the initial bond network on the final AMR hierarchy
+         call pd%get_info()
          ! Hand the seeded body to the solver: families detected natively
-         ! from the reference configuration; apd is the grid-side face
-         call handoff()
-         call apd%update_VF()
+         ! from the reference configuration
+         call pd%handoff()
+         call pd%update_VF()
          ! Initial solid-velocity deposit (body at rest -> Usolid=0) and fluid VF
          call deposit_solid_velocity()
          call update_VFf()
@@ -668,12 +507,12 @@ contains
          call viz%add_scalar(fs%UVW,2,'V')
          call viz%add_scalar(fs%UVW,3,'W')
          call viz%add_scalar(fs%I,1,'I')
-         call viz%add_scalar(apd%VF,1,'VF')
+         call viz%add_scalar(pd%VF,1,'VF')
          call viz%add_scalar(Usolid,1,'Us')
          call viz%add_scalar(Umag,1,'Umag')
          call viz%add_scalar(Mach,1,'Mach')
          ! Particle visualization
-         call pviz%initialize(apd,name='amrcomp_pd')
+         call pviz%initialize(pd,name='amrcomp_pd')
          call pviz%select_comp('flag',on=.true.)
          call pviz%select_comp('dil', on=.true.)
          call pviz%select_comp('damage',on=.true.)
@@ -692,7 +531,6 @@ contains
          ! Get solver info and cfl
          call fs%get_info()
          call fs%get_cfl(dt=time%dt,cfl=time%cfl)
-         call apd%get_info()
          call pd%get_info()
          call pd%get_cfl(dt=time%dt,cfl=time%cfl)
          call get_force()
@@ -760,12 +598,12 @@ contains
          call pdfile%add_column(n_sub,'Subcycles')
          call pdfile%add_column(pd%CFLp,'CFLp')
          call pdfile%add_column(pd%CFLe,'CFLe')
-         call pdfile%add_column(apd%Umin,'Umin')
-         call pdfile%add_column(apd%Umax,'Umax')
-         call pdfile%add_column(apd%Vmin,'Vmin')
-         call pdfile%add_column(apd%Vmax,'Vmax')
-         call pdfile%add_column(apd%Wmin,'Wmin')
-         call pdfile%add_column(apd%Wmax,'Wmax')
+         call pdfile%add_column(pd%Umin,'Umin')
+         call pdfile%add_column(pd%Umax,'Umax')
+         call pdfile%add_column(pd%Vmin,'Vmin')
+         call pdfile%add_column(pd%Vmax,'Vmax')
+         call pdfile%add_column(pd%Wmin,'Wmin')
+         call pdfile%add_column(pd%Wmax,'Wmax')
          call pdfile%write()
       end block create_monitors
 
@@ -861,22 +699,22 @@ contains
          if (couple_f2s) call get_fluid_force()
 
          ! Sub-cycle the solid over the fluid step with F_fluid held fixed.
-         ! n_sub = ceil(single-step apd CFL / cflmax) keeps each sub-step stable.
+         ! n_sub = ceil(single-step PD CFL / cflmax) keeps each sub-step stable.
          pd_subcycle: block
             real(WP) :: dt_sub
             integer :: i_sub
             ! Deliver F_fluid to the solver, subcycle, pull state back onto
             ! the grid face for regrid tagging + deposits
-            call exchange_solid()
+            call pd%exchange_solid()
             call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
             n_sub=1
             if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
             dt_sub=time%dt/real(n_sub,WP)
             do i_sub=1,n_sub; call pd%advance(dt_sub); end do
             call pd%get_cfl(dt=dt_sub,cfl=cfl_pd)
-            call exchange_solid()
-            call apd%redistribute()
-            call apd%update_VF()
+            call pd%exchange_solid()
+            call pd%redistribute()
+            call pd%update_VF()
          end block pd_subcycle
 
          ! Regrid if event triggers
@@ -906,7 +744,6 @@ contains
 
          ! Perform and output monitoring (Cd computed by get_force above)
          call fs%get_info()
-         call apd%get_info()
          call pd%get_info()
          call mfile%write()
          call consfile%write()
@@ -931,12 +768,12 @@ contains
             call amr%mfiter_build(lvl,mfi)
             do while (mfi%next())
                pdS=>dStress%mf(lvl)%dataptr(mfi)
-               call apd%get_particles(lvl,mfi,p,np_)
+               call pd%get_particles(lvl,mfi,p,np_)
                do n=1,np_
                   if (p(n)%flag.eq.PART_IS_DEAD) cycle
-                  p(n)%F_fluid(1)=apd%interp(lvl,p(n)%pos,pdS,1)
-                  p(n)%F_fluid(2)=apd%interp(lvl,p(n)%pos,pdS,2)
-                  p(n)%F_fluid(3)=apd%interp(lvl,p(n)%pos,pdS,3)
+                  p(n)%F_fluid(1)=pd%interp(lvl,p(n)%pos,pdS,1)
+                  p(n)%F_fluid(2)=pd%interp(lvl,p(n)%pos,pdS,2)
+                  p(n)%F_fluid(3)=pd%interp(lvl,p(n)%pos,pdS,3)
                end do
             end do
             call amr%mfiter_destroy(mfi)
@@ -1020,12 +857,10 @@ contains
       implicit none
       ! Finalize time
       call time%finalize()
-      ! Finalize grid
-      call amr%finalize()
       call regrid_evt%finalize()
       ! Finalize solvers
       call fs%finalize()
-      call apd%finalize()
+      call pd%finalize()
       call dQdt%finalize()
       call Usolid%finalize()
       call VFf%finalize()
@@ -1044,19 +879,20 @@ contains
       call consfile%finalize()
       call gridfile%finalize()
       call pdfile%finalize()
-      ! Finalize graph pd (no-op in legacy mode)
-      call pd%finalize()
+      ! Finalize grid LAST: amrgrid auto-finalizes AMReX once its last
+      ! instance dies, so all AMReX-holding objects must be gone first
+      call amr%finalize()
    end subroutine simulation_final
 
-   !> Refresh fluid volume fraction VFf = clip(1 - apd%VF, 0, 1) with ghosts filled
+   !> Refresh fluid volume fraction VFf = clip(1 - pd%VF, 0, 1) with ghosts filled
    subroutine update_VFf()
       call VFf%setval(1.0_WP)
-      call VFf%subtract(apd%VF)
+      call VFf%subtract(pd%VF)
       call VFf%clip(0.0_WP,1.0_WP)
       call VFf%fill(time=time%t)
    end subroutine update_VFf
 
-   !> Deposit volume-weighted particle velocity onto Usolid, normalized by apd%VF*cell_vol
+   !> Deposit volume-weighted particle velocity onto Usolid, normalized by pd%VF*cell_vol
    subroutine deposit_solid_velocity()
       use amrex_amr_module, only: amrex_mfiter,amrex_box
       type(amrex_mfiter) :: mfi
@@ -1070,13 +906,13 @@ contains
       call Usolid%setval(0.0_WP)
       ! Deposit the extensive solid momentum-volume (vel*dV); process_deposit then
       ! makes it intensive with the SAME coarse/fine reconciliation as VF.
-      Vp=apd%dV
+      Vp=pd%dV
       do lvl=0,amr%clvl()
          dxi=1.0_WP/amr%dx(lvl); dyi=1.0_WP/amr%dy(lvl); dzi=1.0_WP/amr%dz(lvl)
          call amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pUs=>Usolid%mf(lvl)%dataptr(mfi)
-            call apd%get_particles(lvl,mfi,p,np_)
+            call pd%get_particles(lvl,mfi,p,np_)
             do n=1,np_
                if (p(n)%flag.eq.PART_IS_DEAD) cycle
                ii=floor((p(n)%pos(1)-amr%xlo)*dxi-0.5_WP); wx=(p(n)%pos(1)-amr%xlo)*dxi-0.5_WP-real(ii,WP)
@@ -1093,15 +929,15 @@ contains
       end do
       ! Post-process exactly like VF: extensive->intensive with coarse/fine
       ! reconciliation, fill ghosts, then the same smoothing filter.
-      call apd%process_deposit(Usolid)
+      call pd%process_deposit(Usolid)
       call Usolid%fill(time=time%t)
-      call apd%filter(Usolid)
+      call pd%filter(Usolid)
       ! Normalize the (filtered) momentum density by the (filtered) VF -> velocity
       do lvl=0,amr%clvl()
          call amr%mfiter_build(lvl,mfi)
          do while (mfi%next())
             pUs=>Usolid%mf(lvl)%dataptr(mfi)
-            pVF=>apd%VF%mf(lvl)%dataptr(mfi)
+            pVF=>pd%VF%mf(lvl)%dataptr(mfi)
             bx=mfi%tilebox()
             do k=bx%lo(3),bx%hi(3); do j=bx%lo(2),bx%hi(2); do i=bx%lo(1),bx%hi(1)
                if (pVF(i,j,k,1).gt.VFtiny) then

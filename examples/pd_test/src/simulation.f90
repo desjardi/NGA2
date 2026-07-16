@@ -45,10 +45,10 @@ contains
       call param_read('Poisson ratio',   nu)
       call param_read('Element size',    elem)
       call param_read('Horizon',         delta,default=3.0125_WP*elem)
-      call pd%initialize(name='pd',rho=rho,elastic_modulus=E,poisson_ratio=nu, &
-      &                  delta=delta,dV=elem**3,gravity=[0.0_WP,0.0_WP,0.0_WP], &
-      &                  collapsed=[.false.,.false.,.false.],                   &
-      &                  Ldom=[0.0_WP,0.0_WP,0.0_WP],per=[.false.,.false.,.false.])
+      ! Configure by field assignment (grid-free: no domain, no periodicity)
+      pd%name='pd'
+      pd%rho=rho; pd%elastic_modulus=E; pd%poisson_ratio=nu
+      pd%delta=delta; pd%dV=elem**3
 
       if (len_trim(restart_dir).gt.0) then
          call pd%read_state(trim(restart_dir))

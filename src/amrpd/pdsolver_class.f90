@@ -11,10 +11,14 @@
 !> Checkpoint/restart is gid-space and rank-count portable, including all
 !> bond damage and plastic history.
 !>
-!> Usage tiers (see amrpd_class for the grid-side face):
+!> Usage tiers (amrpd EXTENDS pdsolver -- see amrpd_class):
 !>   1. pdsolver alone      -- standalone solid dynamics (this module only)
-!>   2. pdsolver + amrpd    -- adds viz, mesh VF, AMR refinement, seeding
-!>   3. ... + a flow solver -- two-way FSI via pdsolver%exchange
+!>   2. amrpd               -- adds viz, mesh VF, AMR refinement, seeding
+!>   3. ... + a flow solver -- two-way FSI via amrpd%exchange_solid
+!>
+!> Configuration style: assign the public fields (material, damage, contact),
+!> then build the network (detect_families/connect/read_state) -- derived
+!> quantities resolve there via derive_config, uniformly for fresh and restart.
 !>
 !> Layout: owned nodes 1..nown; halo slots nown+1..ntot, keyed (gid, periodic
 !> image offset) with shifts applied at exchange time. Each physical bond is
@@ -33,6 +37,7 @@ module pdsolver_class
 
    public :: pdsolver,pd_partition
    public :: PDC_IS_DEAD,PDC_MOVES,PDC_INTEGRATES,PDC_BONDS
+   public :: PD_OPEN,PD_WALL
 
    ! Motion-control bit flags -- values MUST match amrpd's PART_* constants
    ! (handoff copies amrpd flags verbatim)
@@ -40,6 +45,10 @@ module pdsolver_class
    integer, parameter :: PDC_MOVES     =1
    integer, parameter :: PDC_INTEGRATES=2
    integer, parameter :: PDC_BONDS     =4
+
+   ! Domain-face BC values for lo_bc/hi_bc
+   integer, parameter :: PD_OPEN=0
+   integer, parameter :: PD_WALL=1
 
    !> Graph-core PD solver
    type :: pdsolver
@@ -59,6 +68,8 @@ module pdsolver_class
       real(WP) :: delta          =0.0_WP       !< horizon
       real(WP) :: dV             =0.0_WP       !< nominal element volume (CFL length scale; kernels use per-node V)
       real(WP) :: s0             =huge(1.0_WP) !< critical bond stretch (huge = no damage)
+      real(WP) :: fail_stretch   =huge(1.0_WP) !< direct s0 override (takes precedence over crit_energy)
+      real(WP) :: crit_energy    =huge(1.0_WP) !< critical energy release rate G_c (-> s0 when fail_stretch unset)
       real(WP) :: dtcrit         =0.0_WP       !< Silling-Askari critical dt (diagnostic, stamped at connect)
       ! Viscoelastic / viscoplastic flow (PER-SIDE form: each half-entry evolves
       ! its own e_v with its own endpoint's dilatation and yield factor --
@@ -89,7 +100,7 @@ module pdsolver_class
       real(WP) :: tau_col      =0.0_WP         !< collision duration (<=0 -> auto 5*dt)
       real(WP) :: e_n=0.7_WP,e_w=0.7_WP        !< restitution (p-p, wall)
       real(WP) :: clip_col     =0.2_WP         !< overlap clip fraction
-      integer, dimension(3) :: lo_bc=0,hi_bc=0 !< per-face: 0=open, 1=wall (matches AMRPD_* values)
+      integer, dimension(3) :: lo_bc=PD_OPEN,hi_bc=PD_OPEN !< per-face: PD_OPEN or PD_WALL
       real(WP) :: cskin        =0.0_WP         !< broad-phase skin (<=0 -> auto 0.5*contact_dist)
       type(pdhalo) :: chalo                    !< contact halo (rebuilt at trigger cadence; nown=ntot)
       integer :: nchalo=0                      !< contact slots (y/v extended to ntot+nchalo)
@@ -128,7 +139,9 @@ module pdsolver_class
       real(WP), allocatable :: rextra_tmp(:,:) !< read_state scratch (restart-field overlay across assemble)
 
       ! Monitoring
-      real(WP) :: Umax=0.0_WP                  !< max |velocity component| (get_info)
+      real(WP) :: Umin=0.0_WP,Umax=0.0_WP      !< signed per-component velocity extrema
+      real(WP) :: Vmin=0.0_WP,Vmax=0.0_WP      !< over live nodes (get_info)
+      real(WP) :: Wmin=0.0_WP,Wmax=0.0_WP
       real(WP) :: CFLe=0.0_WP,CFLp=0.0_WP      !< elastic-wave / convective CFL (get_cfl)
       integer(I8) :: nbroken=0                 !< global broken half-entry count (internal)
       integer(I8) :: nb_broken=0               !< global broken BOND count (exact census, get_info)
@@ -145,7 +158,6 @@ module pdsolver_class
       real(WP) :: wtmin_dil=0.0_WP,wtmin_force=0.0_WP
 
    contains
-      procedure :: initialize
       procedure :: set_nodes
       procedure :: connect
       procedure :: detect_families
@@ -157,6 +169,7 @@ module pdsolver_class
       procedure :: get_cfl
       procedure :: get_info
       procedure :: finalize
+      procedure, private :: derive_config
       procedure, private :: lps_coefs
       procedure, private :: compute_mw
       procedure, private :: contact_broadphase
@@ -167,25 +180,25 @@ module pdsolver_class
 contains
 
 
-   !> Configure the solver (no allocation yet; set_nodes sizes the state)
-   subroutine initialize(this,name,rho,elastic_modulus,poisson_ratio,delta,dV,gravity,collapsed,Ldom,per)
+   !> Resolve derived configuration: s0 from fail_stretch/crit_energy, contact
+   !> reach default. Called by every network-building entry point (connect,
+   !> detect_families, read_state) so fresh init and restart share one path.
+   subroutine derive_config(this)
+      use messager, only: die
       implicit none
       class(pdsolver), intent(inout) :: this
-      character(len=*), intent(in) :: name
-      real(WP), intent(in) :: rho,elastic_modulus,poisson_ratio,delta,dV
-      real(WP), dimension(3), intent(in) :: gravity,Ldom
-      logical,  dimension(3), intent(in) :: collapsed,per
-      this%name=trim(adjustl(name))
-      this%rho=rho
-      this%elastic_modulus=elastic_modulus
-      this%poisson_ratio=poisson_ratio
-      this%delta=delta
-      this%dV=dV
-      this%gravity=gravity
-      this%collapsed=collapsed
-      this%Ldom=Ldom
-      this%per=per
-   end subroutine initialize
+      real(WP) :: K_bulk
+      if (this%rho.le.0.0_WP.or.this%elastic_modulus.le.0.0_WP.or. &
+      &   this%delta.le.0.0_WP.or.this%dV.le.0.0_WP) &
+      &   call die('[pdsolver] material/discretization not configured (need rho, elastic_modulus, delta, dV > 0)')
+      if (this%fail_stretch.lt.huge(1.0_WP)) then
+         this%s0=this%fail_stretch
+      else if (this%crit_energy.gt.0.0_WP.and.this%crit_energy.lt.huge(1.0_WP)) then
+         K_bulk=this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
+         this%s0=sqrt(5.0_WP*this%crit_energy/(9.0_WP*K_bulk*this%delta))
+      end if
+      if (this%use_contact.and.this%contact_dist.le.0.0_WP) this%contact_dist=0.9_WP*this%dV**(1.0_WP/3.0_WP)
+   end subroutine derive_config
 
    !> Load this rank's owned nodes (any distribution; it becomes the static
    !> partition). Builds the gid->index hash used by connect and the halo plan.
@@ -240,6 +253,9 @@ contains
       real(WP), allocatable :: rev(:)
       integer(1), allocatable :: rdmg(:)
       integer :: nhe,rn,i,ib,ierr
+
+      ! Resolve derived configuration (restart-safe shared path)
+      call this%derive_config()
 
       ! Distributed gid directory over the node partition (persistent: also
       ! serves owner queries for face-tag restamping after restart)
@@ -306,8 +322,6 @@ contains
       end block route_entries
       deallocate(hnode,hnbr,hkey,howner)
 
-      deallocate(hnode,hnbr,hkey,howner)
-
       ! Fresh bonds carry zero inelastic state
       allocate(rev(max(rn,1)),rdmg(max(rn,1)))
       rev=0.0_WP; rdmg=0_1
@@ -340,6 +354,9 @@ contains
       integer, dimension(3) :: nmax,nc
       integer :: d,r,n1,n2,n3,i,k,m,noff,nrecv,ncand,nhe,pass,ic,jc,kc,c1,c2,c3,ierr
       character(len=str_long) :: message
+
+      ! Resolve derived configuration (restart-safe shared path)
+      call this%derive_config()
 
       ! Directory over the node partition (persistent)
       call this%dir%finalize()
@@ -490,7 +507,7 @@ contains
       allocate(ridx(max(rn,1)),perm(max(rn,1)))
       do i=1,rn
          ridx(i)=this%ohash%lookup(rnode(i))
-         if (ridx(i).lt.1) call die('[pdsolver connect] half-entry routed to a rank that does not own its node')
+         if (ridx(i).lt.1) call die('[pdsolver assemble] half-entry routed to a rank that does not own its node')
          perm(i)=i
       end do
 
@@ -718,7 +735,7 @@ contains
 
    !> Velocity-Verlet step: half-kick + drift, halo position update,
    !> dilatation gather, node-centered force sweep, halo force reduce,
-   !> second half-kick. Mirrors amrpd%advance minus contact/VF (stage 1).
+   !> contact, second half-kick.
    subroutine advance(this,dt)
       use parallel, only: parallel_time
       implicit none
@@ -1316,16 +1333,24 @@ contains
       class(pdsolver), intent(inout) :: this
       integer :: i,ierr
       integer(I8) :: np_loc
+      real(WP), dimension(3) :: vmin,vmax
       np_loc=0_I8
-      this%Umax=0.0_WP
+      vmin=huge(1.0_WP); vmax=-huge(1.0_WP)
       do i=1,this%nown
          if (this%flag(i).eq.PDC_IS_DEAD) cycle
          np_loc=np_loc+1_I8
-         this%Umax=max(this%Umax,abs(this%v(1,i)),abs(this%v(2,i)),abs(this%v(3,i)))
+         vmin=min(vmin,this%v(:,i)); vmax=max(vmax,this%v(:,i))
       end do
       this%np=np_loc
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,1,MPI_INTEGER8,MPI_SUM,comm,ierr)
-      call MPI_ALLREDUCE(MPI_IN_PLACE,this%Umax,1,MPI_REAL_WP,MPI_MAX,comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vmin,3,MPI_REAL_WP,MPI_MIN,comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,vmax,3,MPI_REAL_WP,MPI_MAX,comm,ierr)
+      if (this%np.eq.0_I8) then
+         vmin=0.0_WP; vmax=0.0_WP
+      end if
+      this%Umin=vmin(1); this%Umax=vmax(1)
+      this%Vmin=vmin(2); this%Vmax=vmax(2)
+      this%Wmin=vmin(3); this%Wmax=vmax(3)
       ! Broken half-entry census (each broken bond counts twice, except
       ! self-image bonds which have a single half-entry)
       count_broken: block
@@ -1404,6 +1429,7 @@ contains
       if (allocated(this%cptr))  deallocate(this%cptr)
       if (allocated(this%clst))  deallocate(this%clst)
       if (allocated(this%ylast)) deallocate(this%ylast)
+      if (allocated(this%rextra_tmp)) deallocate(this%rextra_tmp)
       call this%ohash%finalize()
       call this%dir%finalize()
       call this%halo%finalize()
@@ -1603,6 +1629,9 @@ contains
       real(WP), allocatable :: x0(:,:),yy(:,:),vv(:,:),ffb(:,:),vol(:),dmgn(:),td2n(:)
       real(WP), allocatable :: hev(:)
       integer(1), allocatable :: hdmg(:)
+
+      ! Resolve derived configuration (restart-safe shared path)
+      call this%derive_config()
 
       ! Header: number of files written
       nfiles=0

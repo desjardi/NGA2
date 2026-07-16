@@ -2,7 +2,8 @@
 !>
 !> Two objects:
 !>   pddir  -- distributed GID directory. Owner-rank resolution for arbitrary
-!>             global ids via a hashed home-rank protocol (home = mod(gid,nproc)).
+!>             global ids via a hashed home-rank protocol (Fibonacci-mixed:
+!>             raw mod collapses on structured idcpu keys).
 !>             Built once at init, used during plan construction, then discarded.
 !>   pdhalo -- persistent halo exchange plan. A halo SLOT is a (gid, image-offset)
 !>             pair: a node bonded to two periodic images of the same partner
@@ -256,13 +257,18 @@ contains
       this%n=0
    end subroutine dir_finalize
 
-   !> Home rank of a gid (hashed). gids are positive (AMReX idcpu keys).
+   !> Home rank of a gid. Keys are STRUCTURED (AMReX idcpu = id<<24|cpu: raw
+   !> mod collapses onto few ranks -- all of them rank 0 for power-of-two
+   !> nproc when cpu=0), so mix the bits first (Fibonacci hash; the multiply
+   !> wraps by design, and the logical shift keeps the result nonnegative).
    pure function home(gid) result(h)
       use parallel, only: nproc
       implicit none
       integer(I8), intent(in) :: gid
       integer :: h
-      h=int(mod(gid,int(nproc,I8)))
+      integer(I8) :: k
+      k=gid*(-7046029254386353131_I8)
+      h=int(mod(ishft(k,-40),int(nproc,I8)))
    end function home
 
 

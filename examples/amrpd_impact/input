@@ -76,4 +76,4 @@ Max time: 15            # drop front reaches the PD wall face (x=0) at t~10, the
 # Output
 Output period:     1e-1
 Checkpoint period: 1
-Restart from:      restart/impact_3.00165E+00
+Restart from:      !restart/impact_3.00165E+00
