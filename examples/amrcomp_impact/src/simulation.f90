@@ -10,10 +10,9 @@ module simulation
    use event_class,       only: event
    use monitor_class,     only: monitor
    use amrio_class,       only: amrio
-   use nasg_class,        only: nasg
+   use mie_gruneisen_class, only: mie_gruneisen
    use ideal_gas_class,   only: ideal_gas
-   use relax_ig_nasg_class, only: PThybrid
-   use safe_relax_class,  only: safe_relax
+   use safe_relax_num_class, only: safe_relax_num
    implicit none
    private
    
@@ -48,11 +47,11 @@ module simulation
    real(WP) :: quad_n=0.0_WP,swap_n=0.0_WP,flr_n=0.0_WP,flr_e=0.0_WP,stuck_n=0.0_WP
    
    !> Materials
-   type(nasg),      target :: water
-   type(ideal_gas), target :: gas
+   type(mie_gruneisen), target :: water
+   type(ideal_gas),     target :: gas
 
    !> Relaxation model
-   type(safe_relax), target :: relax_model
+   type(safe_relax_num), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -401,13 +400,11 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
-         real(WP) :: GammaL,PinfL,bL,CvL,qpL
+         real(WP) :: rho0L,c0L,s1L,s2L,s3L,Gamma0L,CvL,T0L,qL,qpL
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
          ! Gas EoS parameters (ideal gas)
          call param_read('GammaG',GammaG)
-         ! Liquid EoS: gamma only, PinfL is computed below
-         call param_read('GammaL',GammaL)
          ! Shock parameters (gas phase, uses GammaG)
          call param_read('Gas Mach number',M2)
          call param_read('Shock location',Xs)
@@ -439,23 +436,29 @@ contains
          CvG=pG2/(rhoG2*(GammaG-1.0_WP))
          ! Surface tension
          call param_read('Weber number',Weber)
-         ! Liquid EoS, fit to this case's reference parameters
-         call param_read('Liquid pinf',PinfL)
-         call param_read('Liquid covolume',bL)
+         ! Liquid EoS (Mie-Gruneisen), nondimensional parameters from scripts/fit_mg.py
+         call param_read('Liquid rho0',rho0L)
+         call param_read('Liquid c0',c0L)
+         call param_read('Liquid s1',s1L)
+         call param_read('Liquid s2',s2L)
+         call param_read('Liquid s3',s3L)
+         call param_read('Liquid Gamma0',Gamma0L)
          call param_read('Liquid cv',CvL)
+         call param_read('Liquid T0',T0L)
+         call param_read('Liquid q',qL)
          call param_read('Liquid qp',qpL)
          ! Pre-shock gas temperature (ideal gas, T = p/((gamma-1)*Cv*rho))
          T_G=pG1/(rhoG1*(GammaG-1.0_WP)*CvG)
          ! Pressure equilibrium (Laplace jump): liquid pressure = gas + surface tension
          pL1=pG1+4.0_WP/Weber                   ! 3D Laplace pressure
          if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! 2D Laplace pressure
-         ! Liquid density from the NASG EOS at thermal+pressure equilibrium (T_L=T_G, p=pL1) [Option A]
-         rhoL1=(pL1+PinfL)/((GammaL-1.0_WP)*CvL*T_G+bL*(pL1+PinfL))
-         density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
-         ML=1.0_WP/sqrt(GammaL*(pL1+PinfL)/(rhoL1*(1.0_WP-bL*rhoL1)))     ! diagnostic liquid Mach (Deltau=1)
-         ! Build materials: gas = ideal-gas air; liquid = NASG water
+         ! Build materials: gas = ideal-gas air; liquid = Mie-Gruneisen water
          call gas%initialize(gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='gas')
-         call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=qpL,name='water')
+         call water%initialize(rho0=rho0L,c0=c0L,s1=s1L,s2=s2L,s3=s3L,gamma0=Gamma0L,cv=CvL,T0=T0L,q=qL,qp=qpL,name='water')
+         ! Liquid state from the EOS at thermal+pressure equilibrium (T_L=T_G, p=pL1) [Option A]
+         rhoL1=water%get_rho_from_p_T(p=pL1,T=T_G,y=[1.0_WP])
+         density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
+         ML=1.0_WP/water%get_c_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP])     ! diagnostic liquid Mach (Deltau=1)
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -513,13 +516,16 @@ contains
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
          ! Provide pressure relaxation model
-         call relax_model%initialize(gas=gas,liq=water); fs%relax=>relax_model
-         relax_model%model=PThybrid
+         call relax_model%initialize(liq=water,gas=gas); fs%relax=>relax_model
          relax_model%RHOGmin=0.0_WP
          relax_model%vol=amr%cell_vol(amr%maxlvl)
          fs%merge_sick=100.0_WP
          relax_model%diss_P=200.0_WP
-         fs%Pmin_liq=-0.98_WP*water%pinf
+         ! pT-hybrid: full thermal+mechanical relaxation where the phasic temperature contrast
+         ! exceeds Tratmax -- conservative in-cell quench of superheated sub-resolution wisps
+         ! (the PThybrid role restored, now EOS-agnostic; replaces the withdrawn diss_T)
+         relax_model%Tratmax=10.0_WP
+         call param_read('Liquid Pmin',fs%Pmin_liq)   ! tension floor (cavitation surrogate; MG has no built-in limit)
          fs%Tmin_liq=0.1_WP
          fs%Pmin_gas=1.0e-4_WP
          fs%Tmin_gas=0.1_WP

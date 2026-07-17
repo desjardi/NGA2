@@ -23,6 +23,7 @@ module relax_numerical_class
    private
 
    public :: prelax_numerical
+   public :: pTrelax_numerical
    public :: relax_numerical
 
    !> Thermorelax wrapper around prelax_numerical: an EOS-agnostic MECHANICAL (p) relaxation
@@ -192,5 +193,102 @@ contains
          JJ(2,2)=pGe*( dWp/Q(2)) - 1.0_WP                     ! dR2/dPeq
       end subroutine resjac
    end subroutine prelax_numerical
+
+   !> Numerical FULL (p+T) relaxation of a single mixture cell: drive the phases to
+   !> PL-PG = Pjump AND TL = TG at fixed phasic masses and total internal energy.
+   !> Unlike the mechanical kernel, no work-path assumption is needed: two equilibrium
+   !> conditions + conservation fully determine the final state, so we Newton directly
+   !> on x = (VF, eL) with eG = (Etot - Q(1)*eL)/Q(2). The pressure-row Jacobian is
+   !> analytic (from c and Gruneisen, as in prelax_numerical); the temperature row uses
+   !> a central finite difference for (dT/drho)_e, which is not an interface method.
+   !> Conserves phasic masses Q(1:2), total internal energy Q(3)+Q(4), momentum Q(5:).
+   !> The cell is left untouched on any non-ok status.
+   subroutine pTrelax_numerical(liq,gas,yL,yG,VF,Q,Pjump,itmax,rtol,RHOGmin,niter,ierr)
+      implicit none
+      class(material),        intent(in)    :: liq,gas
+      real(WP), dimension(:), intent(in)    :: yL,yG
+      real(WP),               intent(inout) :: VF
+      real(WP), dimension(:), intent(inout) :: Q
+      real(WP),               intent(in)    :: Pjump
+      integer,  optional,     intent(in)    :: itmax
+      real(WP), optional,     intent(in)    :: rtol,RHOGmin
+      integer,  optional,     intent(out)   :: niter,ierr
+      real(WP), parameter :: epsr=1.0e-6_WP   !< relative rho perturbation for the (dT/drho)_e difference
+      real(WP) :: tol,rgmin,Etot,s,eL,eG,rL,rG,PL,PG,TL,TG,cL,cG,GL,GG,cvL,cvG
+      real(WP) :: R1,R2,J11,J12,J21,J22,detJ,ds,de,alpha,TLr,TGr,sn,eLn,eGn,pLr,pGr
+      integer :: nit,it,ni,k
+      logical :: ok
+      tol  =1.0e-6_WP; if (present(rtol   )) tol  =rtol
+      nit  =50;        if (present(itmax  )) nit  =itmax
+      rgmin=1.0e-2_WP; if (present(RHOGmin)) rgmin=RHOGmin
+      if (present(niter)) niter=0
+      ! Skip degenerate cells
+      if (any(Q(1:4).le.0.0_WP)) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
+      if (VF.le.0.0_WP.or.VF.ge.1.0_WP) then; if (present(ierr)) ierr=RELAX_DEGENERATE; return; end if
+      if (Q(2)/(1.0_WP-VF).lt.rgmin) then; if (present(ierr)) ierr=RELAX_VACUUM_GAS; return; end if
+      ! Initial-state soundness (clamped get_c returns 0 for an unphysical state)
+      if (liq%get_c_from_rho_e(rho=Q(1)/VF,e=Q(3)/Q(1),y=yL).le.0.0_WP) then
+         if (present(ierr)) ierr=RELAX_BAD_LIQUID; return
+      end if
+      if (gas%get_c_from_rho_e(rho=Q(2)/(1.0_WP-VF),e=Q(4)/Q(2),y=yG).le.0.0_WP) then
+         if (present(ierr)) ierr=RELAX_BAD_GAS; return
+      end if
+      ! 2x2 Newton on x=(s,eL), seeded at the current state
+      Etot=Q(3)+Q(4)
+      s=VF; eL=Q(3)/Q(1); ni=0; ok=.false.
+      do it=1,nit
+         rL=Q(1)/s; rG=Q(2)/(1.0_WP-s); eG=(Etot-Q(1)*eL)/Q(2)
+         PL=liq%get_p_from_rho_e(rho=rL,e=eL,y=yL); PG=gas%get_p_from_rho_e(rho=rG,e=eG,y=yG)
+         TL=liq%get_T_from_rho_e(rho=rL,e=eL,y=yL); TG=gas%get_T_from_rho_e(rho=rG,e=eG,y=yG)
+         R1=PL-PG-Pjump
+         R2=TL-TG
+         if (abs(R1).lt.tol*max(abs(PL),1.0_WP).and.abs(R2).lt.tol*max(abs(TL),abs(TG))) then
+            ok=.true.; exit
+         end if
+         ni=ni+1
+         cL =liq%get_c_from_rho_e(rho=rL,e=eL,y=yL);         cG =gas%get_c_from_rho_e(rho=rG,e=eG,y=yG)
+         GL =liq%get_gruneisen_from_rho_e(rho=rL,e=eL,y=yL); GG =gas%get_gruneisen_from_rho_e(rho=rG,e=eG,y=yG)
+         cvL=liq%get_cv_from_rho_e(rho=rL,e=eL,y=yL);        cvG=gas%get_cv_from_rho_e(rho=rG,e=eG,y=yG)
+         pLr=cL*cL-PL*GL/rL; pGr=cG*cG-PG*GG/rG              ! (dp/drho)_e
+         TLr=(liq%get_T_from_rho_e(rho=rL*(1.0_WP+epsr),e=eL,y=yL) &
+         &   -liq%get_T_from_rho_e(rho=rL*(1.0_WP-epsr),e=eL,y=yL))/(2.0_WP*epsr*rL)
+         TGr=(gas%get_T_from_rho_e(rho=rG*(1.0_WP+epsr),e=eG,y=yG) &
+         &   -gas%get_T_from_rho_e(rho=rG*(1.0_WP-epsr),e=eG,y=yG))/(2.0_WP*epsr*rG)
+         J11=pLr*(-rL/s)-pGr*(rG/(1.0_WP-s))                 ! dR1/ds
+         J12=rL*GL+rG*GG*(Q(1)/Q(2))                         ! dR1/deL (eG = (Etot-Q1*eL)/Q2)
+         J21=TLr*(-rL/s)-TGr*(rG/(1.0_WP-s))                 ! dR2/ds
+         J22=1.0_WP/cvL+(Q(1)/Q(2))/cvG                      ! dR2/deL
+         detJ=J11*J22-J12*J21
+         if (abs(detJ).lt.tiny(1.0_WP)) then; if (present(ierr)) ierr=RELAX_SINGULAR; return; end if
+         ds=( J22*R1-J12*R2)/detJ
+         de=(-J21*R1+J11*R2)/detJ
+         ! Damped update: keep s in (0,1) and both phasic energies positive (gauge rail)
+         alpha=1.0_WP
+         do k=1,25
+            sn=s-alpha*ds; eLn=eL-alpha*de; eGn=(Etot-Q(1)*eLn)/Q(2)
+            if (sn.gt.0.0_WP.and.sn.lt.1.0_WP.and.eLn.gt.0.0_WP.and.eGn.gt.0.0_WP) exit
+            alpha=0.5_WP*alpha
+         end do
+         if (.not.(sn.gt.0.0_WP.and.sn.lt.1.0_WP.and.eLn.gt.0.0_WP.and.eGn.gt.0.0_WP)) then
+            if (present(ierr)) ierr=RELAX_FAILED; return
+         end if
+         s=sn; eL=eLn
+      end do
+      if (present(niter)) niter=ni
+      if (.not.ok) then; if (present(ierr)) ierr=RELAX_FAILED; return; end if
+      ! Converged-state soundness; leave cell if unphysical
+      rL=Q(1)/s; rG=Q(2)/(1.0_WP-s); eG=(Etot-Q(1)*eL)/Q(2)
+      if (liq%get_c_from_rho_e(rho=rL,e=eL,y=yL).le.0.0_WP) then
+         if (present(ierr)) ierr=RELAX_BAD_LIQUID; return
+      end if
+      if (gas%get_c_from_rho_e(rho=rG,e=eG,y=yG).le.0.0_WP) then
+         if (present(ierr)) ierr=RELAX_BAD_GAS; return
+      end if
+      ! Commit
+      VF=s
+      Q(3)=Q(1)*eL
+      Q(4)=Etot-Q(3)
+      if (present(ierr)) ierr=RELAX_OK
+   end subroutine pTrelax_numerical
 
 end module relax_numerical_class

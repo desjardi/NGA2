@@ -4,10 +4,12 @@
 !> (Morton partition, motion-invariant), neighborhoods and communication
 !> plans are built once and reused every substep.
 !>
-!> Physics: linear peridynamic solid (LPS, dimension-aware coefficients),
-!> brittle stretch damage, per-side viscoelastic/viscoplastic flow with J2
-!> (Mitchell OSB) yield, soft-sphere contact (walls + particle-particle via
-!> a displacement-triggered spatial service), velocity-Verlet integration.
+!> Physics: linear peridynamic solid (LPS, dimension-aware coefficients,
+!> influence function hard-coded in omega() with derived quantities
+!> generalized through its moments), brittle stretch damage, per-side
+!> viscoelastic/viscoplastic flow with J2 (Mitchell OSB) yield, soft-sphere
+!> contact (walls + particle-particle via a displacement-triggered spatial
+!> service), velocity-Verlet integration.
 !> Checkpoint/restart is gid-space and rank-count portable, including all
 !> bond damage and plastic history.
 !>
@@ -80,6 +82,7 @@ module pdsolver_class
       real(WP) :: visc_lambda    =1.0_WP       !< SLS relaxing fraction [0,1]
       real(WP) :: yield_stretch  =0.0_WP       !< legacy per-bond Perzyna yield strain (0 = pure Maxwell)
       real(WP) :: sigma_yield    =0.0_WP       !< J2 yield stress (Mitchell OSB family norm; overrides yield_stretch)
+      real(WP) :: hard_mod       =0.0_WP       !< linear isotropic hardening modulus H: flow stress = sigma_yield + H*lam_p (0 = perfectly plastic)
       real(WP), dimension(3) :: gravity=0.0_WP !< body acceleration
       logical,  dimension(3) :: collapsed=.false. !< collapsed (n==1) directions: velocity locked
       real(WP), dimension(3) :: Ldom=0.0_WP    !< domain lengths (image shifts)
@@ -119,6 +122,7 @@ module pdsolver_class
       real(WP), allocatable :: mw(:)           !< (nown) weighted volume (reference, set at connect)
       real(WP), allocatable :: theta(:)        !< (nown) dilatation (recomputed each substep)
       real(WP), allocatable :: damage(:)       !< (nown) accumulated damage fraction (broken/reference bonds)
+      real(WP), allocatable :: lam_p(:)        !< (nown) accumulated equivalent plastic strain (J2 path; drives hardening, free diagnostic when hard_mod=0)
       real(WP), allocatable :: alive(:)        !< (ntot) 1=alive, 0=dead (exit through open face); halo-exchanged on death events only
       integer,  allocatable :: flag(:)         !< (nown) motion-control flags
       logical :: watch_exit=.false.            !< exit detection active (set at connect: domain set + any open non-periodic face)
@@ -142,6 +146,7 @@ module pdsolver_class
       real(WP) :: Umin=0.0_WP,Umax=0.0_WP      !< signed per-component velocity extrema
       real(WP) :: Vmin=0.0_WP,Vmax=0.0_WP      !< over live nodes (get_info)
       real(WP) :: Wmin=0.0_WP,Wmax=0.0_WP
+      real(WP) :: EPmax=0.0_WP                 !< max accumulated equivalent plastic strain (get_info)
       real(WP) :: CFLe=0.0_WP,CFLp=0.0_WP      !< elastic-wave / convective CFL (get_cfl)
       integer(I8) :: nbroken=0                 !< global broken half-entry count (internal)
       integer(I8) :: nb_broken=0               !< global broken BOND count (exact census, get_info)
@@ -194,8 +199,11 @@ contains
       if (this%fail_stretch.lt.huge(1.0_WP)) then
          this%s0=this%fail_stretch
       else if (this%crit_energy.gt.0.0_WP.and.this%crit_energy.lt.huge(1.0_WP)) then
+         ! Silling-Askari bond-energy argument, generalized to the active
+         ! influence function: G_c = (9/4)*K*s0^2*Iw4/Iw3 (w=1 recovers the
+         ! classical s0 = sqrt(5*G_c/(9*K*delta)))
          K_bulk=this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
-         this%s0=sqrt(5.0_WP*this%crit_energy/(9.0_WP*K_bulk*this%delta))
+         this%s0=sqrt(4.0_WP*this%crit_energy*wmoment(this%delta,3,1)/(9.0_WP*K_bulk*wmoment(this%delta,4,1)))
       end if
       if (this%use_contact.and.this%contact_dist.le.0.0_WP) this%contact_dist=0.9_WP*this%dV**(1.0_WP/3.0_WP)
    end subroutine derive_config
@@ -219,7 +227,7 @@ contains
       allocate(this%gid(max(n,1)),this%x0(3,max(n,1)),this%y(3,max(n,1)))
       allocate(this%v(3,max(n,1)),this%f(3,max(n,1)),this%ff(3,max(n,1)))
       allocate(this%mw(max(n,1)),this%theta(max(n,1)),this%flag(max(n,1)))
-      allocate(this%vol(max(n,1)),this%damage(max(n,1)))
+      allocate(this%vol(max(n,1)),this%damage(max(n,1)),this%lam_p(max(n,1)))
       do i=1,n
          this%gid(i) =gids(i)
          this%x0(:,i)=pos(:,i)
@@ -228,7 +236,7 @@ contains
          this%flag(i)=flags(i)
          this%vol(i)   =vol(i)
       end do
-      this%f=0.0_WP; this%ff=0.0_WP; this%mw=0.0_WP; this%theta=0.0_WP; this%damage=0.0_WP
+      this%f=0.0_WP; this%ff=0.0_WP; this%mw=0.0_WP; this%theta=0.0_WP; this%damage=0.0_WP; this%lam_p=0.0_WP
       call this%ohash%build(n,gids(1:n))
    end subroutine set_nodes
 
@@ -631,8 +639,9 @@ contains
       call this%compute_mw()
 
       ! Silling-Askari critical time step (Peridigm form, 3D bond-based
-      ! micromodulus C = 18K/(pi*delta^4)):
-      !   dt_crit_i = sqrt(2*rho / sum_family(V_j * C / zeta)), global min.
+      ! micromodulus c(z) = c0*w(z), c0 = 9K/(2*pi*Iw3); w=1 recovers the
+      ! classical 18K/(pi*delta^4)):
+      !   dt_crit_i = sqrt(2*rho / sum_family(V_j * c(zeta) / zeta)), global min.
       ! DIAGNOSTIC only for now -- reported at init, does not bind dt. The
       ! micromodulus constant is 3D-based; in quasi-2D slabs treat it as
       ! indicative.
@@ -641,18 +650,18 @@ contains
          use messager,  only: log
          use string,    only: str_long
          use parallel,  only: amRoot,MPI_REAL_WP
-         real(WP) :: K_bulk,Cmicro,denom,zeta,dtc
+         real(WP) :: K_bulk,c0,denom,zeta,dtc
          character(len=str_long) :: message
          integer :: i,e,j
          K_bulk=this%elastic_modulus/(3.0_WP*(1.0_WP-2.0_WP*this%poisson_ratio))
-         Cmicro=18.0_WP*K_bulk/(Pi*this%delta**4)
+         c0=9.0_WP*K_bulk/(2.0_WP*Pi*wmoment(this%delta,3,1))
          dtc=huge(1.0_WP)
          do i=1,this%nown
             denom=0.0_WP
             do e=this%ptr(i),this%ptr(i+1)-1
                j=this%lst(e)
                zeta=sqrt(sum((this%x0(:,j)-this%x0(:,i))**2))
-               if (zeta.gt.0.0_WP) denom=denom+this%vol(j)*Cmicro/zeta
+               if (zeta.gt.0.0_WP) denom=denom+this%vol(j)*c0*omega(zeta,this%delta)/zeta
             end do
             if (denom.gt.0.0_WP) dtc=min(dtc,sqrt(2.0_WP*this%rho/denom))
          end do
@@ -707,9 +716,12 @@ contains
       end do
    end subroutine compute_mw
 
-   !> Dimension-aware LPS constitutive coefficients. psi_fac sets the J2 yield
-   !> threshold on the family deviatoric force-state norm: yield when
-   !> ||t_dev||^2 > psi_fac*sigma_yield^2/mw (Mitchell OSB).
+   !> Dimension-aware LPS constitutive coefficients (omega-independent: mw
+   !> absorbs the influence function). psi_fac sets the J2 yield threshold on
+   !> the family deviatoric force-state norm -- yield when
+   !> ||t_dev||^2 > psi_fac*sigma_yield^2/mw (Mitchell OSB) -- and DOES depend
+   !> on omega: since td ~ w, the norm scales by the w^2/w moment ratio
+   !> (int w^2 z^p / int w z^p, p=4 in 3D, 3 in 2D; ratio = 1 for w=1).
    subroutine lps_coefs(this,fdim,coef_vol,coef_dev,psi_fac)
       implicit none
       class(pdsolver), intent(in) :: this
@@ -723,10 +735,10 @@ contains
       select case (ndim)
       case (3)
          fdim=3.0_WP; coef_vol=3.0_WP*K_bulk;                   coef_dev=15.0_WP*mu_shear
-         if (present(psi_fac)) psi_fac=5.0_WP
+         if (present(psi_fac)) psi_fac=5.0_WP*wmoment(this%delta,4,2)/wmoment(this%delta,4,1)
       case (2)
          fdim=2.0_WP; coef_vol=2.0_WP*(K_bulk+mu_shear/3.0_WP); coef_dev= 8.0_WP*mu_shear
-         if (present(psi_fac)) psi_fac=8.0_WP/3.0_WP
+         if (present(psi_fac)) psi_fac=8.0_WP/3.0_WP*wmoment(this%delta,3,2)/wmoment(this%delta,3,1)
       case default
          fdim=1.0_WP; coef_vol=this%elastic_modulus;            coef_dev= 0.0_WP
          if (present(psi_fac)) psi_fac=0.0_WP
@@ -743,7 +755,8 @@ contains
       real(WP), intent(in) :: dt
       real(WP) :: rho_inv,fdim,cvol,cdev,t0
       real(WP) :: zeta,dY,e_b,t,w
-      real(WP) :: psi_fac,sY2,decay,e_d,td,beta,e_e,over
+      real(WP) :: psi_fac,decay,e_d,td,beta,e_e,over
+      real(WP) :: sYe2,strial,mu3i
       logical :: plastic,do_j2
       real(WP), dimension(3) :: acc,dxv,fx
       integer :: i,e,j
@@ -752,11 +765,11 @@ contains
       call this%lps_coefs(fdim,cvol,cdev,psi_fac)
       ! Viscoplastic setup: decay is loop-invariant (exact exponential update,
       ! unconditionally stable -- no viscous CFL)
-      sY2=this%sigma_yield**2
       plastic=(this%tau.gt.0.0_WP.and.this%tau.lt.huge(1.0_WP))
       do_j2=(this%sigma_yield.gt.0.0_WP)
       decay=0.0_WP
       if (plastic) decay=exp(-dt/this%tau)
+      mu3i=2.0_WP*(1.0_WP+this%poisson_ratio)/(3.0_WP*this%elastic_modulus)   ! 1/(3*mu_shear)
 
       ! First half-kick and drift (owned nodes)
       t0=parallel_time()
@@ -869,6 +882,25 @@ contains
       this%f=0.0_WP
       do i=1,this%nown
          if (this%mw(i).le.0.0_WP) cycle
+         ! Per-node J2 return factor from the LAGGED family norm. With
+         ! hardening (hard_mod>0) the surface radius grows with the node's
+         ! accumulated equivalent plastic strain lam_p (surface lagged one
+         ! substep like the norm: exact to O(H/3mu) per substep, and H<<3mu
+         ! for metals; stress-space equivalent of Peridigm's
+         ! elastic_plastic_hardening). The increment uses (1-beta)*strial =
+         ! the trial-stress excess, so the rate-independent limit matches the
+         ! classical radial return; (1-decay) is the Perzyna-realized
+         ! fraction. lam_p accumulates even at hard_mod=0 (free plastic-
+         ! strain diagnostic; forces unchanged there, bit-exact w/ flat yield).
+         beta=1.0_WP
+         if (plastic.and.do_j2) then
+            sYe2=(this%sigma_yield+this%hard_mod*this%lam_p(i))**2
+            if (this%td2(i)*this%mw(i).gt.psi_fac*sYe2) then
+               beta=sqrt(psi_fac*sYe2/(this%td2(i)*this%mw(i)))
+               strial=sqrt(this%td2(i)*this%mw(i)/psi_fac)
+               this%lam_p(i)=this%lam_p(i)+(1.0_WP-beta)*(1.0_WP-decay)*strial*mu3i
+            end if
+         end if
          do e=this%ptr(i),this%ptr(i+1)-1
             if (this%dmg(e).ne.0_1) cycle
             j=this%lst(e)
@@ -906,15 +938,13 @@ contains
             this%f(:,j)=this%f(:,j)-fx*this%vol(i)
             ! Per-side viscoplastic flow of e_v (exact exponential). Two yield
             ! criteria, as in amrpd:
-            !   sigma_yield>0: J2 radial return toward the yield surface when
-            !     the PREVIOUS substep's family norm exceeds psi_fac*sY^2/mw,
-            !     Perzyna-regularized by (1-decay); tau->0 recovers Peridigm's
+            !   sigma_yield>0: J2 radial return (per-node beta computed at the
+            !     row head above, incl. isotropic hardening), Perzyna-
+            !     regularized by (1-decay); tau->0 recovers Peridigm's
             !     rate-independent return.
             !   else: per-bond overstress (yield_stretch=0 -> pure Maxwell).
             if (plastic) then
                if (do_j2) then
-                  beta=1.0_WP
-                  if (this%td2(i)*this%mw(i).gt.psi_fac*sY2) beta=sqrt(psi_fac*sY2/(this%td2(i)*this%mw(i)))
                   this%e_v(e)=this%e_v(e)+(1.0_WP-beta)*(e_d-this%e_v(e))*(1.0_WP-decay)
                else
                   e_e=e_d-this%e_v(e)
@@ -1336,13 +1366,16 @@ contains
       real(WP), dimension(3) :: vmin,vmax
       np_loc=0_I8
       vmin=huge(1.0_WP); vmax=-huge(1.0_WP)
+      this%EPmax=0.0_WP
       do i=1,this%nown
          if (this%flag(i).eq.PDC_IS_DEAD) cycle
          np_loc=np_loc+1_I8
          vmin=min(vmin,this%v(:,i)); vmax=max(vmax,this%v(:,i))
+         this%EPmax=max(this%EPmax,this%lam_p(i))
       end do
       this%np=np_loc
       call MPI_ALLREDUCE(MPI_IN_PLACE,this%np,1,MPI_INTEGER8,MPI_SUM,comm,ierr)
+      call MPI_ALLREDUCE(MPI_IN_PLACE,this%EPmax,1,MPI_REAL_WP,MPI_MAX,comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,vmin,3,MPI_REAL_WP,MPI_MIN,comm,ierr)
       call MPI_ALLREDUCE(MPI_IN_PLACE,vmax,3,MPI_REAL_WP,MPI_MAX,comm,ierr)
       if (this%np.eq.0_I8) then
@@ -1418,6 +1451,7 @@ contains
       if (allocated(this%mw))    deallocate(this%mw)
       if (allocated(this%theta)) deallocate(this%theta)
       if (allocated(this%damage))deallocate(this%damage)
+      if (allocated(this%lam_p)) deallocate(this%lam_p)
       if (allocated(this%alive)) deallocate(this%alive)
       if (allocated(this%flag))  deallocate(this%flag)
       if (allocated(this%ptr))   deallocate(this%ptr)
@@ -1527,9 +1561,10 @@ contains
 
    !> Checkpoint the core under <dirname>/: per-rank stream files + root
    !> header. Records are GID-SPACE (no local indices, no partition info) --
-   !> nodes: (gid, flag, x0, y, v, f, vol, damage, td2); half-entries:
+   !> nodes: (gid, flag, x0, y, v, f, vol, damage, td2, lam_p); half-entries:
    !> (node_gid, nbr_gid, image_key, dmg, e_v), the image key reconstructed
-   !> from the halo slot's shift. Rank-count portable on read.
+   !> from the halo slot's shift. Rank-count portable on read. Format v2
+   !> (v1 = pre-hardening, no lam_p record; read_state accepts both).
    subroutine write_state(this,dirname)
       use parallel, only: rank,nproc,amRoot
       use messager, only: die
@@ -1578,6 +1613,7 @@ contains
       write(iunit) this%vol(1:this%nown)
       write(iunit) this%damage(1:this%nown)
       write(iunit) this%td2(1:this%nown)
+      write(iunit) this%lam_p(1:this%nown)
       write(iunit) hnode(1:nhe)
       write(iunit) hnbr(1:nhe)
       write(iunit) hkey(1:nhe)
@@ -1589,7 +1625,7 @@ contains
       if (amRoot) then
          open(newunit=iunit,file=trim(dirname)//'/pd/header',form='formatted',status='replace',iostat=ios)
          if (ios.ne.0) call die('[pdsolver write_state] cannot open header')
-         write(iunit,'(a)') 'pdsolver checkpoint v1'
+         write(iunit,'(a)') 'pdsolver checkpoint v2'
          write(iunit,'(i0)') nproc
          close(iunit)
       end if
@@ -1622,27 +1658,29 @@ contains
       class(pdsolver), intent(inout) :: this
       character(len=*), intent(in) :: dirname
       character(len=str_medium) :: fname,line
-      integer :: nfiles,iunit,ios,f,i,r,ierr
+      integer :: nfiles,iunit,ios,f,i,r,ierr,iver
       integer :: nn,nhe,nf,nhf
       integer(I8), allocatable :: gid(:),hnode(:),hnbr(:)
       integer, allocatable :: flag(:),hkey(:),owner(:)
-      real(WP), allocatable :: x0(:,:),yy(:,:),vv(:,:),ffb(:,:),vol(:),dmgn(:),td2n(:)
+      real(WP), allocatable :: x0(:,:),yy(:,:),vv(:,:),ffb(:,:),vol(:),dmgn(:),td2n(:),lamn(:)
       real(WP), allocatable :: hev(:)
       integer(1), allocatable :: hdmg(:)
 
       ! Resolve derived configuration (restart-safe shared path)
       call this%derive_config()
 
-      ! Header: number of files written
-      nfiles=0
+      ! Header: number of files written + format version (v1 = no lam_p record)
+      nfiles=0; iver=1
       if (rank.eq.0) then
          open(newunit=iunit,file=trim(dirname)//'/pd/header',form='formatted',status='old',iostat=ios)
          if (ios.ne.0) call die('[pdsolver read_state] no pd/header under '//trim(dirname))
          read(iunit,'(a)') line
+         if (index(line,'v2').gt.0) iver=2
          read(iunit,*) nfiles
          close(iunit)
       end if
       call MPI_BCAST(nfiles,1,MPI_INTEGER,0,comm,ierr)
+      call MPI_BCAST(iver,1,MPI_INTEGER,0,comm,ierr)
 
       ! Read my round-robin share of the files, concatenating records
       nn=0; nhe=0
@@ -1655,6 +1693,7 @@ contains
          call grow_r2(x0,nn,nf);    call grow_r2(yy,nn,nf)
          call grow_r2(vv,nn,nf);    call grow_r2(ffb,nn,nf)
          call grow_r1(vol,nn,nf);   call grow_r1(dmgn,nn,nf); call grow_r1(td2n,nn,nf)
+         call grow_r1(lamn,nn,nf)
          read(iunit) gid(nn+1:nn+nf)
          read(iunit) flag(nn+1:nn+nf)
          read(iunit) x0(:,nn+1:nn+nf)
@@ -1664,6 +1703,11 @@ contains
          read(iunit) vol(nn+1:nn+nf)
          read(iunit) dmgn(nn+1:nn+nf)
          read(iunit) td2n(nn+1:nn+nf)
+         if (iver.ge.2) then
+            read(iunit) lamn(nn+1:nn+nf)
+         else
+            lamn(nn+1:nn+nf)=0.0_WP
+         end if
          call grow_i8(hnode,nhe,nhf); call grow_i8(hnbr,nhe,nhf)
          call grow_i4(hkey,nhe,nhf);  call grow_i1(hdmg,nhe,nhf); call grow_r1(hev,nhe,nhf)
          read(iunit) hnode(nhe+1:nhe+nhf)
@@ -1675,7 +1719,7 @@ contains
          nn=nn+nf; nhe=nhe+nhf
       end do
       if (.not.allocated(gid)) then   ! ranks with no files still join collectives
-         allocate(gid(1),flag(1),x0(3,1),yy(3,1),vv(3,1),ffb(3,1),vol(1),dmgn(1),td2n(1))
+         allocate(gid(1),flag(1),x0(3,1),yy(3,1),vv(3,1),ffb(3,1),vol(1),dmgn(1),td2n(1),lamn(1))
          allocate(hnode(1),hnbr(1),hkey(1),hdmg(1),hev(1))
       end if
 
@@ -1702,7 +1746,7 @@ contains
          do r=1,nproc-1
             sd(r)=sd(r-1)+sc(r-1); rd(r)=rd(r-1)+rc(r-1)
          end do
-         allocate(pos(0:nproc-1),extra(8,max(nn,1)),this%rextra_tmp(8,max(nr,1)))
+         allocate(pos(0:nproc-1),extra(9,max(nn,1)),this%rextra_tmp(9,max(nr,1)))
          pos=sd
          do i=1,nn
             r=owner(i); pos(r)=pos(r)+1
@@ -1710,8 +1754,9 @@ contains
             extra(4:6,pos(r))=ffb(:,i)
             extra(7,pos(r))  =dmgn(i)
             extra(8,pos(r))  =td2n(i)
+            extra(9,pos(r))  =lamn(i)
          end do
-         scw=8*sc; sdw=8*sd; rcw=8*rc; rdw=8*rd
+         scw=9*sc; sdw=9*sd; rcw=9*rc; rdw=9*rd
          call MPI_ALLTOALLV(extra,scw,sdw,MPI_REAL_WP,this%rextra_tmp,rcw,rdw,MPI_REAL_WP,comm,ierr)
          ! Load the routed nodes, then overlay the restart-only fields
          call this%set_nodes(nr,rgid,rx0,rvv,rflag,rvol)
@@ -1782,14 +1827,15 @@ contains
          deallocate(rnode,rnbr,rkey,rev,rdmg,pos,s8,s4,sr,s1,howner)
       end block route_and_assemble
 
-      ! Overlay td2 (assemble allocates it zeroed) and life status
+      ! Overlay td2/lam_p (assemble/set_nodes zero them) and life status
       do i=1,this%nown
-         this%td2(i)=this%rextra_tmp(8,i)
+         this%td2(i)  =this%rextra_tmp(8,i)
+         this%lam_p(i)=this%rextra_tmp(9,i)
          if (this%flag(i).eq.PDC_IS_DEAD) this%alive(i)=0.0_WP
       end do
       deallocate(this%rextra_tmp)
       call this%halo%update1(this%alive)
-      deallocate(gid,flag,x0,yy,vv,ffb,vol,dmgn,td2n,hnode,hnbr,hkey,hdmg,hev,owner)
+      deallocate(gid,flag,x0,yy,vv,ffb,vol,dmgn,td2n,lamn,hnode,hnbr,hkey,hdmg,hev,owner)
 
    contains
 
@@ -2058,13 +2104,45 @@ contains
    end function cell_of
 
 
-   !> Influence function (constant, Peridigm default).
+   !> Influence function w(zeta) (Peridigm forms). ONE form active, hard-coded;
+   !> flip by (un)commenting -- s0-from-G_c, psi_fac, and the critical-dt
+   !> diagnostic all generalize through wmoment(), so nothing else changes.
    pure function omega(d,h) result(w)
       implicit none
       real(WP), intent(in) :: d,h
       real(WP) :: w
-      w=1.0_WP
+      real(WP) :: s
+      ! Parabolic decay (ACTIVE): 1 in the core, C1 taper to 0 at the horizon
+      s=d/h
+      if (s.lt.0.5_WP) then
+         w=1.0_WP
+      else
+         w=max(4.0_WP*s*(1.0_WP-s),0.0_WP)
+      end if
+      ! Constant (Peridigm default; pre-2026-07-16 behavior)
+      !w=1.0_WP
+      ! Gaussian
+      !w=exp(-(d/(0.4_WP*h))**2)
    end function omega
+
+   !> Moment of the influence function: int_0^delta w(z)^wpow * z^zpow dz
+   !> (midpoint quadrature through omega(), so any form change propagates)
+   pure function wmoment(delta,zpow,wpow) result(m)
+      implicit none
+      real(WP), intent(in) :: delta
+      integer, intent(in) :: zpow,wpow
+      real(WP) :: m
+      integer, parameter :: NQ=2048
+      integer :: i
+      real(WP) :: z,dz
+      dz=delta/real(NQ,WP)
+      m=0.0_WP
+      do i=1,NQ
+         z=(real(i,WP)-0.5_WP)*dz
+         m=m+omega(z,delta)**wpow*z**zpow
+      end do
+      m=m*dz
+   end function wmoment
 
    !> Lexicographic sign of an image shift: .true. for the "positive" member
    !> of a self-image pair (first nonzero component positive), so each

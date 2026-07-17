@@ -2301,9 +2301,14 @@ contains
       integer :: lvl,i,j,k
       real(WP), dimension(:,:,:,:), contiguous, pointer :: pVF,pQ
       real(WP) :: eref,rref,rstar,mold,eold,m0,dV
+      real(WP) :: rstarL
       logical :: valid
       type(amrex_mfiter) :: mfi
       type(amrex_box) :: bx,bxv
+      ! Corner-state densities depend only on the (Pmin,Tmin) knobs: compute once, not per cell
+      rstarL=0.0_WP
+      if (this%Tmin_liq.gt.0.0_WP.and.this%Pmin_liq.gt.-1.0e29_WP) &
+      &  rstarL=this%liq%get_rho_from_p_T(p=this%Pmin_liq,T=this%Tmin_liq,y=[1.0_WP])
       ! Traverse all levels
       do lvl=0,this%amr%clvl()
          dV=this%amr%cell_vol(lvl)
@@ -2338,25 +2343,34 @@ contains
                   end if
                end if
                ! Phase rescue: user-specified minimal (Pmin,Tmin) per phase, enforced wherever the
-               ! phase exists, by adding mass and/or energy. Below the corner density
-               ! rho*=rho(Pmin,Tmin) -> project to the corner state (both targets bounded by
-               ! construction — never evaluated at the sick cell's own vanishing density); above
-               ! it -> lift energy at fixed mass until both P>=Pmin and T>=Tmin (p and T are
-               ! monotone in e at fixed rho). Added mass carries the cell velocity. Census-ledgered.
+               ! phase exists. LIQUID BELOW THE CORNER DENSITY rho*=rho(Pmin,Tmin): project to the
+               ! corner state, ADDING MASS. This is a deliberate, ledgered, wrong-by-design
+               ! anti-collapse guard -- crude cavitation with Pmin playing p_cav. A liquid pulled
+               ! into tension (e.g. spall in a drop core after impact) expands along the tension
+               ! branch and loses hyperbolicity on the c^2=0 locus p=-c0^2*rho^2/(Gamma0*rho0)
+               ! WITHOUT necessarily ever crossing the P floor (warm liquid rides p>Pmin down to
+               ! vanishing density), so the trigger MUST be density, not state: a state-based
+               ! trigger was tried (2026-07-16) and the untreated core collapsed to rho~0,
+               ! followed by a near-massless face-kick blowup (Mode G). The physical answer is a
+               ! collapsible vapor cavity, which requires condensation (pTg phase change, in
+               ! progress); an air-void response is NOT admissible -- with no condensation channel
+               ! the cavity can never close. Until then: inject mass to the cold corner (restores
+               ! c^2>0 with margin), carried at the cell velocity, all of it visible in the
+               ! LiqResc dm ledger. At/above the corner: lift energy at fixed mass until P>=Pmin
+               ! and T>=Tmin (both monotone in e at fixed rho).
                valid=(i.ge.bxv%lo(1).and.i.le.bxv%hi(1).and.j.ge.bxv%lo(2).and.j.le.bxv%hi(2).and.k.ge.bxv%lo(3).and.k.le.bxv%hi(3))
                m0=pQ(i,j,k,1)+pQ(i,j,k,2)
-               if (this%Tmin_liq.gt.0.0_WP.and.this%Pmin_liq.gt.-1.0e29_WP.and.pVF(i,j,k,1).ge.VFlo) then
+               if (rstarL.gt.0.0_WP.and.pVF(i,j,k,1).ge.VFlo) then
                   mold=pQ(i,j,k,1); eold=pQ(i,j,k,3)
-                  rstar=this%liq%get_rho_from_p_T(p=this%Pmin_liq,T=this%Tmin_liq,y=[1.0_WP])
-                  if (pQ(i,j,k,1).lt.rstar*pVF(i,j,k,1)) then
-                     pQ(i,j,k,1)=rstar*pVF(i,j,k,1)
+                  if (pQ(i,j,k,1).lt.rstarL*pVF(i,j,k,1)) then
+                     pQ(i,j,k,1)=rstarL*pVF(i,j,k,1)
                      ! max(): the projection only ever ADDS energy (a hot cell keeps its content)
-                     pQ(i,j,k,3)=max(eold,pQ(i,j,k,1)*this%liq%get_e_from_p_rho(p=this%Pmin_liq,rho=rstar,y=[1.0_WP]))
+                     pQ(i,j,k,3)=max(eold,pQ(i,j,k,1)*this%liq%get_e_from_p_rho(p=this%Pmin_liq,rho=rstarL,y=[1.0_WP]))
                   else
                      rref=pQ(i,j,k,1)/pVF(i,j,k,1)
-                     eref=max(this%liq%get_e_from_p_rho(p=this%Pmin_liq,rho=rref,y=[1.0_WP]), &
-                     &        this%liq%get_e_from_p_rho(p=this%liq%get_p_from_rho_T(rho=rref,T=this%Tmin_liq,y=[1.0_WP]),rho=rref,y=[1.0_WP]))
-                     if (pQ(i,j,k,3).lt.pQ(i,j,k,1)*eref) pQ(i,j,k,3)=pQ(i,j,k,1)*eref
+                     eref=max(this%liq%get_rhoe_from_p_rho(p=this%Pmin_liq,rho=rref,y=[1.0_WP]), &
+                     &        this%liq%get_rhoe_from_p_rho(p=this%liq%get_p_from_rho_T(rho=rref,T=this%Tmin_liq,y=[1.0_WP]),rho=rref,y=[1.0_WP]))
+                     if (pQ(i,j,k,3).lt.pVF(i,j,k,1)*eref) pQ(i,j,k,3)=pVF(i,j,k,1)*eref
                   end if
                   if (valid.and.(pQ(i,j,k,1).ne.mold.or.pQ(i,j,k,3).ne.eold)) then
                      this%resc_acc(1)=this%resc_acc(1)+1.0_WP
@@ -2559,9 +2573,11 @@ contains
             if (vv.gt.this%merge_VFlo.and.vv.gt.vm) then; vm=vv; d=g; end if
          end do
       end function lpd
-      !> Gas deficit of cell a vs partner b, ONE-SIDED: vanishing density or specific energy
-      !> relative to the partner (includes non-positive states). Excess never qualifies; a
-      !> broken partner cannot help.
+      !> Gas sickness of cell a vs partner b: vanishing density or specific energy relative to
+      !> the partner (includes non-positive states), OR specific-energy EXCESS merge_sick-fold
+      !> above the partner (superheated near-massless wisps from adiabatic crushing: bounded
+      !> pressure but c~sqrt(gamma*R*T) makes them acoustic dt-killers; deficit tests are blind
+      !> to them). A broken partner cannot help.
       logical function gsick(ai,aj,ak,bi,bj,bk)
          integer, intent(in) :: ai,aj,ak,bi,bj,bk
          real(WP) :: va,vb
@@ -2570,12 +2586,14 @@ contains
          if (va.le.0.0_WP) return
          if (vb.le.0.0_WP.or.pQ(bi,bj,bk,2).le.0.0_WP.or.pQ(bi,bj,bk,4).le.0.0_WP) return
          if (pQ(ai,aj,ak,2).le.0.0_WP.or.pQ(ai,aj,ak,4).le.0.0_WP) then; gsick=.true.; return; end if
-         ! Ratio-deficit claims additionally require partner DOMINANCE in both pooled
-         ! extensives (mass and energy): the pooled state stays partner-dominated, so a
-         ! large-inventory claimant can never rewrite a smaller partner
+         ! Ratio claims (deficit AND excess) additionally require partner DOMINANCE in both
+         ! pooled extensives (mass and energy): the pooled state stays partner-dominated, so a
+         ! large-inventory claimant can never rewrite a smaller partner -- this is also what
+         ! makes absorbing an energy-excess wisp safe (its content barely moves the pool)
          if (pQ(bi,bj,bk,2).ge.pQ(ai,aj,ak,2).and.pQ(bi,bj,bk,4).ge.pQ(ai,aj,ak,4)) then
             gsick=(pQ(ai,aj,ak,2)/va)*this%merge_sick.lt.pQ(bi,bj,bk,2)/vb .or. &
-            &     (pQ(ai,aj,ak,4)/pQ(ai,aj,ak,2))*this%merge_sick.lt.pQ(bi,bj,bk,4)/pQ(bi,bj,bk,2)
+            &     (pQ(ai,aj,ak,4)/pQ(ai,aj,ak,2))*this%merge_sick.lt.pQ(bi,bj,bk,4)/pQ(bi,bj,bk,2) .or. &
+            &     (pQ(ai,aj,ak,4)/pQ(ai,aj,ak,2)).gt.this%merge_sick*(pQ(bi,bj,bk,4)/pQ(bi,bj,bk,2))
          end if
       end function gsick
       !> Liquid deficit: non-positive mass/energy with liquid volume present ONLY (ratio-deficit

@@ -10,10 +10,9 @@ module simulation
    use event_class,       only: event
    use monitor_class,     only: monitor
    use amrio_class,       only: amrio
-   use nasg_class,        only: nasg
+   use mie_gruneisen_class, only: mie_gruneisen
    use ideal_gas_class,   only: ideal_gas
-   use relax_ig_nasg_class, only: PThybrid
-   use safe_relax_class,  only: safe_relax
+   use safe_relax_num_class, only: safe_relax_num
    use amrpd_class,       only: amrpd,part,PART_MOVES,PART_INTEGRATES,PART_BONDS,PART_IS_DEAD
    use amrpdviz_class,    only: amrpdviz
    use pdsolver_class,    only: PD_OPEN,PD_WALL
@@ -57,6 +56,9 @@ module simulation
    real(WP), dimension(:,:), allocatable :: hsurf  !< Front-surface height h(y,z): outermost VFsolid=0.5 crossing
    logical :: couple_s2f=.true.        !< Solid->fluid (IB forcing of the flow)
    logical :: couple_f2s=.true.        !< Fluid->solid (F_fluid reaction on particles)
+   real(WP) :: pd_tstart=0.0_WP        !< Solid activation time: PD machinery (load, subcycling, deposits,
+   logical  :: pd_active=.false.       !< solid monitors) is skipped until t>=pd_tstart -- the clamped wall
+                                       !< acts as a frozen rigid body that the fluid still feels via the IB
    
    !> Visualization
    type(event) :: viz_evt
@@ -79,11 +81,11 @@ module simulation
    real(WP) :: quad_n=0.0_WP,swap_n=0.0_WP,flr_n=0.0_WP,flr_e=0.0_WP,stuck_n=0.0_WP
    
    !> Materials
-   type(nasg),      target :: water
-   type(ideal_gas), target :: gas
+   type(mie_gruneisen), target :: water
+   type(ideal_gas),     target :: gas
 
-   !> Relaxation model
-   type(safe_relax), target :: relax_model
+   !> Relaxation model (EOS-agnostic numerical p-relax)
+   type(safe_relax_num), target :: relax_model
 
    !> Flow parameters
    real(WP) :: rhoG1,pG1,u1           !< Pre-shock gas state
@@ -508,13 +510,11 @@ contains
          use string,   only: str_long
          character(len=str_long) :: message
          real(WP) :: A,B,C
-         real(WP) :: GammaL,PinfL,bL,CvL,qpL
+         real(WP) :: rho0L,c0L,s1L,s2L,s3L,Gamma0L,CvL,T0L,qL,qpL
          real(WP) :: GammaG,CvG
          real(WP) :: T_G
          ! Gas EoS parameters (ideal gas)
          call param_read('GammaG',GammaG)
-         ! Liquid EoS: gamma only, PinfL is computed below
-         call param_read('GammaL',GammaL)
          ! Shock parameters (gas phase, uses GammaG)
          call param_read('Gas Mach number',M2)
          call param_read('Shock location',Xs)
@@ -546,23 +546,29 @@ contains
          CvG=pG2/(rhoG2*(GammaG-1.0_WP))
          ! Surface tension
          call param_read('Weber number',Weber)
-         ! Liquid EoS, fit to this case's reference parameters
-         call param_read('Liquid pinf',PinfL)
-         call param_read('Liquid covolume',bL)
+         ! Liquid EoS (Mie-Gruneisen), nondimensional parameters from scripts/fit_mg.py
+         call param_read('Liquid rho0',rho0L)
+         call param_read('Liquid c0',c0L)
+         call param_read('Liquid s1',s1L)
+         call param_read('Liquid s2',s2L)
+         call param_read('Liquid s3',s3L)
+         call param_read('Liquid Gamma0',Gamma0L)
          call param_read('Liquid cv',CvL)
+         call param_read('Liquid T0',T0L)
+         call param_read('Liquid q',qL)
          call param_read('Liquid qp',qpL)
          ! Pre-shock gas temperature (ideal gas, T = p/((gamma-1)*Cv*rho))
          T_G=pG1/(rhoG1*(GammaG-1.0_WP)*CvG)
          ! Pressure equilibrium (Laplace jump): liquid pressure = gas + surface tension
          pL1=pG1+4.0_WP/Weber                   ! 3D Laplace pressure
          if (amr%nz.eq.1) pL1=pG1+2.0_WP/Weber  ! 2D Laplace pressure
-         ! Liquid density from the NASG EOS at thermal+pressure equilibrium (T_L=T_G, p=pL1) [Option A]
-         rhoL1=(pL1+PinfL)/((GammaL-1.0_WP)*CvL*T_G+bL*(pL1+PinfL))
-         density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
-         ML=1.0_WP/sqrt(GammaL*(pL1+PinfL)/(rhoL1*(1.0_WP-bL*rhoL1)))     ! diagnostic liquid Mach (Deltau=1)
-         ! Build materials: gas = ideal-gas air; liquid = NASG water
+         ! Build materials: gas = ideal-gas air; liquid = Mie-Gruneisen water
          call gas%initialize(gamma=GammaG,cv=CvG,q=0.0_WP,qp=0.0_WP,name='gas')
-         call water%initialize(gamma=GammaL,pinf=PinfL,b=bL,cv=CvL,q=0.0_WP,qp=qpL,name='water')
+         call water%initialize(rho0=rho0L,c0=c0L,s1=s1L,s2=s2L,s3=s3L,gamma0=Gamma0L,cv=CvL,T0=T0L,q=qL,qp=qpL,name='water')
+         ! Liquid state from the EOS at thermal+pressure equilibrium (T_L=T_G, p=pL1) [Option A]
+         rhoL1=water%get_rho_from_p_T(p=pL1,T=T_G,y=[1.0_WP])
+         density_ratio=rhoL1/rhoG1                                        ! diagnostic (was an input under SG)
+         ML=1.0_WP/water%get_c_from_p_rho(p=pL1,rho=rhoL1,y=[1.0_WP])     ! diagnostic liquid Mach (Deltau=1)
          ! Viscous parameters
          call param_read('Reynolds number',Reynolds)
          call param_read('Prandtl number',Prandtl)
@@ -619,18 +625,21 @@ contains
          fs%sigma=1.0_WP/Weber
          ! Use face-linear interp if 2D (divfree requires ratio=2 in all dirs)
          if (amr%nz.eq.1) fs%interp_vel=interp_face_lin
-         ! Provide pressure relaxation model (case-owned safe_relax, mirrored from
-         ! amrcomp_impact: absorb + equilibrate-with-energy-swap + equilibrium floor;
-         ! same NASG fit and nondimensionalization, so the limit values carry over)
-         call relax_model%initialize(gas=gas,liq=water); fs%relax=>relax_model
-         relax_model%model=PThybrid ! mechanical below Tratmax temperature contrast, full pT above
+         ! Provide pressure relaxation model (EOS-agnostic numerical p-relax,
+         ! ported from amrcomp_impact together with the Mie-Gruneisen liquid)
+         call relax_model%initialize(liq=water,gas=gas); fs%relax=>relax_model
          relax_model%RHOGmin=0.0_WP
          relax_model%vol=amr%cell_vol(amr%maxlvl) ! ledger units (apply runs on the finest level only)
+         fs%merge_sick=100.0_WP
          relax_model%diss_P=200.0_WP ! seed culling, high-P extreme: dissolve supercritical gas packets into the liquid (idle at Ms=1.95 unless impact compresses that far)
+         ! pT-hybrid: full thermal+mechanical relaxation where the phasic temperature contrast
+         ! exceeds Tratmax -- conservative in-cell quench of superheated sub-resolution wisps
+         ! (the PThybrid role restored, now EOS-agnostic; replaces the withdrawn diss_T)
+         relax_model%Tratmax=10.0_WP
          ! Phase limits, ONE pair per phase set in BOTH homes: the solver's clean_Q rescue
          ! (corner projection wherever the phase exists) and the model's equilibrium floor
          ! (post-relaxation lift). Ledgered in monitor/rescue.
-         fs%Pmin_liq=-0.98_WP*water%pinf ! max sustainable liquid tension
+         call param_read('Liquid Pmin',fs%Pmin_liq)   ! tension floor (cavitation surrogate; MG has no built-in limit)
          fs%Tmin_liq=0.1_WP              ! half ambient
          fs%Pmin_gas=1.0e-4_WP           ! corner rho*~3e-3 sets the viscous dt limit (nu=mu/rho in near-vacuum gas)
          fs%Tmin_gas=0.1_WP
@@ -705,6 +714,7 @@ contains
          call param_read('Relaxation fraction',pd%visc_lambda, default=1.0_WP)
          call param_read('Yield stretch',     pd%yield_stretch,default=0.0_WP)
          call param_read('Yield stress',      pd%sigma_yield,  default=0.0_WP)
+         call param_read('Hardening modulus', pd%hard_mod,     default=0.0_WP)
          call param_read('Element size',      pd_elem)
          call param_read('Horizon',           pd%delta,        default=3.0125_WP*pd_elem)
          pd%dV=pd_elem**3
@@ -735,6 +745,9 @@ contains
          ! Two-way coupling switches (default on)
          call param_read('Couple solid to fluid',couple_s2f,default=.true.)
          call param_read('Couple fluid to solid',couple_f2s,default=.true.)
+         ! Solid activation time (default 0 = active from the start): before this the
+         ! wall is a frozen rigid body and the per-step PD machinery is skipped
+         call param_read('PD start time',pd_tstart,default=0.0_WP)
       end block init_solid
 
       ! Initialize regridding
@@ -978,6 +991,7 @@ contains
          call pdfile%add_column(n_sub,'Subcycles')
          call pdfile%add_column(pd%CFLe,'CFLe')
          call pdfile%add_column(pd%Umax,'Umax')
+         call pdfile%add_column(pd%EPmax,'EpsPmax')
          call pdfile%add_column(Fib(1),'Ffluid_x')
          call pdfile%add_column(Fib(2),'Ffluid_y')
          call pdfile%add_column(Fpart(1),'Fpart_x')
@@ -1062,30 +1076,49 @@ contains
          call fs%get_primitive(Q=fs%Q)
          ! ======================================================================================
 
-         ! Fluid->solid load: divergence of the fluid stress tensor -> F_fluid.
-         ! (get_force uses the current-grid viscosities from the previous step.)
-         call get_force()
-         if (couple_f2s) call get_fluid_force()
+         ! Solid activation gate: before 'PD start time' the clamped wall is a frozen
+         ! rigid body (Usolid=0, solid VF static from the init deposit) -- the fluid
+         ! load, PD subcycling, deposits, and solid monitors below are skipped, while
+         ! the fluid keeps feeling the wall via apply_ib_forcing/extend_ib_vf
+         if (.not.pd_active.and.time%t.ge.pd_tstart) then
+            activate_pd: block
+               use messager, only: log
+               use string,   only: str_medium
+               character(len=str_medium) :: msg
+               pd_active=.true.
+               if (pd_tstart.gt.0.0_WP) then
+                  write(msg,'(a,es12.5)') '[amrpd_impact] PD solver activated at t = ',time%t
+                  call log(msg)
+               end if
+            end block activate_pd
+         end if
 
-         ! Sub-cycle the PD solid over the fluid step with F_fluid held fixed.
-         ! Contact handles solid self-contact inside the stepping solver.
-         pd_subcycle: block
-            real(WP) :: dt_sub,cfl_pd
-            integer :: i_sub
-            ! Deliver F_fluid to the solver (state write-back is an identity
-            ! here -- the solver has not advanced since the last exchange)
-            call pd%exchange_solid()
-            call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
-            n_sub=1
-            if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
-            dt_sub=time%dt/real(n_sub,WP)
-            do i_sub=1,n_sub; call pd%advance(dt_sub); end do
-            ! Pull the post-subcycle state onto the grid face for regrid
-            ! tagging and the deposits below
-            call pd%exchange_solid()
-            call pd%redistribute()
-            call pd%update_VF()
-         end block pd_subcycle
+         if (pd_active) then
+            ! Fluid->solid load: divergence of the fluid stress tensor -> F_fluid.
+            ! (get_force uses the current-grid viscosities from the previous step.)
+            call get_force()
+            if (couple_f2s) call get_fluid_force()
+
+            ! Sub-cycle the PD solid over the fluid step with F_fluid held fixed.
+            ! Contact handles solid self-contact inside the stepping solver.
+            pd_subcycle: block
+               real(WP) :: dt_sub,cfl_pd
+               integer :: i_sub
+               ! Deliver F_fluid to the solver (state write-back is an identity
+               ! here -- the solver has not advanced since the last exchange)
+               call pd%exchange_solid()
+               call pd%get_cfl(dt=time%dt,cfl=cfl_pd)
+               n_sub=1
+               if (cfl_pd.gt.time%cflmax) n_sub=ceiling(cfl_pd/time%cflmax)
+               dt_sub=time%dt/real(n_sub,WP)
+               do i_sub=1,n_sub; call pd%advance(dt_sub); end do
+               ! Pull the post-subcycle state onto the grid face for regrid
+               ! tagging and the deposits below
+               call pd%exchange_solid()
+               call pd%redistribute()
+               call pd%update_VF()
+            end block pd_subcycle
+         end if
 
          ! Regrid if event triggers
          if (regrid_evt%occurs()) then
@@ -1093,7 +1126,10 @@ contains
             call gridfile%write()
          end if
 
-         ! Refresh IB coupling fields on the (possibly new) grid for the next step
+         ! Refresh IB coupling fields on the (possibly new) grid for the next step.
+         ! NOT gated by pd_active: Usolid/VFf are interp_none WORKSPACE fields --
+         ! remade levels come back UNINITIALIZED after regrid, so they must be
+         ! rebuilt every step even while the solid is frozen (cheap vs the subcycle)
          call deposit_solid_velocity()
          call update_VFf()
 
@@ -1127,10 +1163,12 @@ contains
             end block save_checkpoint
          end if
 
-         ! Perform and output monitoring
+         ! Perform and output monitoring (solid columns hold their init values while frozen)
          call fs%get_info()
-         call pd%get_info()
-         call get_crater()
+         if (pd_active) then
+            call pd%get_info()
+            call get_crater()
+         end if
          relax_census: block
             use mpi_f08,  only: MPI_ALLREDUCE,MPI_IN_PLACE,MPI_SUM
             use parallel, only: MPI_REAL_WP
