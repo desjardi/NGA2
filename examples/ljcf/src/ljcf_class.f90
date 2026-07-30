@@ -795,7 +795,7 @@ contains
                      do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
                         if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
                            np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                           this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+                           this%smesh%var(2,np)=0.0_WP  !this%vf%thickness(i,j,k)
                         end if
                      end do
                   end do

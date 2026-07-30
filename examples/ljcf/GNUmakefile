@@ -11,7 +11,7 @@ USE_IRL   = TRUE
 PROFILE   = FALSE
 DEBUG     = FALSE
 COMP      = gnu
-EXEBASE   = nga
+EXEBASE   = nga2
 
 # Directories that contain user-defined code
 Udirs   := src
