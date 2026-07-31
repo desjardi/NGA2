@@ -15,7 +15,7 @@ nz : 32 !256
 Jet diameter :         1
 Liquid Volume :        20.322  # Vol/D^3 = 3.2e-3 m^3 / (0.054 m)^3
 Jet location :         0
-Reynolds number :      4000 #######39600 # rho_g*u*D/mu_g = 1.2 kg/m^3 * 11 m/s * 0.054 m / 1.8e-5 Pa-s
+Reynolds number :      39600 # rho_g*u*D/mu_g = 1.2 kg/m^3 * 11 m/s * 0.054 m / 1.8e-5 Pa-s
 Weber number :         108.9 # rho_g*u^2*D/sigma = 1.2 kg/m^3 * (11 m/s)^2 * 0.054 m / 0.072 N/m 
 Froude number :        15.12 # u/sqrt(g*D) = 11 m/s / sqrt(9.8 m/s^2 0.054 m)
 Viscosity ratio :      55.55
@@ -35,6 +35,7 @@ Pressure iteration : 100
 # Data output
 Ensight output period : 1
 Restart output period : 1
+Drop stats output period : 1
 
 # Data restart
 #Restart from : 1.00000E+01
