@@ -1,0 +1,24 @@
+# Parallelization
+Partition :	1 1 1 
+
+# Mesh definition
+Base nx : 8
+Base ny : 8
+Base nz : 8
+Max level : 4
+
+# Ellipsoid properties
+# Droplet case : Cylinder
+Droplet case : Random
+
+# Time integration
+Max timestep size : 2.5e-3
+Max cfl number :    #0.9
+Max time :          30.0e-3
+
+# Ensight output
+Ensight output period : 2.5e-3
+Restart output period : 10e-3
+
+# Drop analysis
+Drop analysis period :  5e-2

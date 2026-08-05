@@ -33,5 +33,5 @@ Ensight output period : 1
 Restart output period : 10
 
 # Data restart
-Restart from : 3.00000E+01
-HIT restart :  hit_128
+#Restart from : 3.00000E+01
+#HIT restart :  hit_128

@@ -1,5 +1,5 @@
-!> Definition for a ligament atomization class
-module ligament_class
+!> Definition for a ljcf atomization class
+module ljcf_class
    use precision,         only: WP
    use config_class,      only: config
    use iterator_class,    only: iterator
@@ -15,15 +15,16 @@ module ligament_class
    use timer_class,       only: timer
    use pardata_class,     only: pardata
    use cclabel_class,     only: cclabel
-   use fmm_class,         only: fmm
    use irl_fortran_interface
    implicit none
    private
    
-   public :: ligament
+   public :: ljcf
+
+   integer :: ierr
    
-   !> Ligament object
-   type :: ligament
+   !> ljcf object
+   type :: ljcf
       
       !> Config
       type(config) :: cfg
@@ -35,12 +36,7 @@ module ligament_class
       !type(ddadi)       :: vs    !< DDADI solver for velocity
       type(timetracker) :: time  !< Time info
       type(cclabel)     :: ccl   !< CCLabel for local Weber number calculation
-
-      !> FMM Method
-      type(fmm)         :: fmm   !< Fast marching method for distance field
-      real(WP), dimension(:,:,:), allocatable :: G  !< FMM distance
-      real(WP) :: fmm_ndx=4 !< Number of grid cells to extend distance field
-
+      type(event)       :: drops_evt !< Event trigger for drop stats
       
       !> Ensight postprocessing
       type(surfmesh) :: smesh    !< Surface mesh for interface
@@ -50,6 +46,7 @@ module ligament_class
       !> Simulation monitor file
       type(monitor) :: mfile    !< General simulation monitoring
       type(monitor) :: cflfile  !< CFL monitoring
+      type(monitor) :: ljcf_file     !< LJCF simulation monitoring
       
       !> Work arrays
       real(WP), dimension(:,:,:), allocatable :: resU,resV,resW      !< Residuals
@@ -59,11 +56,6 @@ module ligament_class
       type(iterator) :: vof_removal_layer  !< Edge of domain where we actively remove VOF
       real(WP) :: vof_removed              !< Integral of VOF removed
       integer  :: nlayer=4                 !< Size of buffer layer for VOF removal
-
-      !> Weber number calculation parameters
-      real(WP) :: dth = 0.1_WP !< Distance threshold for Weber number calculation
-      real(WP), dimension(:), allocatable :: weber !< Weber number for each structure
-      type(monitor) :: weberfile !< Weber number monitor file
       
       !> Timing info
       type(monitor) :: timefile !< Timing monitoring
@@ -76,22 +68,28 @@ module ligament_class
       type(event)   :: save_evt
       type(pardata) :: df
       logical :: restarted
+
+      !> Problem definition
+      real(WP) :: djet, Vjet
+      real(WP), dimension(:), allocatable :: xjet
+      integer :: relax_model, nwall
+      real(WP) :: gravity, liqVol, liqVolInjected, InjectionVelocity
       
    contains
       procedure :: init     !< Initialize nozzle simulation
       procedure :: step     !< Advance nozzle simulation by one time step
       procedure :: final    !< Finalize nozzle simulation
-   end type ligament
+   end type ljcf
    
    
 contains
    
-   !> Initialization of ligament simulation
+   !> Initialization of ljcf simulation
    subroutine init(this)
       implicit none
-      class(ligament), intent(inout) :: this
+      class(ljcf), intent(inout) :: this
       
-      ! Create the ligament mesh
+      ! Create the ljcf mesh
       create_config: block
          use sgrid_class, only: cartesian,sgrid
          use param,       only: param_read
@@ -102,7 +100,7 @@ contains
          integer :: i,j,k,nx,ny,nz
          real(WP) :: Lx,Ly,Lz,xlig
          ! Read in grid definition
-         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1)); call param_read('X ligament',xlig)
+         call param_read('Lx',Lx); call param_read('nx',nx); allocate(x(nx+1)); call param_read('X ljcf',xlig)
          call param_read('Ly',Ly); call param_read('ny',ny); allocate(y(ny+1))
          call param_read('Lz',Lz); call param_read('nz',nz); allocate(z(nz+1))
          ! Create simple rectilinear grid
@@ -116,7 +114,7 @@ contains
             z(k)=real(k-1,WP)/real(nz,WP)*Lz-0.5_WP*Lz
          end do
          ! General serial grid object
-         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.true.,zper=.true.,name='Ligament')
+         grid=sgrid(coord=cartesian,no=3,x=x,y=y,z=z,xper=.false.,yper=.false.,zper=.true.,name='ljcf')
          ! Read in partition
          call param_read('Partition',partition,short='p')
          ! Create partitioned grid without walls
@@ -145,8 +143,32 @@ contains
          allocate(this%Ui  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Vi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
          allocate(this%Wi  (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
-         allocate(this%G   (this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
       end block allocate_work_arrays
+
+      ! Set up walls before solvers are initialized
+      create_walls: block
+         use param, only: param_read,param_getsize
+         integer :: i,j,k,njet
+         ! Initialize liquid jet(s)
+         call param_read('Jet diameter',this%djet)
+         njet = param_getsize('Jet location')
+         allocate(this%xjet(njet))
+         call param_read('Jet location',this%xjet)
+         call param_read('Froude number',this%gravity); this%gravity = 1.0_WP/this%gravity**2
+         call param_read('Liquid Volume',this%liqVol)
+         this%liqVolInjected = 0.0_WP
+         ! Number of wall cells
+         call param_read('Wall cells in domain', this%nwall, default=0)
+         do k=this%cfg%kmino_,this%cfg%kmaxo_
+            do j=this%cfg%jmino_,this%cfg%jmaxo_
+               do i=this%cfg%imino_,this%cfg%imaxo_
+                  if (wall(this%cfg%pgrid,i,j,k)) then
+                  this%cfg%VF(i,j,k)=0.0_WP
+                  end if
+               end do
+            end do
+         end do
+      end block create_walls
             
       ! Initialize our VOF solver and field
       create_and_initialize_vof: block
@@ -159,11 +181,11 @@ contains
          real(WP) :: vol,area
          integer, parameter :: amr_ref_lvl=4
          ! Create a VOF solver
-         call this%vf%initialize(cfg=this%cfg,reconstruction_method=r2pnet,transport_method=remap,name='VOF')
+         call this%vf%initialize(cfg=this%cfg,reconstruction_method=plicnet,transport_method=remap,name='VOF')
          this%vf%thin_thld_min=0.0_WP
          this%vf%flotsam_thld=0.0_WP
          this%vf%maxcurv_times_mesh=1.0_WP
-         ! Initialize the interface to a drop/ligament
+         ! Initialize the interface to a ljcf
          do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
             do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
                do i=this%vf%cfg%imino_,this%vf%cfg%imaxo_
@@ -178,7 +200,11 @@ contains
                   end do
                   ! Call adaptive refinement code to get volume and barycenters recursively
                   vol=0.0_WP; area=0.0_WP; v_cent=0.0_WP; a_cent=0.0_WP
-                  call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_droplet,0.0_WP,amr_ref_lvl)
+                  if (j.lt.this%vf%cfg%jmin) then
+                     call cube_refine_vol(cube_vertex,vol,area,v_cent,a_cent,levelset_halfdrop,0.0_WP,amr_ref_lvl)
+                  else
+                     ! do nothing
+                  end if
                   this%vf%VF(i,j,k)=vol/this%vf%cfg%vol(i,j,k)
                   if (this%vf%VF(i,j,k).ge.VFlo.and.this%vf%VF(i,j,k).le.VFhi) then
                      this%vf%Lbary(:,i,j,k)=v_cent
@@ -196,6 +222,30 @@ contains
          call this%vf%build_interface()
          ! Set interface planes at the boundaries
          call this%vf%set_full_bcond()
+         ! Now apply Neumann condition on interface at inlet to have proper round injection
+         neumann_irl: block
+            use irl_fortran_interface, only: getPlane,new,construct_2pt,RectCub_type,&
+            &                                setNumberOfPlanes,setPlane,matchVolumeFraction
+            real(WP), dimension(1:4) :: plane
+            type(RectCub_type) :: cell
+            call new(cell)
+            if (this%vf%cfg%iproc.eq.1) then
+               do k=this%vf%cfg%kmino_,this%vf%cfg%kmaxo_
+                  do j=this%vf%cfg%jmino_,this%vf%cfg%jmaxo_
+                     do i=this%vf%cfg%imino,this%vf%cfg%imin-1
+                        ! Extract plane data and copy in overlap
+                        plane=getPlane(this%vf%liquid_gas_interface(this%vf%cfg%imin,j,k),0)
+                        call construct_2pt(cell,[this%vf%cfg%x(i  ),this%vf%cfg%y(j  ),this%vf%cfg%z(k  )],&
+                        &                       [this%vf%cfg%x(i+1),this%vf%cfg%y(j+1),this%vf%cfg%z(k+1)])
+                        plane(4)=dot_product(plane(1:3),[this%vf%cfg%xm(i),this%vf%cfg%ym(j),this%vf%cfg%zm(k)])
+                        call setNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k),1)
+                        call setPlane(this%vf%liquid_gas_interface(i,j,k),0,plane(1:3),plane(4))
+                        call matchVolumeFraction(cell,this%vf%VF(i,j,k),this%vf%liquid_gas_interface(i,j,k))
+                     end do
+                  end do
+               end do
+            end if
+         end block neumann_irl
          ! Create discontinuous polygon mesh from IRL interface
          call this%vf%polygonalize_interface()
          ! Calculate distance from polygons
@@ -234,6 +284,11 @@ contains
          call this%fs%add_bcond(name='inflow',type=dirichlet,face='x',dir=-1,canCorrect=.false.,locator=xm_locator)
          ! Define outflow boundary condition on the right
          call this%fs%add_bcond(name='outflow',type=clipped_neumann,face='x',dir=+1,canCorrect=.true.,locator=xp_locator)
+         ! Define jet boundary condition on the bottom
+         call this%fs%add_bcond(name='jet'    ,type=dirichlet,face='y',dir=-1,canCorrect=.false.,locator=jet_bdy)
+         ! Define gravity as vector for flow solver
+         this%fs%gravity(2) = this%gravity
+
          ! Configure pressure solver
          this%ps=hypre_str(cfg=this%cfg,name='Pressure',method=pcg_pfmg2,nst=7)
          this%ps%maxlevel=16
@@ -251,6 +306,12 @@ contains
             i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
             this%fs%U(i,j,k)=1.0_WP
          end do
+         ! Apply jet velocity
+         call this%fs%get_bcond('jet',mybc)
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            this%fs%V(i,j,k)=0 ! Start with zero velocity this%Vjet 
+         end do
          ! Apply all other boundary conditions
          call this%fs%apply_bcond(this%time%t,this%time%dt)
          ! Adjust MFR for global mass balance
@@ -266,19 +327,13 @@ contains
          ! Initialize CCL
          call this%ccl%initialize(pg=this%cfg%pgrid,name='ccl')
       end block create_ccl
-
-      ! Create FMM 
-      create_fmm: block 
-         ! Initialize FMM
-         call this%fmm%initialize(pg=this%cfg,name='fmm')
-      end block create_fmm
       
       ! Handle restart/saves here
       handle_restart: block
          use param,                 only: param_read
          use string,                only: str_medium
          use filesys,               only: makedir,isdir
-         use irl_fortran_interface, only: setNumberOfPlanes,setPlane
+         use irl_fortran_interface, only: setNumberOfPlanes,setPlane 
          character(len=str_medium) :: timestamp
          integer, dimension(3) :: iopartition
          real(WP), dimension(:,:,:), allocatable :: P11,P12,P13,P14
@@ -380,7 +435,7 @@ contains
          ! Transfer polygons to smesh
          call this%vf%update_surfmesh(this%smesh)
          ! Calculate thickness
-         call this%vf%get_thickness()
+         ! call this%vf%get_thickness()
          ! Populate nplane and thickness variables
          this%smesh%var(1,:)=1.0_WP
          np=0
@@ -391,7 +446,7 @@ contains
                   do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
                      if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
                         np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                        this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+                        this%smesh%var(2,np)=0.0_WP !this%vf%thickness(i,j,k)
                      end if
                   end do
                end do
@@ -404,7 +459,7 @@ contains
       create_ensight: block
          use param, only: param_read
          ! Create Ensight output from cfg
-         this%ens_out=ensight(cfg=this%cfg,name='ligament')
+         this%ens_out=ensight(cfg=this%cfg,name='ljcf')
          ! Create event for Ensight output
          this%ens_evt=event(time=this%time,name='Ensight output')
          call param_read('Ensight output period',this%ens_evt%tper)
@@ -414,12 +469,24 @@ contains
          call this%ens_out%add_scalar('curvature',this%vf%curv)
          call this%ens_out%add_scalar('pressure',this%fs%P)
          call this%ens_out%add_surface('plic',this%smesh)
-         call this%ens_out%add_scalar('fmm_G',this%G)
          ! Output to ensight
          if (this%ens_evt%occurs()) call this%ens_out%write_data(this%time%t)
       end block create_ensight
+
+      ! Create drop statistics output event
+      create_drops_output: block
+         use param, only: param_read
+         use filesys, only: makedir,isdir
+         ! Create event for drop statistics output
+         this%drops_evt=event(time=this%time,name='Drop statistics output')
+         call param_read('Drop stats output period',this%drops_evt%tper,default=this%time%dtmax)
+         ! Create drop_stats directory if needed
+         if (this%cfg%amRoot) then
+            if (.not.isdir('drop_stats')) call makedir('drop_stats')
+         end if
+      end block create_drops_output
       
-      
+   
       ! Create a monitor file
       create_monitor: block
          ! Prepare some info about fields
@@ -457,6 +524,13 @@ contains
          call this%cflfile%add_column(this%fs%CFLv_y,'Viscous yCFL')
          call this%cflfile%add_column(this%fs%CFLv_z,'Viscous zCFL')
          call this%cflfile%write()
+         ! Create LJCF monitor
+         this%ljcf_file=monitor(this%fs%cfg%amRoot,'ljcf')
+         call this%ljcf_file%add_column(this%time%n,'Timestep number')
+         call this%ljcf_file%add_column(this%time%t,'Time')
+         call this%ljcf_file%add_column(this%liqVolInjected,'Liq Vol Injected')
+         call this%ljcf_file%add_column(this%InjectionVelocity,'Injection Velocity')
+         call this%ljcf_file%write()
       end block create_monitor
       
       
@@ -513,24 +587,51 @@ contains
       end function vof_removal_layer_locator
       
       
-      !> Function that defines a level set function for a droplet
-      function levelset_droplet(xyz,t) result(G)
+      !> Function that defines a level set function for a half droplet
+      function levelset_halfdrop(xyz,t) result(G)
          implicit none
          real(WP), dimension(3),intent(in) :: xyz
          real(WP), intent(in) :: t
          real(WP) :: G
-         G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2+xyz(3)**2)
-      end function levelset_droplet
-      
-      
-      !> Function that defines a level set function for a ligament
-      function levelset_ligament(xyz,t) result(G)
+         G=0.5_WP*this%djet-sqrt(xyz(1)**2+(xyz(2)-this%cfg%y(this%cfg%jmin))**2+xyz(3)**2)
+      end function levelset_halfdrop
+
+      !> Function that localizes the jet(s) initial location
+      function jet(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
          implicit none
-         real(WP), dimension(3),intent(in) :: xyz
-         real(WP), intent(in) :: t
-         real(WP) :: G
-         G=0.5_WP-sqrt(xyz(1)**2+xyz(2)**2)
-      end function levelset_ligament
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         real(WP), dimension(3) :: xyz
+         logical :: isIn
+         isIn=.false.
+         xyz(1)=pg%xm(i); xyz(2)=pg%ym(j); xyz(3)=pg%zm(k)
+         if (levelset_halfdrop(xyz,0.0_WP).gt.0.0_WP) isIn=.true.
+      end function jet
+      
+      !> Function that localizes the walls surrounding the jets
+      function wall(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         logical :: isIn
+         isIn=.false.
+         if (j.le.pg%jmin-1+this%nwall.and.(.not.jet(pg,i,j,k))) isIn=.true.
+      end function wall
+      
+      !> Function that localizes the jet(s) BCs at edge of domain
+      function jet_bdy(pg,i,j,k) result(isIn)
+         use pgrid_class, only: pgrid
+         implicit none
+         class(pgrid), intent(in) :: pg
+         integer, intent(in) :: i,j,k
+         real(WP), dimension(3) :: xyz
+         logical :: isIn
+         isIn=.false.
+         xyz(1)=pg%xm(i); xyz(2)=pg%y(j); xyz(3)=pg%zm(k)
+         if (j.eq.pg%jmin.and.jet(pg,i,j,k)) isIn=.true.
+      end function jet_bdy
       
 
    end subroutine init
@@ -540,7 +641,7 @@ contains
    subroutine step(this)
       use tpns_class, only: arithmetic_visc
       implicit none
-      class(ligament), intent(inout) :: this
+      class(ljcf), intent(inout) :: this
       
       ! Reset all timers and start timestep timer
       call this%tstep%reset()
@@ -553,10 +654,37 @@ contains
       call this%fs%get_cfl(this%time%dt,this%time%cfl)
       call this%time%adjust_dt()
       call this%time%increment()
-      
+
+      ! Apply jet velocity
+      apply_bc: block
+         use tpns_class, only: bcond
+         use mpi_f08,  only: MPI_ALLREDUCE,MPI_SUM,MPI_IN_PLACE
+         use parallel, only: MPI_REAL_WP
+         type(bcond), pointer :: mybc
+         real(WP) :: liqVolInjected_dt
+         integer :: n,i,j,k
+         ! Compute injection velocity
+         if (this%liqVolInjected .lt. this%liqVol) then
+            this%InjectionVelocity=this%gravity*this%time%t  ! Velocity increases linearly with time
+         else
+            this%InjectionVelocity=0.0_WP                    ! Velocity stops once volume is reached
+         end if
+         ! Apply injection velocity to the jet boundary condition 
+         call this%fs%get_bcond('jet',mybc)
+         liqVolInjected_dt = 0.0_WP
+         do n=1,mybc%itr%no_
+            i=mybc%itr%map(1,n); j=mybc%itr%map(2,n); k=mybc%itr%map(3,n)
+            
+            this%fs%V(i,j,k) = this%InjectionVelocity
+            liqVolInjected_dt = liqVolInjected_dt + this%fs%V(i,j,k)*this%vf%VF(i,j-1,k)*this%cfg%dx(i)*this%cfg%dz(k)*this%time%dt
+         end do
+         call MPI_ALLREDUCE(MPI_IN_PLACE,liqVolInjected_dt,1,MPI_REAL_WP,MPI_SUM,this%cfg%comm,ierr)
+         this%liqVolInjected = this%liqVolInjected + liqVolInjected_dt
+      end block apply_bc
+
       ! Remember old VOF
       this%vf%VFold=this%vf%VF
-      
+
       ! Remember old velocity
       this%fs%Uold=this%fs%U
       this%fs%Vold=this%fs%V
@@ -589,6 +717,9 @@ contains
 
          ! Explicit calculation of drho*u/dt from NS
          call this%fs%get_dmomdt(this%resU,this%resV,this%resW)
+
+         ! Add momentum source terms
+         call this%fs%addsrc_gravity(this%resU,this%resV,this%resW)
          
          ! Assemble explicit residual
          this%resU=-2.0_WP*this%fs%rho_U*this%fs%U+(this%fs%rho_Uold+this%fs%rho_U)*this%fs%Uold+this%time%dt*this%resU
@@ -614,8 +745,8 @@ contains
          call this%fs%update_laplacian()
          call this%fs%correct_mfr()
          call this%fs%get_div()
-         !call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
-         call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         call this%fs%add_surface_tension_jump(dt=this%time%dt,div=this%fs%div,vf=this%vf)
+         ! call this%fs%add_surface_tension_jump_twoVF(dt=this%time%dt,div=this%fs%div,vf=this%vf)
          this%fs%psolv%rhs=-this%fs%cfg%vol*this%fs%div/this%time%dt
          this%fs%psolv%sol=0.0_WP
          call this%fs%psolv%solve()
@@ -660,36 +791,23 @@ contains
          call this%vf%clean_irl_and_band()
       end block remove_vof
 
-      ! Compute Local Weber number
-      weber_number: block 
+      ! Analyze drops 
+      analyze_drops: block
          use mpi_f08,   only: MPI_ALLREDUCE,MPI_SUM,MPI_MAX,MPI_IN_PLACE
          use parallel,  only: MPI_REAL_WP
          use mathtools, only: pi
+         use string,    only: str_medium
          real(WP), dimension(:)    , allocatable :: dvol
          real(WP), dimension(:,:)  , allocatable :: dpos
          real(WP), dimension(:,:)  , allocatable :: dvel
          real(WP), dimension(:,:,:), allocatable :: dmoi
-         real(WP), dimension(:)    , allocatable :: drem
          real(WP), dimension(:,:)  , allocatable :: dgvel
          real(WP), dimension(:)    , allocatable :: weights
          integer :: n,m,ierr,i,j,k,nmax
-         real(WP) :: x,y,z,x0,y0,z0,diam,ecc,lmax,lmid,lmin
-         logical :: transfer
-         ! Moment of inertia calculation using lapack
-         real(WP), dimension(:), allocatable, save :: work !< Saved!
-         integer, save :: lwork                            !< Saved!
-         real(WP), dimension(1) :: lwork_query
-         real(WP), dimension(3) :: d
-         real(WP), dimension(3,3) :: A
-         integer :: info
-         
-         ! Query optimal work array size
-         if (.not.allocated(work)) then
-            call dsyev('V','U',3,A,3,d,lwork_query,-1,info)
-            lwork=int(lwork_query(1)); allocate(work(lwork))
-         end if
-         
-          ! Start by performing a CCL
+         integer :: iunit
+         real(WP) :: x,y,z,x0,y0,z0
+         character(len=str_medium) :: timestamp
+         ! Start by performing a CCL
          call this%ccl%build(make_label,same_label)
 
          ! Allocate droplet stats arrays
@@ -697,13 +815,9 @@ contains
          allocate(dpos(1:this%ccl%nstruct,1:3    )); dpos=0.0_WP
          allocate(dvel(1:this%ccl%nstruct,1:3    )); dvel=0.0_WP
          allocate(dmoi(1:this%ccl%nstruct,1:3,1:3)); dmoi=0.0_WP
-         allocate(drem(1:this%ccl%nstruct        )); drem=0.0_WP
          allocate(dgvel(1:this%ccl%nstruct,1:3   )); dgvel=0.0_WP
          allocate(weights(1:this%ccl%nstruct     )); weights=0.0_WP
 
-         if (allocated(this%weber)) deallocate(this%weber)
-         allocate(this%weber(1:this%ccl%nstruct))
-      
          ! First pass to accumulate volume, position, and velocity
          do n=1,this%ccl%nstruct
             ! Loop over cells in structure
@@ -720,18 +834,11 @@ contains
                dvol(n  )=dvol(n  )+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)
                dpos(n,:)=dpos(n,:)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*[x,y,z]
                dvel(n,:)=dvel(n,:)+this%cfg%vol(i,j,k)*this%vf%VF(i,j,k)*[this%Ui(i,j,k),this%Vi(i,j,k),this%Wi(i,j,k)]
-               ! Check if drop touches auto-transfer layer
-               if (i.ge.this%vf%cfg%imax-this%nlayer.or.&
-               &   j.le.this%vf%cfg%jmin+this%nlayer.or.&
-               &   j.ge.this%vf%cfg%jmax-this%nlayer.or.&
-               &   k.le.this%vf%cfg%kmin+this%nlayer.or.&
-               &   k.ge.this%vf%cfg%kmax-this%nlayer) drem(n)=1.0_WP
             end do
-         end do
+         end do   
          call MPI_ALLREDUCE(MPI_IN_PLACE,dvol,1*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,dpos,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
          call MPI_ALLREDUCE(MPI_IN_PLACE,dvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-         call MPI_ALLREDUCE(MPI_IN_PLACE,drem,1*this%ccl%nstruct,MPI_REAL_WP,MPI_MAX,this%vf%cfg%comm,ierr)
 
          ! Second pass to accumulate moment of inertia
          do n=1,this%ccl%nstruct
@@ -770,183 +877,19 @@ contains
             ! Get drop velocity
             dvel(n,:)=dvel(n,:)/dvol(n)
          end do
-         
-         ! Compute signed distance function to gas-liquid interface 
-         fmm_build: block 
-            integer :: i,j,k
-            real(WP) :: Gmax
-            integer :: ni
-            real(WP), dimension(3) :: pos,nearest_pt
-            ! Compute maximum distance to extend G 
-            call this%cfg%maximum(this%cfg%meshsize,Gmax); Gmax = Gmax * this%fmm_ndx
-            do k=this%cfg%kmino_,this%cfg%kmaxo_
-               do j=this%cfg%jmino_,this%cfg%jmaxo_
-                  do i=this%cfg%imino_,this%cfg%imaxo_
-                     if (this%vf%VF(i,j,k).le.this%vf%VFmin) then
-                        ! Gas
-                        this%G(i,j,k) = -Gmax
-                     elseif (this%vf%VF(i,j,k).ge.this%vf%VFmax) then
-                        ! Liquid
-                        this%G(i,j,k) = +Gmax
-                     else
-                        ! PLIC
-                        pos=[this%cfg%xm(i),this%cfg%ym(j),this%cfg%zm(k)]
-                        this%G(i,j,k)=huge(1.0_WP)
-                        ! Compute distance
-                        do ni=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
-                           if (getNumberOfVertices(this%vf%interface_polygon(ni,i,j,k)).ne.0) then
-                              nearest_pt=calculateNearestPtOnSurface(this%vf%interface_polygon(ni,i,j,k),pos)
-                              nearest_pt=pos-nearest_pt
-                             this%G(i,j,k)=min(this%G(i,j,k),dot_product(nearest_pt,nearest_pt))
-                           end if
-                        end do
-                        this%G(i,j,k)=sqrt(this%G(i,j,k))
-                        ! Check if inside or outside
-                        if (.not.isPtInt(pos,this%vf%liquid_gas_interface(i,j,k))) this%G(i,j,k) = -this%G(i,j,k)
-                     end if
-                  end do
-               end do
-            end do
-            call this%fmm%build(this%G,Gmax,this%cfg%VF)
-         end block fmm_build
 
-         ! Compute average gas velocity around each structure
-         avg_gas_velocity: block
-            integer :: n,m,i,j,k,ii,jj,kk,d
-            logical, dimension(:,:,:), allocatable :: cell_tag
-            allocate(cell_tag(this%cfg%imino_:this%cfg%imaxo_,this%cfg%jmino_:this%cfg%jmaxo_,this%cfg%kmino_:this%cfg%kmaxo_))
+         ! Write drop statistics
+         if (this%drops_evt%occurs().and.this%cfg%amRoot) then
+            write(timestamp,'(es12.5)') this%time%t
+            open(newunit=iunit,file='drop_stats/drop_stats_'//trim(adjustl(timestamp))//'.dat',status='replace')
+            write(iunit,'(A)') '# DropID Volume X Y Z U V W Ixx Iyy Izz Ixy Ixz Iyz'
             do n=1,this%ccl%nstruct
-               cell_tag(:,:,:) = .false.
-               ! Loop over cells in structure
-               do m=1,this%ccl%struct(n)%n_ 
-                  ! Get cell indices
-                  i=this%ccl%struct(n)%map(1,m)
-                  j=this%ccl%struct(n)%map(2,m)
-                  k=this%ccl%struct(n)%map(3,m)
-                  ! Looping over surrounding cells
-                  do ii = i-2,i+2
-                     do jj = j-2,j+2
-                        do kk = k-2,k+2
-                           ! Ensure not double counting cells
-                           if (cell_tag(ii,jj,kk)) cycle
-                           ! Sum velocity*Gas_vol and Gas_vol
-                           if ((this%vf%VF(ii,jj,kk)).le.0.5_WP) then
-                              dgvel(n,1) = dgvel(n,1) + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              dgvel(n,2) = dgvel(n,2) + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              dgvel(n,3) = dgvel(n,3) + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1))*this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                              weights(n) = weights(n) +                                                   this%cfg%vol(ii,jj,kk)*(1.0_WP-this%vf%VF(ii,jj,kk))
-                           end if
-                           cell_tag(ii,jj,kk) = .true.
-                        end do
-                     end do
-                  end do
-               end do
+               write(iunit,'(I6,1X,E12.5,1X,3E12.5,1X,3E12.5,1X,6E12.5,1X,E12.5)') n,dvol(n),dpos(n,1),dpos(n,2),dpos(n,3),&
+               & dvel(n,1),dvel(n,2),dvel(n,3),dmoi(n,1,1),dmoi(n,2,2),dmoi(n,3,3),dmoi(n,1,2),dmoi(n,1,3),dmoi(n,2,3)
             end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dgvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,weights,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            ! Normalize by volume
-            do d=1,3
-               dgvel(:,d) = dgvel(:,d) / weights(:)
-            end do
-         end block avg_gas_velocity
-
-         ! Compute velocity from upstream sampling location
-         upstream_velocity: block
-            integer :: d
-            real(WP) :: Vmag,Deq,dist
-            real(WP), dimension(3) :: dir,sloc
-            real(WP) :: W_location,W_structure
-            do n=1,this%ccl%nstruct
-               ! Compute velocity magnitude
-               Vmag = sqrt((dgvel(n,1))**2.0_WP + (dgvel(n,2))**2.0_WP + (dgvel(n,3))**2.0_WP)
-            
-               ! Direction is unit vector in negative average velocity direction
-               dir(:) = dgvel(n,:) / Vmag
-               
-               ! Calculating equivalent diameter of structure
-               Deq = ((dvol(n) * 6.0_WP)/Pi)**(1.0_WP/3.0_WP)
-
-               ! Calculating sampling location based on centroid of structure and direction
-               sloc(:) = dpos(n,:) - Deq * dir(:)
-
-               ! Reset averages and weight for this structure
-               dgvel(n,:)   = 0.0_WP
-               weights(n) = 0.0_WP
-
-               ! Compute gas velocity at sampling location with 
-               ! Gaussian weighting and distance from structure weighting 
-               do i = this%vf%cfg%imin_,this%vf%cfg%imax_ 
-                  do j = this%vf%cfg%jmin_,this%vf%cfg%jmax_
-                     do k = this%vf%cfg%kmin_,this%vf%cfg%kmax_ 
-                        ! Ignore cells with mostly liquid 
-                        if (this%vf%VF(i,j,k).gt.0.5_WP) cycle 
-                        
-                        !Calculate weights for this cell
-                        dist = sqrt((sloc(1)-this%cfg%xm(i))**2 + (sloc(2)-this%cfg%ym(j))**2 + (sloc(3)-this%cfg%zm(k))**2)
-                        W_location  = exp(-(dist**2/(0.5_WP*Deq**2))) ! Gaussian weight from sampling location
-                        W_structure = min(1.0_WP,abs(this%G(i,j,k))/this%dth) ! Weight based on distance to structures
-                        ! Compute average velocity
-                        dgvel(n,1) = dgvel(n,1) + sum(this%fs%itpu_x(:,i,j,k)*this%fs%U(i:i+1,j,k)) * W_location * W_structure
-                        dgvel(n,2) = dgvel(n,2) + sum(this%fs%itpv_y(:,i,j,k)*this%fs%V(i,j:j+1,k)) * W_location * W_structure
-                        dgvel(n,3) = dgvel(n,3) + sum(this%fs%itpw_z(:,i,j,k)*this%fs%W(i,j,k:k+1)) * W_location * W_structure
-                        weights(n) = weights(n) +                                                     W_location * W_structure
-                     end do 
-                  end do
-               end do
-            end do
-            call MPI_ALLREDUCE(MPI_IN_PLACE,dgvel,3*this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            call MPI_ALLREDUCE(MPI_IN_PLACE,weights,this%ccl%nstruct,MPI_REAL_WP,MPI_SUM,this%vf%cfg%comm,ierr)
-            ! Calculate weighted velocities
-            do d=1,3
-               dgvel(:,d) = dgvel(:,d) / weights(:)
-            end do
-         end block upstream_velocity
-
-         compute_weber: block 
-            real(WP) :: slip_vel, Deq
-            do n=1,this%ccl%nstruct
-               slip_vel = sqrt((dgvel(n,1)-dvel(n,1))**2.0_WP + (dgvel(n,2)-dvel(n,2))**2.0_WP + (dgvel(n,3)-dvel(n,3))**2.0_WP)
-               Deq = ((dvol(n) * 6.0_WP)/Pi)**(1.0_WP/3.0_WP)
-               this%weber(n) = this%fs%rho_g * slip_vel**2 * Deq / this%fs%sigma
-            end do
-         end block compute_weber
-
-         write_stats: block
-            use monitor_class, only: iformat,rformat
-            use string,    only: str_medium
-            character(len=str_medium) :: filename,struct_name
-            ! Create a file to write Weber numbers
-            write(filename, rformat) this%time%t
-            filename = 'structStats_'//trim(adjustl(filename))
-            this%weberfile=monitor(this%fs%cfg%amRoot,filename)
-            ! Add columns to the file
-            do n=1,this%ccl%nstruct
-               call this%weberfile%add_column(n,'Structure ID')
-               call this%weberfile%add_column(this%weber(n),'Weber Number')
-               call this%weberfile%add_column(dvol(n),'Drop Volume')  
-               call this%weberfile%add_column(dpos(n,1),'X Drop Pos')
-               call this%weberfile%add_column(dpos(n,2),'Y Drop Pos')
-               call this%weberfile%add_column(dpos(n,3),'Z Drop Pos')
-               call this%weberfile%add_column(dvel(n,1),'X Drop Vel')
-               call this%weberfile%add_column(dvel(n,2),'Y Drop Vel') 
-               call this%weberfile%add_column(dvel(n,3),'Z Drop Vel')
-               call this%weberfile%add_column(dgvel(n,1),'X Gas Vel')
-               call this%weberfile%add_column(dgvel(n,2),'Y Gas Vel')
-               call this%weberfile%add_column(dgvel(n,3),'Z Gas Vel')
-               call this%weberfile%add_column(dmoi(n,1,1),'Ixx')
-               call this%weberfile%add_column(dmoi(n,2,2),'Iyy')
-               call this%weberfile%add_column(dmoi(n,3,3),'Izz')
-               call this%weberfile%add_column(dmoi(n,1,2),'Ixy')
-               call this%weberfile%add_column(dmoi(n,1,3),'Ixz')
-               call this%weberfile%add_column(dmoi(n,2,3),'Iyz')
-               ! Write the data for this structure
-               call this%weberfile%write()
-            end do
-            ! Close file
-            call this%weberfile%close()
-         end block write_stats
-         
-      end block weber_number
+            close(iunit)
+         end if
+      end block analyze_drops
       
       ! Output to ensight
       if (this%ens_evt%occurs()) then
@@ -966,7 +909,7 @@ contains
                      do nplane=1,getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k))
                         if (getNumberOfVertices(this%vf%interface_polygon(nplane,i,j,k)).gt.0) then
                            np=np+1; this%smesh%var(1,np)=real(getNumberOfPlanes(this%vf%liquid_gas_interface(i,j,k)),WP)
-                           this%smesh%var(2,np)=this%vf%thickness(i,j,k)
+                           this%smesh%var(2,np)=0.0_WP  !this%vf%thickness(i,j,k)
                         end if
                      end do
                   end do
@@ -985,6 +928,7 @@ contains
       call this%mfile%write()
       call this%cflfile%write()
       call this%timefile%write()
+      call this%ljcf_file%write()
       
       ! Finally, see if it's time to save restart files
       if (this%save_evt%occurs()) then
@@ -1060,6 +1004,11 @@ contains
       logical function same_label(i1,j1,k1,i2,j2,k2)
          implicit none
          integer, intent(in) :: i1,j1,k1,i2,j2,k2
+         if (this%vf%VF(i1,j1,k1).gt.0.0_WP .and. this%vf%VF(i2,j2,k2).gt.0.0_WP) then
+            same_label=.true.
+         else
+             same_label=.false.
+         end if
          same_label=.true.
       end function same_label
       
@@ -1069,7 +1018,7 @@ contains
    !> Finalize nozzle simulation
    subroutine final(this)
       implicit none
-      class(ligament), intent(inout) :: this
+      class(ljcf), intent(inout) :: this
       
       ! Deallocate work arrays
       deallocate(this%resU,this%resV,this%resW,this%Ui,this%Vi,this%Wi)
@@ -1077,4 +1026,4 @@ contains
    end subroutine final
    
    
-end module ligament_class
+end module ljcf_class

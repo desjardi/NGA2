@@ -3028,9 +3028,9 @@ contains
       
       ! If no implicit solver available, just divide by density and return
       if (.not.associated(this%implicit)) then
-         resU=resU/this%rho_U
-         resV=resV/this%rho_V
-         resW=resW/this%rho_W
+         resU=resU/max(epsilon(0.0_WP),this%rho_U)
+         resV=resV/max(epsilon(0.0_WP),this%rho_V)
+         resW=resW/max(epsilon(0.0_WP),this%rho_W)
          call this%cfg%sync(resU)
          call this%cfg%sync(resV)
          call this%cfg%sync(resW)

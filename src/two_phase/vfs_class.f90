@@ -806,6 +806,7 @@ contains
    !> Calculate the new VF based on U/V/W and dt
    subroutine advance(this,dt,U,V,W)
       implicit none
+      integer :: ierr
       class(vfs), intent(inout) :: this
       real(WP), intent(inout) :: dt  !< Timestep size over which to advance
       real(WP), dimension(this%cfg%imino_:,this%cfg%jmino_:,this%cfg%kmino_:), intent(inout) :: U     !< Needs to be (imino_:imaxo_,jmino_:jmaxo_,kmino_:kmaxo_)
@@ -823,7 +824,6 @@ contains
       case (remap_storage)
          call this%transport_remap_storage(dt,U,V,W)
       end select
-      
       ! Advect interface polygons
       call this%advect_interface(dt,U,V,W)
       
@@ -2875,7 +2875,6 @@ contains
          
          ! Collect maximum residual and increment iteration counter
          call MPI_ALLREDUCE(MPI_IN_PLACE,res,1,MPI_REAL_WP,MPI_MAX,this%cfg%comm,ierr); ite=ite+1
-         if (this%cfg%amRoot) print*,'ite=',ite,'residual=',res
          
          ! Synchronize across boundaries
          call this%sync_interface()
@@ -3821,6 +3820,7 @@ contains
    !> Here, only mask=1 is skipped (i.e., real walls), so bconds should be handled
    subroutine polygonalize_interface(this)
       implicit none
+      integer :: ierr
       class(vfs), intent(inout) :: this
       integer :: i,j,k,n
       real(WP) :: tsd
@@ -3872,7 +3872,7 @@ contains
             end do
          end do
       end do
-      
+
       ! Find inferface between filled and empty cells on y-face
       do k=this%cfg%kmino_,this%cfg%kmaxo_
          do j=this%cfg%jmino_+1,this%cfg%jmaxo_

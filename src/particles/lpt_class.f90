@@ -296,8 +296,8 @@ contains
          do j=self%cfg%jmino_,self%cfg%jmaxo_
             do i=self%cfg%imin_,self%cfg%imax_
                do l=-1,+2
-                  if ((self%cfg%VF(i+l-1,j,k).eq.0.0_WP.and.self%cfg%VF(i+l,j,k).eq.1.0_WP).or.&
-                  &   (self%cfg%VF(i+l-1,j,k).eq.1.0_WP.and.self%cfg%VF(i+l,j,k).eq.0.0_WP)) then
+                  if ((self%cfg%VF(max(self%cfg%imino_,i+l-1),j,k).eq.0.0_WP.and.self%cfg%VF(min(self%cfg%imaxo_,i+l),j,k).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(max(self%cfg%imino_,i+l-1),j,k).eq.1.0_WP.and.self%cfg%VF(min(self%cfg%imaxo_,i+l),j,k).eq.0.0_WP)) then
                      self%xwall(i,j,k)=min(self%xwall(i,j,k),self%cfg%x(i+l))
                   end if
                end do
@@ -310,8 +310,8 @@ contains
          do j=self%cfg%jmin_,self%cfg%jmax_
             do i=self%cfg%imino_,self%cfg%imaxo_
                do l=-1,+2
-                  if ((self%cfg%VF(i,j+l-1,k).eq.0.0_WP.and.self%cfg%VF(i,j+l,k).eq.1.0_WP).or.&
-                  &   (self%cfg%VF(i,j+l-1,k).eq.1.0_WP.and.self%cfg%VF(i,j+l,k).eq.0.0_WP)) then
+                  if ((self%cfg%VF(i,max(self%cfg%jmino_,j+l-1),k).eq.0.0_WP.and.self%cfg%VF(i,min(self%cfg%jmaxo_,j+l),k).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(i,max(self%cfg%jmino_,j+l-1),k).eq.1.0_WP.and.self%cfg%VF(i,min(self%cfg%jmaxo_,j+l),k).eq.0.0_WP)) then
                      self%ywall(i,j,k)=min(self%ywall(i,j,k),self%cfg%y(j+l))
                   end if
                end do
@@ -324,8 +324,8 @@ contains
          do j=self%cfg%jmino_,self%cfg%jmaxo_
             do i=self%cfg%imino_,self%cfg%imaxo_
                do l=-1,+2
-                  if ((self%cfg%VF(i,j,k+l-1).eq.0.0_WP.and.self%cfg%VF(i,j,k+l).eq.1.0_WP).or.&
-                  &   (self%cfg%VF(i,j,k+l-1).eq.1.0_WP.and.self%cfg%VF(i,j,k+l).eq.0.0_WP)) then
+                  if ((self%cfg%VF(i,j,max(self%cfg%kmino_,k+l-1)).eq.0.0_WP.and.self%cfg%VF(i,j,min(self%cfg%kmaxo_,k+l)).eq.1.0_WP).or.&
+                  &   (self%cfg%VF(i,j,max(self%cfg%kmino_,k+l-1)).eq.1.0_WP.and.self%cfg%VF(i,j,min(self%cfg%kmaxo_,k+l)).eq.0.0_WP)) then
                      self%zwall(i,j,k)=min(self%zwall(i,j,k),self%cfg%z(k+l))
                   end if
                end do
